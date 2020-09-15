@@ -2,6 +2,8 @@ import discord
 import random
 import os
 
+commands = ["$roll","$stats","$help"]
+
 client = discord.Client()
 @client.event
 async def on_ready():
@@ -33,7 +35,7 @@ async def on_message(message):
     if message.author == client.user:
         return
     else:
-        if message.content.lower().replace("d"," ").split(" ")[0] == "$roll":
+        if message.content.lower().replace("d"," ").split(" ")[0] == commands[0]:
             command = message.content.lower().replace("d"," ").split(" ")
             numbers = []
             print(command)
@@ -46,7 +48,7 @@ async def on_message(message):
                 numbers.append(str(number))
                 total += number
             await message.channel.send("You rolled {0}, the sum is {1}".format(numbers,total))
-        if(message.content.startswith("$stats")):
+        if(message.content.startswith(commands[1])):
             command = message.content.split(" ")
             d1 = int(command[1])
             print(d1)
@@ -54,7 +56,11 @@ async def on_message(message):
             print(d2)
             d3 = int(command[3])
             await message.channel.send(roll_roll(d1,d2,d3))
-        #if(message.content.startswith("$help")):
+        if(message.content.startswith(commands[2])):
+            response = ''
+            for i in commands:
+                response =+ ", " + str(i)
+            await message.channel.send(response)
 
     
 
