@@ -59,7 +59,7 @@ async def on_message(message):
         if(message.content.startswith(commands[2])):
             response = ''
             for i in commands:
-                response =+ ", " + str(i)
+                response = response + " " + str(i)
             await message.channel.send(response)
 
     
