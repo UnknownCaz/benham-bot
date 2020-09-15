@@ -45,9 +45,9 @@ async def on_message(message):
         return
     else:
         if message.content.lower().replace("d"," ").split(" ")[0] == commands[0]:
-            command = message.content.lower().replace("d"," ").split(" ")
+            com = message.content.lower().replace("d"," ").split(" ")
             numbers = []
-            await message.channel.send(roll(int(command[1]),int(command[2]))
+            await message.channel.send(roll(int(com[1]),int(com[1]))
         if(message.content.startswith(commands[1])):
             command = message.content.split(" ")
             d1 = int(command[1])
