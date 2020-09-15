@@ -9,7 +9,7 @@ client = discord.Client()
 async def on_ready():
     print('We have logged in as {0.user}'.format(client))
 
-def roll_roll(loops ,times, sides):
+def stat_roll(loops ,times, sides):
     total = 0
     totals = []
     response = []
@@ -29,6 +29,17 @@ def roll_roll(loops ,times, sides):
     print(response)
     return response
 
+def roll(count, times,):
+    total = 0
+    response = ""
+    count = int(command[1])
+    sides = int(command[2])
+    for x in range(1,count+1):
+        number = random.randint(1,sides)
+        print(number)
+        numbers.append(str(number))
+        total += number
+    response = "You rolled {0}, the sum is {1}".format(numbers,total)
 @client.event
 async def on_message(message):
     #print(message.content)
@@ -36,18 +47,9 @@ async def on_message(message):
         return
     else:
         if message.content.lower().replace("d"," ").split(" ")[0] == commands[0]:
-            command = message.content.lower().replace("d"," ").split(" ")
-            numbers = []
-            print(command)
-            total = 0
-            count = int(command[1])
-            sides = int(command[2])
-            for x in range(1,count+1):
-                number = random.randint(1,sides)
-                print(number)
-                numbers.append(str(number))
-                total += number
-            await message.channel.send("You rolled {0}, the sum is {1}".format(numbers,total))
+                command = message.content.lower().replace("d"," ").split(" ")
+                numbers = []
+            await message.channel.send()
         if(message.content.startswith(commands[1])):
             command = message.content.split(" ")
             d1 = int(command[1])
