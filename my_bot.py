@@ -29,11 +29,9 @@ def stat_roll(loops ,times, sides):
     print(response)
     return response
 
-def roll(count, times,):
+def roll(count, sides):
     total = 0
     response = ""
-    count = int(command[1])
-    sides = int(command[2])
     for x in range(1,count+1):
         number = random.randint(1,sides)
         print(number)
@@ -47,9 +45,9 @@ async def on_message(message):
         return
     else:
         if message.content.lower().replace("d"," ").split(" ")[0] == commands[0]:
-                command = message.content.lower().replace("d"," ").split(" ")
-                numbers = []
-            await message.channel.send()
+            command = message.content.lower().replace("d"," ").split(" ")
+            numbers = []
+            await message.channel.send(roll(int(command[1]),int(command[2]))
         if(message.content.startswith(commands[1])):
             command = message.content.split(" ")
             d1 = int(command[1])
