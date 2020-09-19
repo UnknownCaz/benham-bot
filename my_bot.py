@@ -2,7 +2,7 @@ import discord
 import random
 import os
 
-commands = ["$roll","$stats","$help"]
+#commands = ["$roll","$stats","$help"]
 
 client = discord.Client()
 @client.event
@@ -29,30 +29,32 @@ def stat_roll(loops ,times, sides):
     print(response)
     return response
 
+def roll_roll(dice,sides):
+    total = 0
+    numbers = []
+    for i in range(1,int(dice)+1):
+        number = random.randint(1,int(sides))
+        numbers.append(number)
+        total += number
+    return [numbers, total]
+
 @client.event
 async def on_message(message):
     #print(message.content)
     if message.author == client.user:
         return
     else:
-        if message.content.lower().replace("d"," ").split(" ")[0] == commands[0]:
-
-            await message.channel.send("You rolled {0}, the sum is {1}".format(numbers,total))
-        if(message.content.startswith(commands[1])):
-            command = message.content.split(" ")
-            d1 = int(command[1])
-            print(d1)
-            d2 = int(command[2])
-            print(d2)
-            d3 = int(command[3])
-            await message.channel.send(roll_roll(d1,d2,d3))
-        if(message.content.startswith(commands[2])):
-            response = ''
-            for i in commands:
-                response = response + " " + str(i)
-            await message.channel.send(response)
-
-    
+        command = message.content.lower().replace("d"," ").split(" ")
+        if message.content.lower().replace("d"," ").split(" ")[0] == "$roll":
+            print(command)
+            roll = roll_roll(command[1],command[2])
+            await message.channel.send("You rolled {0}, the sum is {1}".format(roll[0],roll[1]))
+        if(message.content.startswith('$stats')):
+            com = message.content.split(" ")
+            d1 = int(com[1])
+            d2 = int(com[2])
+            d3 = int(com[3])
+            await message.channel.send(stat_roll(d1,d2,d3))
 
 client.run(os.environ['BOT_KEY'])
 
