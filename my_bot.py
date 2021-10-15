@@ -67,4 +67,4 @@ async def on_message(message):
             await message.channel.send(stat_roll(d1, d2, d3))
 
 
-##client.run(os.environ["BOT_KEY"])
+client.run(os.environ["BOT_KEY"])
