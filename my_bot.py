@@ -68,4 +68,3 @@ async def on_message(message):
 
 
 ##client.run(os.environ["BOT_KEY"])
-client.run("NzUyMzEzMDYwOTcwMjAxMjE4.X1V0Iw.8ZgXdBA7uiU2D3_1QS-nyawagd0")
