@@ -65,9 +65,7 @@ async def on_message(message):
             d2 = int(com[2])
             d3 = int(com[3])
             await message.channel.send(stat_roll(d1, d2, d3))
-        if message.content.startwith("$print"):
-            mess = message.content.split(" ")
-            await message.channel.send(mess[1])
 
 
-client.run(os.environ["BOT_KEY"])
+##client.run(os.environ["BOT_KEY"])
+client.run("NzUyMzEzMDYwOTcwMjAxMjE4.X1V0Iw.8ZgXdBA7uiU2D3_1QS-nyawagd0")
