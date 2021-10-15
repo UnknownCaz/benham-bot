@@ -3,6 +3,7 @@ import random
 import os
 import dotenv
 from dotenv import load_dotenv
+
 load_dotenv("environ.env")
 
 # commands = ["$roll","$stats","$help"]
@@ -64,6 +65,9 @@ async def on_message(message):
             d2 = int(com[2])
             d3 = int(com[3])
             await message.channel.send(stat_roll(d1, d2, d3))
+        if message.content.startwith("$print"):
+            mess = message.content.split(" ")
+            await message.channel.send(mess[1])
 
 
 client.run(os.environ["BOT_KEY"])
