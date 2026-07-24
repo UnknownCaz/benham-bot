@@ -52,7 +52,13 @@ INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
 VOICE_TRANSCRIPT = os.path.join(BASE_DIR, "voice_transcript.jsonl")
 TTS_SCRIPT = os.path.join(BASE_DIR, "tts.ps1")
 
-WAKE_WORD = "claude"
+# Any of these (case-insensitive substring) flags an utterance as directed at the bot.
+# Whisper 'base' mishears the proper noun "Benham" (as Ben / Bentham / Ben ham / Benum / Bnham),
+# so we include phonetic variants. "claude" kept as an alias too.
+WAKE_WORDS = [
+    "claude",
+    "benham", "ben ham", "bentham", "benum", "ben um", "benham", "bnham", "benam", "ben-ham",
+]
 SILENCE_FLUSH_SEC = 1.0   # end an utterance after this much silence from a speaker
 MIN_UTTERANCE_SEC = 0.4   # ignore blips shorter than this
 
@@ -71,14 +77,45 @@ load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
 
-# NOTE ON VOICE LISTENING (receive): discord.py 2.7 uses Discord's DAVE end-to-end voice
-# encryption (requires the `davey` lib, which is also mandatory for sending). With DAVE active,
-# received audio arrives E2E-encrypted and the opus decoder fails ("corrupted stream"). Forcing
-# max_dave_protocol_version -> 0 to downgrade makes the server reject the voice handshake (close
-# 4017), which also breaks sending. So voice RECEIVE is not currently workable on this stack.
-# Fallback path (not yet done): run the bot on a pre-DAVE discord.py (e.g. 2.4.x) in a separate
-# venv where voice needs no davey/E2EE, so discord-ext-voice-recv can decode. Send/read/speak all
-# work fine as-is on 2.7. The listen/stop_listen code below stays for that future venv.
+# --- DAVE receive-decryption patch (this is what makes voice listening work) ---
+# discord.py 2.7 negotiates DAVE (E2E voice encryption) and requires the `davey` lib, but
+# discord-ext-voice-recv only does transport decryption — so received frames are still
+# DAVE-encrypted and opus fails with "corrupted stream". Older pre-DAVE discord.py can't
+# connect anymore (voice gateway rejects: 4006), so downgrading isn't an option either.
+# Fix: davey.DaveSession exposes decrypt(user_id, media_type, packet); we wrap voice_recv's
+# PacketDecoder._decode_packet to run each frame through the active DAVE session before opus
+# decode. Verified working on discord.py 2.7.1 + discord-ext-voice-recv 0.5.2a179 + davey 0.1.6.
+import davey as _davey
+from discord.ext.voice_recv import opus as _vr_opus
+
+_orig_decode_packet = _vr_opus.PacketDecoder._decode_packet
+
+
+def _dave_decode_packet(self, packet):
+    try:
+        data = getattr(packet, "decrypted_data", None)
+        if packet and data:
+            vc = self.router.sink.voice_client
+            if vc is not None:
+                sess = getattr(vc._connection, "dave_session", None)
+                if sess is not None and sess.ready:
+                    uid = vc._get_id_from_ssrc(self.ssrc)
+                    if uid is not None:
+                        packet.decrypted_data = sess.decrypt(
+                            uid, _davey.MediaType.audio, data
+                        )
+    except Exception as e:  # noqa: BLE001 — fall through to normal decode, but log once
+        global _dave_patch_err_logged
+        if not _dave_patch_err_logged:
+            _dave_patch_err_logged = True
+            print(f"[dave-patch] decrypt failed (logged once): {type(e).__name__}: {e}", flush=True)
+    return _orig_decode_packet(self, packet)
+
+
+_dave_patch_err_logged = False
+
+
+_vr_opus.PacketDecoder._decode_packet = _dave_decode_packet
 
 # Read + write proxy: message_content is privileged — enable it in the Dev Portal
 # (Bot -> Privileged Gateway Intents -> Message Content Intent) or on_message text is blank.
@@ -274,7 +311,8 @@ class SpeechSink(voice_recv.AudioSink):
 
 
 def write_voice_transcript(channel_id, speaker, speaker_id, text):
-    contains_wake = WAKE_WORD in text.lower()
+    low = text.lower()
+    contains_wake = any(w in low for w in WAKE_WORDS)
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "channel_id": channel_id,
