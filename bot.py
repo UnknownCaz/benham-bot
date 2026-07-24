@@ -25,6 +25,9 @@ Read recent messages by tailing inbox.jsonl, or pull backlog with fetch.py.
 import os
 import json
 import shutil
+import asyncio
+import tempfile
+import subprocess
 import traceback
 from datetime import datetime, timezone
 
@@ -38,6 +41,7 @@ SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
 CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
 INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
+TTS_SCRIPT = os.path.join(BASE_DIR, "tts.ps1")
 
 load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 
@@ -69,7 +73,24 @@ def dump_channels():
                     "can_send": ch.permissions_for(guild.me).send_messages,
                 }
             )
-        data.append({"guild": guild.name, "guild_id": guild.id, "text_channels": channels})
+        voice = []
+        for vc in guild.voice_channels:
+            perms = vc.permissions_for(guild.me)
+            voice.append(
+                {
+                    "name": vc.name,
+                    "id": vc.id,
+                    "can_join": perms.connect and perms.speak,
+                }
+            )
+        data.append(
+            {
+                "guild": guild.name,
+                "guild_id": guild.id,
+                "text_channels": channels,
+                "voice_channels": voice,
+            }
+        )
     with open(CHANNELS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     log(f"Wrote {CHANNELS_FILE} ({len(data)} guild(s))")
@@ -94,6 +115,47 @@ def record_message(message):
     with open(INBOX_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec
+
+
+def synth_tts(text):
+    """Render text to a WAV file via Windows SAPI (tts.ps1). Returns the wav path."""
+    tmpdir = tempfile.mkdtemp(prefix="benham_tts_")
+    txt_path = os.path.join(tmpdir, "text.txt")
+    wav_path = os.path.join(tmpdir, "speech.wav")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    subprocess.run(
+        [
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", TTS_SCRIPT, "-TextFile", txt_path, "-OutFile", wav_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return wav_path
+
+
+async def speak_in_channel(voice_channel, text):
+    """Join the voice channel, speak the text via SAPI, then disconnect."""
+    wav_path = await asyncio.to_thread(synth_tts, text)
+    guild = voice_channel.guild
+    vc = guild.voice_client
+    if vc is None:
+        vc = await voice_channel.connect()
+    elif vc.channel.id != voice_channel.id:
+        await vc.move_to(voice_channel)
+    if vc.is_playing():
+        vc.stop()
+    done = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    source = discord.FFmpegPCMAudio(wav_path)
+    vc.play(source, after=lambda err: loop.call_soon_threadsafe(done.set))
+    await done.wait()
+    await vc.disconnect()
+    try:
+        shutil.rmtree(os.path.dirname(wav_path), ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @client.event
@@ -129,7 +191,15 @@ async def poll_outbox():
             if channel is None:
                 channel = await client.fetch_channel(channel_id)
 
-            if action == "history":
+            if action == "speak":
+                text = str(req["content"])
+                await speak_in_channel(channel, text)
+                result.update(
+                    {"status": "spoke", "request": req, "channel": str(channel)}
+                )
+                _finish(path, fname, SENT, result)
+                log(f"Spoke in #{getattr(channel, 'name', channel_id)}: {text!r}")
+            elif action == "history":
                 limit = int(req.get("limit", 20))
                 msgs = []
                 async for m in channel.history(limit=limit):
