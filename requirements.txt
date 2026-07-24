@@ -8,3 +8,5 @@ discord-ext-voice-recv>=0.5
 faster-whisper>=1.0
 # Autonomous AUTO_REPLY mode (bot answers via the Anthropic API itself)
 anthropic>=0.40
+# Natural neural TTS (replaces Windows SAPI)
+edge-tts>=7.0
