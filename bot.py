@@ -76,6 +76,8 @@ _whisper_model = None
 _whisper_lock = threading.Lock()
 LISTEN_SESSIONS = {}  # guild_id -> {"channel_id": int, "sink": SpeechSink}
 
+load_dotenv(os.path.join(BASE_DIR, "environ.env"))  # must precede env reads below
+
 # --- Autonomous "AUTO_REPLY" mode: the bot answers wake utterances itself via the API brain. ---
 # Off by default (set BENHAM_AUTO_REPLY=1 in environ.env) so the free live-Claude loop stays default.
 AUTO_REPLY = os.environ.get("BENHAM_AUTO_REPLY", "0") == "1"
@@ -91,8 +93,6 @@ _PING_REPLIES = [
     "Yep, listening.", "I'm around. What do you need?",
 ]
 _ping_idx = [0]
-
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 
 for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
