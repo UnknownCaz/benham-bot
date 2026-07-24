@@ -23,6 +23,10 @@ import re
 MODEL = os.environ.get("BENHAM_MODEL", "claude-haiku-4-5")  # $1/$5 per 1M — cheap voice tier
 MAX_TOKENS = int(os.environ.get("BENHAM_MAX_TOKENS", "160"))  # spoken replies are short
 
+# edge-tts neural voices (natural, free). One source of truth, imported by bot.py.
+VOICE_MALE = os.environ.get("BENHAM_VOICE_MALE", "en-US-AndrewNeural")   # warm, conversational
+VOICE_FEMALE = os.environ.get("BENHAM_VOICE_FEMALE", "en-US-AvaNeural")  # expressive, friendly
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GUARDRAILS_FILE = os.path.join(BASE_DIR, "guardrails.md")
 PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
@@ -94,10 +98,12 @@ def parse_directive(text):
         k, v = k.strip().lower(), v.strip()
         if k == "voice":
             low = v.lower()
-            if "zira" in low or "female" in low or "woman" in low:
-                out["voice"] = "Microsoft Zira Desktop"
-            elif "david" in low or "male" in low or "man" in low:
-                out["voice"] = "Microsoft David Desktop"
+            if "zira" in low or "female" in low or "woman" in low or "ava" in low:
+                out["voice"] = VOICE_FEMALE
+            elif "david" in low or "male" in low or "man" in low or "andrew" in low:
+                out["voice"] = VOICE_MALE
+            elif low.startswith("en-") or "neural" in low:
+                out["voice"] = v  # explicit edge voice name
             else:
                 out["voice"] = v
         elif k in ("rate", "volume"):

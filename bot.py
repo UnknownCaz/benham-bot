@@ -24,6 +24,7 @@ Read recent messages by tailing inbox.jsonl, or pull backlog with fetch.py.
 
 import os
 import re
+import sys
 import json
 import time
 import shutil
@@ -236,21 +237,29 @@ def record_message(message):
 
 
 def synth_tts(text):
-    """Render text to a WAV file via Windows SAPI (tts.ps1). Returns the wav path."""
+    """Render text to an MP3 via edge-tts (natural neural voice). Returns the audio path.
+    Voice/rate/volume come from voice_settings.json — voice is an edge-tts voice name."""
+    cfg = read_voice_settings()
+    voice = cfg.get("voice") or brain.VOICE_MALE
+    if voice.startswith("Microsoft"):  # migrate legacy SAPI names on the fly
+        voice = brain.VOICE_FEMALE if "Zira" in voice else brain.VOICE_MALE
+    rate = f"{int(cfg.get('rate', 0)) * 10:+d}%"          # SAPI -10..10  -> edge -100%..+100%
+    volume = f"{int(cfg.get('volume', 100)) - 100:+d}%"   # SAPI 0..100   -> edge -100%..+0%
     tmpdir = tempfile.mkdtemp(prefix="benham_tts_")
     txt_path = os.path.join(tmpdir, "text.txt")
-    wav_path = os.path.join(tmpdir, "speech.wav")
+    mp3_path = os.path.join(tmpdir, "speech.mp3")
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(text)
     subprocess.run(
         [
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", TTS_SCRIPT, "-TextFile", txt_path, "-OutFile", wav_path,
+            sys.executable, "-m", "edge_tts", "--voice", voice,
+            "--rate", rate, "--volume", volume,
+            "--file", txt_path, "--write-media", mp3_path,
         ],
         check=True,
         capture_output=True,
     )
-    return wav_path
+    return mp3_path
 
 
 async def speak_in_channel(voice_channel, text):
@@ -466,10 +475,10 @@ def local_shortcut(text):
     wordset = set(words)
     changes = {}
     # Whole-word match only — otherwise "man" fires inside "manipulate", "male" inside "female", etc.
-    if wordset & {"female", "woman", "zira", "girl"}:
-        changes["voice"] = "Microsoft Zira Desktop"
-    elif wordset & {"male", "man", "david", "guy"}:
-        changes["voice"] = "Microsoft David Desktop"
+    if wordset & {"female", "woman", "zira", "girl", "ava"}:
+        changes["voice"] = brain.VOICE_FEMALE
+    elif wordset & {"male", "man", "david", "guy", "andrew"}:
+        changes["voice"] = brain.VOICE_MALE
     if any(p in low for p in ("slower", "slow down", "too fast")):
         changes["rate"] = int(cfg.get("rate", 0)) - 3
     elif any(p in low for p in ("faster", "speed up", "too slow")):
