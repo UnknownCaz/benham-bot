@@ -59,8 +59,8 @@ WAKE_WORDS = [
     "claude",
     "benham", "ben ham", "bentham", "benum", "ben um", "benham", "bnham", "benam", "ben-ham",
 ]
-SILENCE_FLUSH_SEC = 1.0   # end an utterance after this much silence from a speaker
-MIN_UTTERANCE_SEC = 0.4   # ignore blips shorter than this
+SILENCE_FLUSH_SEC = 0.6   # end an utterance after this much silence from a speaker
+MIN_UTTERANCE_SEC = 0.35  # ignore blips shorter than this
 
 # Discord voice receive delivers 48kHz, 16-bit, stereo PCM.
 DISCORD_RATE = 48000
@@ -275,7 +275,10 @@ def transcribe_pcm(pcm_bytes):
     """Blocking: convert + transcribe a PCM buffer, return stripped text."""
     audio = pcm_to_whisper_array(pcm_bytes)
     model = get_whisper()
-    segments, _info = model.transcribe(audio, language="en", vad_filter=True)
+    # beam_size=1 + no prev-text conditioning = lower latency (fine for short commands).
+    segments, _info = model.transcribe(
+        audio, language="en", vad_filter=True, beam_size=1, condition_on_previous_text=False
+    )
     return " ".join(seg.text for seg in segments).strip()
 
 
