@@ -477,9 +477,16 @@ def local_shortcut(text):
     wordset = set(words)
     non_wake = [w for w in words if w not in _FILLER]
 
-    # Sleep / stop
-    if any(p in low for p in ("go to sleep", "stop listening", "leave the call",
-                              "you can go", "goodbye benham", "good night benham", "disconnect")):
+    # Sleep / stop / leave — broad, since people phrase this many ways
+    if any(p in low for p in (
+        "go to sleep", "go back to sleep", "sleep now", "sleep mode", "run your sleep",
+        "go to bed", "time for bed", "time to go to bed", "bedtime", "head to bed", "off to bed",
+        "night night", "good night", "goodnight", "goodbye benham", "bye benham",
+        "stop listening", "stop responding", "quiet down", "be quiet",
+        "leave the call", "leave the vc", "leave voice", "leave the channel", "leave the chat",
+        "get out of the call", "you can go", "you can leave", "you can head out",
+        "disconnect", "log off", "sign off", "power down", "shut down", "dismissed",
+    )):
         return ("sleep", None)
 
     # Reset personality (local, zero API)
@@ -610,6 +617,7 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
     trait = brain.parse_persona_directive(reply)
     if trait:
         append_override(trait)  # takes effect on the next reply
+    leaving = brain.wants_sleep(reply)
     spoken = brain.strip_directive(reply)
     conv.append({"role": "assistant", "content": spoken or reply})
 
@@ -618,6 +626,10 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
             f"reply={spoken!r}")
     if spoken:
         await speak_in_channel(voice_channel, spoken)
+    if leaving:  # model chose to leave via <<sleep>>
+        _convo_until.pop(gid, None)
+        _convo_speaker.pop(gid, None)
+        await stop_listening(guild)
 
 
 @tasks.loop(seconds=0.4)
