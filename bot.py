@@ -23,9 +23,11 @@ Read recent messages by tailing inbox.jsonl, or pull backlog with fetch.py.
 """
 
 import os
+import re
 import json
 import time
 import shutil
+import difflib
 import asyncio
 import tempfile
 import threading
@@ -52,13 +54,11 @@ INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
 VOICE_TRANSCRIPT = os.path.join(BASE_DIR, "voice_transcript.jsonl")
 TTS_SCRIPT = os.path.join(BASE_DIR, "tts.ps1")
 
-# Any of these (case-insensitive substring) flags an utterance as directed at the bot.
-# Whisper 'base' mishears the proper noun "Benham" (as Ben / Bentham / Ben ham / Benum / Bnham),
-# so we include phonetic variants. "claude" kept as an alias too.
-WAKE_WORDS = [
-    "claude",
-    "benham", "ben ham", "bentham", "benum", "ben um", "benham", "bnham", "benam", "ben-ham",
-]
+# Canonical wake names. Detection is FUZZY (see is_wake): each word / adjacent word-pair in an
+# utterance is compared to these, so Whisper mishears of "Benham" (Bentham, Ben ham, Benum, Bnham,
+# Benham) still trigger without maintaining a spelling list. "claude" kept as an alias.
+WAKE_WORDS = ["claude", "benham"]
+WAKE_FUZZY_THRESHOLD = 0.8  # 0..1 similarity; lower = more lenient (more false positives)
 SILENCE_FLUSH_SEC = 0.6   # end an utterance after this much silence from a speaker
 MIN_UTTERANCE_SEC = 0.35  # ignore blips shorter than this
 
@@ -325,9 +325,26 @@ class SpeechSink(voice_recv.AudioSink):
             self._buffers.clear()
 
 
-def write_voice_transcript(channel_id, speaker, speaker_id, text):
+def is_wake(text):
+    """Fuzzy wake detection: exact substring OR a word/word-pair close enough to a wake name.
+    Catches Whisper mishears of 'Benham' (Bentham, Ben ham, Benum, ...) without a spelling list."""
     low = text.lower()
-    contains_wake = any(w in low for w in WAKE_WORDS)
+    if any(w in low for w in WAKE_WORDS):
+        return True
+    words = re.findall(r"[a-z']+", low)
+    # single words plus adjacent pairs joined (so "ben ham" -> "benham")
+    candidates = list(words) + ["".join(pair) for pair in zip(words, words[1:])]
+    for tok in candidates:
+        if len(tok) < 4:  # too short to judge — avoids matching bare "ben", "ben", etc.
+            continue
+        for w in WAKE_WORDS:
+            if difflib.SequenceMatcher(None, tok, w).ratio() >= WAKE_FUZZY_THRESHOLD:
+                return True
+    return False
+
+
+def write_voice_transcript(channel_id, speaker, speaker_id, text):
+    contains_wake = is_wake(text)
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "channel_id": channel_id,
