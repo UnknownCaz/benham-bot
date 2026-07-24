@@ -35,10 +35,14 @@ import subprocess
 import traceback
 from datetime import datetime, timezone
 
+from collections import deque
+
 import discord
 from discord.ext import tasks
 from discord.ext import voice_recv
 from dotenv import load_dotenv
+
+import brain
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -71,6 +75,22 @@ WHISPER_RATE = 16000
 _whisper_model = None
 _whisper_lock = threading.Lock()
 LISTEN_SESSIONS = {}  # guild_id -> {"channel_id": int, "sink": SpeechSink}
+
+# --- Autonomous "AUTO_REPLY" mode: the bot answers wake utterances itself via the API brain. ---
+# Off by default (set BENHAM_AUTO_REPLY=1 in environ.env) so the free live-Claude loop stays default.
+AUTO_REPLY = os.environ.get("BENHAM_AUTO_REPLY", "0") == "1"
+CONV_TURNS = 12                 # sliding window of turns kept per guild (bounds input tokens)
+REPLY_COOLDOWN_SEC = 1.5        # minimum gap between API calls per guild
+VOICE_SETTINGS_FILE = os.path.join(BASE_DIR, "voice_settings.json")
+CONVERSATIONS = {}              # guild_id -> deque of {"role", "content"}
+_last_reply_at = {}             # guild_id -> monotonic time of last API reply
+_last_wake_text = {}            # guild_id -> last handled wake text (dedup)
+
+_PING_REPLIES = [
+    "Yeah, I'm here.", "Still here — what's up?", "Right here. Go ahead.",
+    "Yep, listening.", "I'm around. What do you need?",
+]
+_ping_idx = [0]
 
 load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 
@@ -360,6 +380,120 @@ def write_voice_transcript(channel_id, speaker, speaker_id, text):
     return rec
 
 
+def read_voice_settings():
+    try:
+        with open(VOICE_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {"voice": "Microsoft David Desktop", "rate": 0, "volume": 100}
+
+
+def apply_voice_settings(changes):
+    """Merge changes into voice_settings.json (clamped). changes: {voice?, rate?, volume?}."""
+    cfg = read_voice_settings()
+    if "voice" in changes:
+        cfg["voice"] = changes["voice"]
+    if "rate" in changes:
+        cfg["rate"] = max(-10, min(10, int(changes["rate"])))
+    if "volume" in changes:
+        cfg["volume"] = max(0, min(100, int(changes["volume"])))
+    with open(VOICE_SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    log(f"Applied voice settings: {changes}")
+    return cfg
+
+
+def local_shortcut(text):
+    """Handle mechanical requests with ZERO API calls. Returns (kind, payload) or None.
+    kind: 'sleep' | 'voice' (payload=(changes, confirmation)) | 'ping' (payload=reply)."""
+    low = text.lower()
+    words = re.findall(r"[a-z']+", low)
+
+    # Sleep / stop
+    if any(p in low for p in ("go to sleep", "stop listening", "leave the call",
+                              "you can go", "goodbye benham", "good night benham", "disconnect")):
+        return ("sleep", None)
+
+    # Voice / rate / volume — build relative or absolute changes
+    cfg = read_voice_settings()
+    changes = {}
+    if any(w in low for w in ("female", "woman", "zira", "girl")):
+        changes["voice"] = "Microsoft Zira Desktop"
+    elif any(w in low for w in ("male", "man", "david", "guy")):
+        changes["voice"] = "Microsoft David Desktop"
+    if any(p in low for p in ("slower", "slow down", "too fast")):
+        changes["rate"] = int(cfg.get("rate", 0)) - 3
+    elif any(p in low for p in ("faster", "speed up", "too slow")):
+        changes["rate"] = int(cfg.get("rate", 0)) + 3
+    if any(p in low for p in ("louder", "volume up", "speak up", "too quiet", "too soft")):
+        changes["volume"] = int(cfg.get("volume", 100)) + 15
+    elif any(p in low for p in ("quieter", "softer", "volume down", "too loud", "lower your volume")):
+        changes["volume"] = int(cfg.get("volume", 100)) - 15
+    if changes:
+        return ("voice", (changes, "Okay, how's this?"))
+
+    # Trivial ping — short greeting / presence check (wake words already stripped conceptually)
+    non_wake = [w for w in words if w not in ("benham", "claude", "hey", "yo", "hi", "hello", "ok", "okay")]
+    if len(non_wake) <= 2 or any(p in low for p in ("you there", "are you there", "you up",
+                                                    "still there", "you awake", "can you hear")):
+        r = _PING_REPLIES[_ping_idx[0] % len(_PING_REPLIES)]
+        _ping_idx[0] += 1
+        return ("ping", r)
+
+    return None
+
+
+async def handle_auto_reply(guild, voice_channel, speaker, text):
+    """Respond to a wake utterance autonomously (local shortcut or one API call)."""
+    gid = guild.id
+    if text == _last_wake_text.get(gid):
+        return  # dedup Whisper repeats
+    _last_wake_text[gid] = text
+
+    shortcut = local_shortcut(text)
+    if shortcut is not None:
+        kind, payload = shortcut
+        if kind == "sleep":
+            await speak_in_channel(voice_channel, "Alright, going quiet. Call me if you need me.")
+            await stop_listening(guild)
+            return
+        if kind == "voice":
+            changes, confirm = payload
+            apply_voice_settings(changes)
+            await speak_in_channel(voice_channel, confirm)
+            return
+        if kind == "ping":
+            await speak_in_channel(voice_channel, payload)
+            return
+
+    # API path — cooldown guard (drop rapid fragments; dedup already ran)
+    now = time.monotonic()
+    if now - _last_reply_at.get(gid, 0.0) < REPLY_COOLDOWN_SEC:
+        return
+
+    conv = CONVERSATIONS.setdefault(gid, deque(maxlen=CONV_TURNS * 2))
+    conv.append({"role": "user", "content": f"{speaker}: {text}"})
+    try:
+        reply, usage = await asyncio.to_thread(brain.respond, list(conv))
+    except Exception:  # noqa: BLE001
+        log("Brain error:\n" + traceback.format_exc())
+        conv.pop()  # don't keep a user turn we never answered
+        return
+    _last_reply_at[gid] = time.monotonic()
+
+    changes = brain.parse_directive(reply)
+    if changes:
+        apply_voice_settings(changes)
+    spoken = brain.strip_directive(reply)
+    conv.append({"role": "assistant", "content": spoken or reply})
+
+    if usage is not None:
+        log(f"brain: in={getattr(usage,'input_tokens','?')} out={getattr(usage,'output_tokens','?')} "
+            f"reply={spoken!r}")
+    if spoken:
+        await speak_in_channel(voice_channel, spoken)
+
+
 @tasks.loop(seconds=0.4)
 async def flush_utterances():
     if not LISTEN_SESSIONS:
@@ -373,8 +507,16 @@ async def flush_utterances():
             except Exception:  # noqa: BLE001
                 log("Transcription error:\n" + traceback.format_exc())
                 continue
-            if text:
-                write_voice_transcript(session["channel_id"], name, uid, text)
+            if not text:
+                continue
+            rec = write_voice_transcript(session["channel_id"], name, uid, text)
+            if AUTO_REPLY and rec["contains_wake"]:
+                vc_channel = client.get_channel(session["channel_id"])
+                if vc_channel is not None:
+                    try:
+                        await handle_auto_reply(vc_channel.guild, vc_channel, name, text)
+                    except Exception:  # noqa: BLE001
+                        log("Auto-reply error:\n" + traceback.format_exc())
 
 
 async def start_listening(voice_channel):
@@ -415,6 +557,7 @@ async def before_flush():
 @client.event
 async def on_ready():
     log(f"Logged in as {client.user} (id {client.user.id})")
+    log(f"AUTO_REPLY mode: {'ON (autonomous API brain, ' + brain.MODEL + ')' if AUTO_REPLY else 'OFF (live-Claude loop)'}")
     dump_channels()
     if not poll_outbox.is_running():
         poll_outbox.start()
