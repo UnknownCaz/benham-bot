@@ -452,12 +452,17 @@ def reset_overrides():
     log("Personality overrides reset")
 
 
+_FILLER = {"benham", "claude", "hey", "yo", "hi", "hello", "ok", "okay", "um", "uh", "so", "please"}
+
+
 def local_shortcut(text):
     """Handle mechanical requests with ZERO API calls. Returns (kind, payload) or None.
     kind: 'sleep' | 'voice' (payload=(changes, confirmation)) | 'ping' (payload=reply) |
-    'persona_reset'."""
+    'persona_reset' | 'voices_list'."""
     low = text.lower()
     words = re.findall(r"[a-z']+", low)
+    wordset = set(words)
+    non_wake = [w for w in words if w not in _FILLER]
 
     # Sleep / stop
     if any(p in low for p in ("go to sleep", "stop listening", "leave the call",
@@ -470,14 +475,26 @@ def local_shortcut(text):
                               "back to normal", "personality reset")):
         return ("persona_reset", None)
 
-    # Voice / rate / volume — build relative or absolute changes
+    # "What voices do you have?"
+    if any(p in low for p in ("what voices", "which voices", "list voices", "list your voices",
+                              "who can you be", "voices can you", "voice options", "what voice can")):
+        return ("voices_list", None)
+
+    # Voice / rate / volume — build changes
     cfg = read_voice_settings()
-    wordset = set(words)
     changes = {}
-    # Whole-word match only — otherwise "man" fires inside "manipulate", "male" inside "female", etc.
-    if wordset & {"female", "woman", "zira", "girl", "ava"}:
+    confirm = "Okay, how's this?"
+    # Switch intent guards voice changes so names/genders in normal chatter don't fire.
+    switch_intent = any(p in low for p in ("switch", "change to", "change your voice", "use the",
+                                           "use your", "talk as", "talk like", "sound like",
+                                           "become", "voice", "accent"))
+    name_hit = next((n for n in brain.voice_names() if n.lower() in wordset), None)
+    if name_hit and (switch_intent or len(non_wake) <= 1):
+        changes["voice"] = brain.NAME_TO_VOICE[name_hit.lower()]
+        confirm = f"Alright, I'm {name_hit} now. How's this?"
+    elif switch_intent and (wordset & {"female", "woman", "girl"}):
         changes["voice"] = brain.VOICE_FEMALE
-    elif wordset & {"male", "man", "david", "guy", "andrew"}:
+    elif switch_intent and (wordset & {"male", "man", "guy", "dude"}):
         changes["voice"] = brain.VOICE_MALE
     if any(p in low for p in ("slower", "slow down", "too fast")):
         changes["rate"] = int(cfg.get("rate", 0)) - 3
@@ -488,10 +505,9 @@ def local_shortcut(text):
     elif any(p in low for p in ("quieter", "softer", "volume down", "too loud", "lower your volume")):
         changes["volume"] = int(cfg.get("volume", 100)) - 15
     if changes:
-        return ("voice", (changes, "Okay, how's this?"))
+        return ("voice", (changes, confirm))
 
-    # Trivial ping — short greeting / presence check (wake words already stripped conceptually)
-    non_wake = [w for w in words if w not in ("benham", "claude", "hey", "yo", "hi", "hello", "ok", "okay")]
+    # Trivial ping — short greeting / presence check
     if len(non_wake) <= 2 or any(p in low for p in ("you there", "are you there", "you up",
                                                     "still there", "you awake", "can you hear")):
         r = _PING_REPLIES[_ping_idx[0] % len(_PING_REPLIES)]
@@ -543,6 +559,13 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
             reset_overrides()
             _open_convo(gid, speaker)
             await speak_in_channel(voice_channel, "Okay, back to my usual self.")
+            return
+        if kind == "voices_list":
+            names = brain.voice_names()
+            spoken = ", ".join(names[:-1]) + (", or " + names[-1] if len(names) > 1 else "")
+            _open_convo(gid, speaker)
+            await speak_in_channel(
+                voice_channel, f"I can be {spoken}. Just say switch to one of them.")
             return
         if kind == "ping":
             _open_convo(gid, speaker)
