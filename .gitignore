@@ -7,3 +7,5 @@ voice_transcript.jsonl
 bot.log
 __pycache__/
 *.pyc
+venv-voice/
+.last_wake
