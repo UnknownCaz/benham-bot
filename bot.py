@@ -371,13 +371,26 @@ class SpeechSink(voice_recv.AudioSink):
             self._buffers.clear()
 
 
+def current_voice_name():
+    """The B-name of the currently-selected voice (e.g. 'Bruce'), or None if not a roster voice."""
+    return brain.VOICE_TO_NAME.get(read_voice_settings().get("voice", ""))
+
+
 def is_wake(text):
-    """Fuzzy wake detection: exact substring OR a word/word-pair close enough to a wake name.
-    Catches Whisper mishears of 'Benham' (Bentham, Ben ham, Benum, ...) without a spelling list."""
+    """Wake detection. Always-active names (WAKE_WORDS, e.g. 'benham') match fuzzily to survive
+    Whisper mishears. The currently-selected voice's own name ALSO wakes it (exact whole word),
+    so calling 'Bruce' works while Bruce is the active voice, but not otherwise."""
     low = text.lower()
+    words = re.findall(r"[a-z']+", low)
+    wordset = set(words)
+
+    # The active voice's name is a live trigger — exact whole-word only (precise, no false wakes).
+    vn = current_voice_name()
+    if vn and vn.lower() in wordset:
+        return True
+
     if any(w in low for w in WAKE_WORDS):
         return True
-    words = re.findall(r"[a-z']+", low)
     # single words plus adjacent pairs joined (so "ben ham" -> "benham")
     candidates = list(words) + ["".join(pair) for pair in zip(words, words[1:])]
     for tok in candidates:
@@ -489,7 +502,10 @@ def local_shortcut(text):
                                            "use your", "talk as", "talk like", "sound like",
                                            "become", "voice", "accent"))
     name_hit = next((n for n in brain.voice_names() if n.lower() in wordset), None)
-    if name_hit and (switch_intent or len(non_wake) <= 1):
+    cur_name = current_voice_name()
+    # Switch on a switch-intent, or when the utterance is basically just the name — but NOT when it
+    # names the current voice (that's the active wake word being used, not a switch request).
+    if name_hit and name_hit != cur_name and (switch_intent or len(non_wake) <= 1):
         changes["voice"] = brain.NAME_TO_VOICE[name_hit.lower()]
         confirm = f"Alright, I'm {name_hit} now. How's this?"
     elif switch_intent and (wordset & {"female", "woman", "girl"}):

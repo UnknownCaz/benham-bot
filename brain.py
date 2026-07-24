@@ -40,6 +40,7 @@ def _load_voices():
 
 VOICES = _load_voices()
 NAME_TO_VOICE = {n.lower(): v["voice"] for n, v in VOICES.get("voices", {}).items()}
+VOICE_TO_NAME = {v["voice"]: n for n, v in VOICES.get("voices", {}).items()}  # edge id -> B-name
 _dm = VOICES.get("voices", {}).get(VOICES.get("default_male", ""), {})
 _df = VOICES.get("voices", {}).get(VOICES.get("default_female", ""), {})
 VOICE_MALE = os.environ.get("BENHAM_VOICE_MALE", _dm.get("voice", "en-US-BrianNeural"))
