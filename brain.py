@@ -168,6 +168,14 @@ def parse_persona_directive(text):
     return trait or None
 
 
+_SLEEP_RE = re.compile(r"<<\s*sleep\s*>>", re.IGNORECASE)
+
+
+def wants_sleep(text):
+    """True if the reply carries a <<sleep>> directive (model chose to leave the call)."""
+    return bool(_SLEEP_RE.search(text or ""))
+
+
 def strip_directive(text):
     """Remove ALL <<...>> directives so none are spoken aloud."""
     return _ANY_DIRECTIVE_RE.sub("", text or "").strip()
