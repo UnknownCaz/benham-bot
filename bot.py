@@ -89,9 +89,20 @@ import davey as _davey
 from discord.ext.voice_recv import opus as _vr_opus
 
 _orig_decode_packet = _vr_opus.PacketDecoder._decode_packet
+_SILENCE_FRAME = b"\x00" * 3840  # 20ms of 48kHz stereo 16-bit silence
+_dave_err_count = [0]
+
+
+def _note_dave_err(where, e):
+    # Log the first, then every 500th, so persistent failures are visible but not spammy.
+    _dave_err_count[0] += 1
+    n = _dave_err_count[0]
+    if n == 1 or n % 500 == 0:
+        print(f"[dave-patch] {where} failed (#{n}): {type(e).__name__}: {e}", flush=True)
 
 
 def _dave_decode_packet(self, packet):
+    # Step 1: DAVE-decrypt the frame in place if a session is active.
     try:
         data = getattr(packet, "decrypted_data", None)
         if packet and data:
@@ -104,15 +115,16 @@ def _dave_decode_packet(self, packet):
                         packet.decrypted_data = sess.decrypt(
                             uid, _davey.MediaType.audio, data
                         )
-    except Exception as e:  # noqa: BLE001 — fall through to normal decode, but log once
-        global _dave_patch_err_logged
-        if not _dave_patch_err_logged:
-            _dave_patch_err_logged = True
-            print(f"[dave-patch] decrypt failed (logged once): {type(e).__name__}: {e}", flush=True)
-    return _orig_decode_packet(self, packet)
-
-
-_dave_patch_err_logged = False
+    except Exception as e:  # noqa: BLE001
+        _note_dave_err("decrypt", e)
+    # Step 2: opus-decode, but NEVER raise — a single bad frame (e.g. during a DAVE epoch
+    # transition around TTS playback) must not kill voice_recv's packet-router thread, which
+    # would silently end all receiving. On failure, return a silent frame and keep going.
+    try:
+        return _orig_decode_packet(self, packet)
+    except Exception as e:  # noqa: BLE001
+        _note_dave_err("opus-decode", e)
+        return packet, _SILENCE_FRAME
 
 
 _vr_opus.PacketDecoder._decode_packet = _dave_decode_packet
