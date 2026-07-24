@@ -83,10 +83,27 @@ load_dotenv(os.path.join(BASE_DIR, "environ.env"))  # must precede env reads bel
 AUTO_REPLY = os.environ.get("BENHAM_AUTO_REPLY", "0") == "1"
 CONV_TURNS = 12                 # sliding window of turns kept per guild (bounds input tokens)
 REPLY_COOLDOWN_SEC = 1.5        # minimum gap between API calls per guild
+# Continuous-conversation window: after a wake word, Benham keeps answering follow-ups WITHOUT the
+# name until this many seconds pass with no speech from the conversation partner. 0 = disable
+# (wake word required every time). Each engaged utterance re-extends the window.
+CONVO_WINDOW_SEC = float(os.environ.get("BENHAM_CONVO_WINDOW_SEC", "25"))
 VOICE_SETTINGS_FILE = os.path.join(BASE_DIR, "voice_settings.json")
 CONVERSATIONS = {}              # guild_id -> deque of {"role", "content"}
 _last_reply_at = {}             # guild_id -> monotonic time of last API reply
-_last_wake_text = {}            # guild_id -> last handled wake text (dedup)
+_last_wake_text = {}            # guild_id -> last handled text (dedup)
+_convo_until = {}               # guild_id -> monotonic deadline the conversation stays open
+_convo_speaker = {}             # guild_id -> speaker name the open conversation belongs to
+
+# Whisper 'base' hallucinates these on silence; don't let them keep a conversation window alive.
+_NOISE_TEXT = {
+    "", "you", "thank you", "thanks", "thanks for watching", "thank you.", "you.",
+    "bye", "bye.", "please subscribe", "subscribe", ".", "uh", "um", "hmm",
+}
+
+
+def looks_like_noise(text):
+    t = re.sub(r"[^a-z ]", "", (text or "").lower()).strip()
+    return t in _NOISE_TEXT or len(t) < 2
 
 _PING_REPLIES = [
     "Yeah, I'm here.", "Still here — what's up?", "Right here. Go ahead.",
@@ -443,8 +460,24 @@ def local_shortcut(text):
     return None
 
 
+def _open_convo(gid, speaker):
+    """(Re)open the continuous-conversation window for this speaker."""
+    if CONVO_WINDOW_SEC > 0:
+        _convo_until[gid] = time.monotonic() + CONVO_WINDOW_SEC
+        _convo_speaker[gid] = speaker
+
+
+def convo_active(gid, speaker):
+    """True if a continuous conversation is open for this speaker (so no wake word needed)."""
+    return (
+        CONVO_WINDOW_SEC > 0
+        and _convo_speaker.get(gid) == speaker
+        and _convo_until.get(gid, 0.0) > time.monotonic()
+    )
+
+
 async def handle_auto_reply(guild, voice_channel, speaker, text):
-    """Respond to a wake utterance autonomously (local shortcut or one API call)."""
+    """Respond to a wake/continuation utterance (local shortcut or one API call)."""
     gid = guild.id
     if text == _last_wake_text.get(gid):
         return  # dedup Whisper repeats
@@ -454,15 +487,19 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
     if shortcut is not None:
         kind, payload = shortcut
         if kind == "sleep":
+            _convo_until.pop(gid, None)  # close the conversation window
+            _convo_speaker.pop(gid, None)
             await speak_in_channel(voice_channel, "Alright, going quiet. Call me if you need me.")
             await stop_listening(guild)
             return
         if kind == "voice":
             changes, confirm = payload
             apply_voice_settings(changes)
+            _open_convo(gid, speaker)
             await speak_in_channel(voice_channel, confirm)
             return
         if kind == "ping":
+            _open_convo(gid, speaker)
             await speak_in_channel(voice_channel, payload)
             return
 
@@ -480,6 +517,7 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
         conv.pop()  # don't keep a user turn we never answered
         return
     _last_reply_at[gid] = time.monotonic()
+    _open_convo(gid, speaker)  # keep the conversation open for follow-ups without the name
 
     changes = brain.parse_directive(reply)
     if changes:
@@ -510,13 +548,20 @@ async def flush_utterances():
             if not text:
                 continue
             rec = write_voice_transcript(session["channel_id"], name, uid, text)
-            if AUTO_REPLY and rec["contains_wake"]:
-                vc_channel = client.get_channel(session["channel_id"])
-                if vc_channel is not None:
-                    try:
-                        await handle_auto_reply(vc_channel.guild, vc_channel, name, text)
-                    except Exception:  # noqa: BLE001
-                        log("Auto-reply error:\n" + traceback.format_exc())
+            if not AUTO_REPLY:
+                continue
+            vc_channel = client.get_channel(session["channel_id"])
+            if vc_channel is None:
+                continue
+            gid = vc_channel.guild.id
+            # Engage if the name was said, OR a conversation is already open for this speaker
+            # (continuous mode) and the utterance isn't obvious silence-hallucination noise.
+            engage = rec["contains_wake"] or (convo_active(gid, name) and not looks_like_noise(text))
+            if engage:
+                try:
+                    await handle_auto_reply(vc_channel.guild, vc_channel, name, text)
+                except Exception:  # noqa: BLE001
+                    log("Auto-reply error:\n" + traceback.format_exc())
 
 
 async def start_listening(voice_channel):
