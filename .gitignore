@@ -2,6 +2,7 @@
 outbox/
 channels.json
 inbox.jsonl
+voice_transcript.jsonl
 bot.log
 __pycache__/
 *.pyc

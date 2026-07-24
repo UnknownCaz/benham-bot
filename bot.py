@@ -24,16 +24,24 @@ Read recent messages by tailing inbox.jsonl, or pull backlog with fetch.py.
 
 import os
 import json
+import time
 import shutil
 import asyncio
 import tempfile
+import threading
 import subprocess
 import traceback
 from datetime import datetime, timezone
 
 import discord
 from discord.ext import tasks
+from discord.ext import voice_recv
 from dotenv import load_dotenv
+
+try:
+    import audioop  # stdlib in 3.12 (removed in 3.13)
+except Exception:  # noqa: BLE001
+    audioop = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTBOX = os.path.join(BASE_DIR, "outbox")
@@ -41,12 +49,36 @@ SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
 CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
 INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
+VOICE_TRANSCRIPT = os.path.join(BASE_DIR, "voice_transcript.jsonl")
 TTS_SCRIPT = os.path.join(BASE_DIR, "tts.ps1")
+
+WAKE_WORD = "claude"
+SILENCE_FLUSH_SEC = 1.0   # end an utterance after this much silence from a speaker
+MIN_UTTERANCE_SEC = 0.4   # ignore blips shorter than this
+
+# Discord voice receive delivers 48kHz, 16-bit, stereo PCM.
+DISCORD_RATE = 48000
+DISCORD_WIDTH = 2
+DISCORD_CHANNELS = 2
+WHISPER_RATE = 16000
+
+_whisper_model = None
+_whisper_lock = threading.Lock()
+LISTEN_SESSIONS = {}  # guild_id -> {"channel_id": int, "sink": SpeechSink}
 
 load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 
 for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
+
+# NOTE ON VOICE LISTENING (receive): discord.py 2.7 uses Discord's DAVE end-to-end voice
+# encryption (requires the `davey` lib, which is also mandatory for sending). With DAVE active,
+# received audio arrives E2E-encrypted and the opus decoder fails ("corrupted stream"). Forcing
+# max_dave_protocol_version -> 0 to downgrade makes the server reject the voice handshake (close
+# 4017), which also breaks sending. So voice RECEIVE is not currently workable on this stack.
+# Fallback path (not yet done): run the bot on a pre-DAVE discord.py (e.g. 2.4.x) in a separate
+# venv where voice needs no davey/E2EE, so discord-ext-voice-recv can decode. Send/read/speak all
+# work fine as-is on 2.7. The listen/stop_listen code below stays for that future venv.
 
 # Read + write proxy: message_content is privileged — enable it in the Dev Portal
 # (Bot -> Privileged Gateway Intents -> Message Content Intent) or on_message text is blank.
@@ -136,9 +168,11 @@ def synth_tts(text):
 
 
 async def speak_in_channel(voice_channel, text):
-    """Join the voice channel, speak the text via SAPI, then disconnect."""
+    """Speak text via SAPI in the voice channel. If a listen session is active there,
+    play through the existing connection and stay; otherwise join, speak, and disconnect."""
     wav_path = await asyncio.to_thread(synth_tts, text)
     guild = voice_channel.guild
+    listening = guild.id in LISTEN_SESSIONS
     vc = guild.voice_client
     if vc is None:
         vc = await voice_channel.connect()
@@ -151,11 +185,161 @@ async def speak_in_channel(voice_channel, text):
     source = discord.FFmpegPCMAudio(wav_path)
     vc.play(source, after=lambda err: loop.call_soon_threadsafe(done.set))
     await done.wait()
-    await vc.disconnect()
+    if not listening:
+        await vc.disconnect()
     try:
         shutil.rmtree(os.path.dirname(wav_path), ignore_errors=True)
     except Exception:  # noqa: BLE001
         pass
+
+
+def get_whisper():
+    """Lazily load the faster-whisper base model (downloads ~150MB on first use)."""
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            from faster_whisper import WhisperModel
+
+            log("Loading faster-whisper 'base' model (first run downloads it)...")
+            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+            log("Whisper model ready.")
+    return _whisper_model
+
+
+def pcm_to_whisper_array(pcm_bytes):
+    """48kHz stereo 16-bit PCM bytes -> 16kHz mono float32 numpy array for whisper."""
+    import numpy as np
+
+    if audioop is not None:
+        mono = audioop.tomono(pcm_bytes, DISCORD_WIDTH, 0.5, 0.5)
+        mono16k, _ = audioop.ratecv(mono, DISCORD_WIDTH, 1, DISCORD_RATE, WHISPER_RATE, None)
+        samples = np.frombuffer(mono16k, dtype=np.int16).astype(np.float32) / 32768.0
+        return samples
+    # Fallback (no audioop): decimate stereo->mono and 48k->16k crudely.
+    stereo = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+    stereo = stereo.reshape(-1, 2).mean(axis=1)
+    mono16k = stereo[::3]  # 48k -> 16k
+    return mono16k / 32768.0
+
+
+def transcribe_pcm(pcm_bytes):
+    """Blocking: convert + transcribe a PCM buffer, return stripped text."""
+    audio = pcm_to_whisper_array(pcm_bytes)
+    model = get_whisper()
+    segments, _info = model.transcribe(audio, language="en", vad_filter=True)
+    return " ".join(seg.text for seg in segments).strip()
+
+
+class SpeechSink(voice_recv.AudioSink):
+    """Buffers decoded PCM per speaker so the flush loop can transcribe utterances."""
+
+    def __init__(self, guild_id, channel_id):
+        super().__init__()
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self._buffers = {}  # user_id -> {"buf": bytearray, "last": monotonic, "name": str}
+        self._lock = threading.Lock()
+
+    def wants_opus(self):
+        return False  # give us decoded PCM
+
+    def write(self, user, data):
+        if user is None or not data.pcm:
+            return
+        with self._lock:
+            slot = self._buffers.get(user.id)
+            if slot is None:
+                slot = {"buf": bytearray(), "last": time.monotonic(), "name": str(user)}
+                self._buffers[user.id] = slot
+            slot["buf"].extend(data.pcm)
+            slot["last"] = time.monotonic()
+            slot["name"] = str(user)
+
+    def pop_ready(self, now):
+        """Return [(user_id, name, bytes)] for speakers who've gone quiet."""
+        ready = []
+        bytes_per_sec = DISCORD_RATE * DISCORD_WIDTH * DISCORD_CHANNELS
+        with self._lock:
+            for uid, slot in list(self._buffers.items()):
+                if slot["buf"] and (now - slot["last"]) >= SILENCE_FLUSH_SEC:
+                    data = bytes(slot["buf"])
+                    slot["buf"] = bytearray()
+                    if len(data) >= MIN_UTTERANCE_SEC * bytes_per_sec:
+                        ready.append((uid, slot["name"], data))
+        return ready
+
+    def cleanup(self):
+        with self._lock:
+            self._buffers.clear()
+
+
+def write_voice_transcript(channel_id, speaker, speaker_id, text):
+    contains_wake = WAKE_WORD in text.lower()
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "channel_id": channel_id,
+        "speaker": speaker,
+        "speaker_id": speaker_id,
+        "text": text,
+        "contains_wake": contains_wake,
+    }
+    with open(VOICE_TRANSCRIPT, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    tag = "WAKE " if contains_wake else ""
+    log(f"{tag}voice <{speaker}>: {text!r}")
+    return rec
+
+
+@tasks.loop(seconds=0.4)
+async def flush_utterances():
+    if not LISTEN_SESSIONS:
+        return
+    now = time.monotonic()
+    for guild_id, session in list(LISTEN_SESSIONS.items()):
+        sink = session["sink"]
+        for uid, name, pcm in sink.pop_ready(now):
+            try:
+                text = await asyncio.to_thread(transcribe_pcm, pcm)
+            except Exception:  # noqa: BLE001
+                log("Transcription error:\n" + traceback.format_exc())
+                continue
+            if text:
+                write_voice_transcript(session["channel_id"], name, uid, text)
+
+
+async def start_listening(voice_channel):
+    """Join the voice channel with a receiving client and begin transcribing speech."""
+    get_whisper()  # load model up front so the first utterance isn't delayed
+    guild = voice_channel.guild
+    vc = guild.voice_client
+    # Need a VoiceRecvClient; if a plain client is connected, reconnect as a receiver.
+    if vc is not None and not isinstance(vc, voice_recv.VoiceRecvClient):
+        await vc.disconnect()
+        vc = None
+    if vc is None:
+        vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+    elif vc.channel.id != voice_channel.id:
+        await vc.move_to(voice_channel)
+    if vc.is_listening():
+        vc.stop_listening()
+    sink = SpeechSink(guild.id, voice_channel.id)
+    vc.listen(sink)
+    LISTEN_SESSIONS[guild.id] = {"channel_id": voice_channel.id, "sink": sink}
+
+
+async def stop_listening(guild):
+    """Stop transcribing and leave the voice channel in this guild."""
+    LISTEN_SESSIONS.pop(guild.id, None)
+    vc = guild.voice_client
+    if vc is not None:
+        if isinstance(vc, voice_recv.VoiceRecvClient) and vc.is_listening():
+            vc.stop_listening()
+        await vc.disconnect()
+
+
+@flush_utterances.before_loop
+async def before_flush():
+    await client.wait_until_ready()
 
 
 @client.event
@@ -164,6 +348,8 @@ async def on_ready():
     dump_channels()
     if not poll_outbox.is_running():
         poll_outbox.start()
+    if not flush_utterances.is_running():
+        flush_utterances.start()
 
 
 @client.event
@@ -191,7 +377,17 @@ async def poll_outbox():
             if channel is None:
                 channel = await client.fetch_channel(channel_id)
 
-            if action == "speak":
+            if action == "listen":
+                await start_listening(channel)
+                result.update({"status": "listening", "request": req, "channel": str(channel)})
+                _finish(path, fname, SENT, result)
+                log(f"Listening in #{getattr(channel, 'name', channel_id)}")
+            elif action == "stop_listen":
+                await stop_listening(channel.guild)
+                result.update({"status": "stopped_listening", "request": req, "channel": str(channel)})
+                _finish(path, fname, SENT, result)
+                log(f"Stopped listening in #{getattr(channel, 'name', channel_id)}")
+            elif action == "speak":
                 text = str(req["content"])
                 await speak_in_channel(channel, text)
                 result.update(
