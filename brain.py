@@ -19,18 +19,61 @@ Replies may end with directives the app applies + strips before TTS (one call, n
 
 import os
 import re
+import json
 
 MODEL = os.environ.get("BENHAM_MODEL", "claude-haiku-4-5")  # $1/$5 per 1M — cheap voice tier
 MAX_TOKENS = int(os.environ.get("BENHAM_MAX_TOKENS", "160"))  # spoken replies are short
-
-# edge-tts neural voices (natural, free). One source of truth, imported by bot.py.
-VOICE_MALE = os.environ.get("BENHAM_VOICE_MALE", "en-US-AndrewNeural")   # warm, conversational
-VOICE_FEMALE = os.environ.get("BENHAM_VOICE_FEMALE", "en-US-AvaNeural")  # expressive, friendly
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GUARDRAILS_FILE = os.path.join(BASE_DIR, "guardrails.md")
 PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
 OVERRIDES_FILE = os.path.join(BASE_DIR, "personality_overrides.txt")
+VOICES_FILE = os.path.join(BASE_DIR, "voices.json")
+
+# --- Named B-voice roster (voices.json) — one source of truth, imported by bot.py. ---
+def _load_voices():
+    try:
+        with open(VOICES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {"default_male": "", "default_female": "", "voices": {}}
+
+VOICES = _load_voices()
+NAME_TO_VOICE = {n.lower(): v["voice"] for n, v in VOICES.get("voices", {}).items()}
+_dm = VOICES.get("voices", {}).get(VOICES.get("default_male", ""), {})
+_df = VOICES.get("voices", {}).get(VOICES.get("default_female", ""), {})
+VOICE_MALE = os.environ.get("BENHAM_VOICE_MALE", _dm.get("voice", "en-US-BrianNeural"))
+VOICE_FEMALE = os.environ.get("BENHAM_VOICE_FEMALE", _df.get("voice", "en-US-AvaNeural"))
+
+_FEMALE_WORDS = ("female", "woman", "girl", "she")
+_MALE_WORDS = ("male", "man", "guy", "dude", "he")
+
+
+def resolve_voice(token):
+    """Resolve a voice token to an edge-tts voice id, or None. Accepts a roster B-name, the words
+    male/female, or a raw edge voice id (en-...Neural)."""
+    if not token:
+        return None
+    t = str(token).strip().lower()
+    if t in NAME_TO_VOICE:
+        return NAME_TO_VOICE[t]
+    if any(w in t for w in _FEMALE_WORDS):
+        return VOICE_FEMALE
+    if any(w in t for w in _MALE_WORDS):
+        return VOICE_MALE
+    if t.startswith("en-") or "neural" in t:
+        return str(token).strip()
+    return None
+
+
+def voice_names():
+    """List of roster B-names (preserves file order)."""
+    return list(VOICES.get("voices", {}).keys())
+
+
+def voices_blurb():
+    """One-line-per-voice roster for the system prompt / 'what voices' answers."""
+    return ", ".join(f"{n} ({v['gender']}, {v['desc']})" for n, v in VOICES.get("voices", {}).items())
 
 _client = None
 _static_cache = None  # guardrails + persona (only re-read on restart)
@@ -64,7 +107,14 @@ def _system_prompt():
     if _static_cache is None:
         guardrails = _read(GUARDRAILS_FILE, "Keep replies short, spoken, and safe.")
         persona = _read(PERSONA_FILE, "You are Benham, a friendly voice in a Discord call.")
-        _static_cache = guardrails + "\n\n" + persona
+        voices = ""
+        if NAME_TO_VOICE:
+            voices = (
+                "\n\n## Available voices (the app switches these)\n"
+                "You can switch to any of these named voices with a `<<voice=Name>>` directive, and "
+                "if someone asks what voices you have, name them:\n" + voices_blurb()
+            )
+        _static_cache = guardrails + "\n\n" + persona + voices
     overrides = _read(OVERRIDES_FILE).strip()
     if overrides:
         return _static_cache + "\n\n## Active personality adjustments (user-requested)\n" + overrides
@@ -97,15 +147,9 @@ def parse_directive(text):
         k, v = part.split("=", 1)
         k, v = k.strip().lower(), v.strip()
         if k == "voice":
-            low = v.lower()
-            if "zira" in low or "female" in low or "woman" in low or "ava" in low:
-                out["voice"] = VOICE_FEMALE
-            elif "david" in low or "male" in low or "man" in low or "andrew" in low:
-                out["voice"] = VOICE_MALE
-            elif low.startswith("en-") or "neural" in low:
-                out["voice"] = v  # explicit edge voice name
-            else:
-                out["voice"] = v
+            resolved = resolve_voice(v)
+            if resolved:
+                out["voice"] = resolved
         elif k in ("rate", "volume"):
             try:
                 out[k] = int(re.sub(r"[^\-0-9]", "", v))

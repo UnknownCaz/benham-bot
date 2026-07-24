@@ -1,0 +1,21 @@
+{
+  "default_male": "Bennett",
+  "default_female": "Bella",
+  "voices": {
+    "Bennett": {"voice": "en-US-BrianNeural", "gender": "male", "accent": "US", "desc": "casual, conversational"},
+    "Brody":   {"voice": "en-US-AndrewNeural", "gender": "male", "accent": "US", "desc": "warm, confident"},
+    "Bishop":  {"voice": "en-US-ChristopherNeural", "gender": "male", "accent": "US", "desc": "deep, authoritative"},
+    "Blaze":   {"voice": "en-US-GuyNeural", "gender": "male", "accent": "US", "desc": "energetic, passionate"},
+    "Barrett": {"voice": "en-US-RogerNeural", "gender": "male", "accent": "US", "desc": "lively"},
+    "Beckett": {"voice": "en-US-EricNeural", "gender": "male", "accent": "US", "desc": "calm, rational"},
+    "Bella":   {"voice": "en-US-AvaNeural", "gender": "female", "accent": "US", "desc": "expressive, caring"},
+    "Bree":    {"voice": "en-US-EmmaNeural", "gender": "female", "accent": "US", "desc": "cheerful"},
+    "Birdie":  {"voice": "en-US-JennyNeural", "gender": "female", "accent": "US", "desc": "friendly, comforting"},
+    "Bianca":  {"voice": "en-US-AriaNeural", "gender": "female", "accent": "US", "desc": "confident"},
+    "Bram":    {"voice": "en-GB-RyanNeural", "gender": "male", "accent": "British", "desc": "British male"},
+    "Bridget": {"voice": "en-GB-SoniaNeural", "gender": "female", "accent": "British", "desc": "British female"},
+    "Bruce":   {"voice": "en-AU-WilliamMultilingualNeural", "gender": "male", "accent": "Australian", "desc": "Australian male"},
+    "Billie":  {"voice": "en-AU-NatashaNeural", "gender": "female", "accent": "Australian", "desc": "Australian female"},
+    "Brennan": {"voice": "en-IE-ConnorNeural", "gender": "male", "accent": "Irish", "desc": "Irish male"}
+  }
+}
