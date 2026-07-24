@@ -1,0 +1,7 @@
+*.env
+outbox/
+channels.json
+inbox.jsonl
+bot.log
+__pycache__/
+*.pyc
