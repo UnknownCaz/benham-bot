@@ -395,6 +395,21 @@ async def poll_outbox():
                 )
                 _finish(path, fname, SENT, result)
                 log(f"Spoke in #{getattr(channel, 'name', channel_id)}: {text!r}")
+            elif action == "edit":
+                message_id = int(req["message_id"])
+                content = str(req["content"])
+                msg = await channel.fetch_message(message_id)
+                await msg.edit(content=content)
+                result.update(
+                    {
+                        "status": "edited",
+                        "request": req,
+                        "message_id": message_id,
+                        "channel": str(channel),
+                    }
+                )
+                _finish(path, fname, SENT, result)
+                log(f"Edited message {message_id} in #{getattr(channel, 'name', channel_id)}")
             elif action == "history":
                 limit = int(req.get("limit", 20))
                 msgs = []

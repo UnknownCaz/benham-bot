@@ -1,4 +1,5 @@
 *.env
+webhooks.json
 outbox/
 channels.json
 inbox.jsonl
