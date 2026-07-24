@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 venv-voice/
 .last_wake
+.wake_seen
