@@ -420,9 +420,33 @@ def apply_voice_settings(changes):
     return cfg
 
 
+PERSONALITY_OVERRIDES_FILE = os.path.join(BASE_DIR, "personality_overrides.txt")
+
+
+def append_override(trait):
+    """Persist a user-requested personality trait (one per line). Takes effect next reply."""
+    trait = trait.strip().rstrip(".")
+    if not trait:
+        return
+    with open(PERSONALITY_OVERRIDES_FILE, "a", encoding="utf-8") as f:
+        f.write("- " + trait + "\n")
+    log(f"Personality override added: {trait!r}")
+
+
+def reset_overrides():
+    """Clear all user personality tweaks, back to the base persona.md."""
+    try:
+        if os.path.exists(PERSONALITY_OVERRIDES_FILE):
+            os.remove(PERSONALITY_OVERRIDES_FILE)
+    except Exception:  # noqa: BLE001
+        pass
+    log("Personality overrides reset")
+
+
 def local_shortcut(text):
     """Handle mechanical requests with ZERO API calls. Returns (kind, payload) or None.
-    kind: 'sleep' | 'voice' (payload=(changes, confirmation)) | 'ping' (payload=reply)."""
+    kind: 'sleep' | 'voice' (payload=(changes, confirmation)) | 'ping' (payload=reply) |
+    'persona_reset'."""
     low = text.lower()
     words = re.findall(r"[a-z']+", low)
 
@@ -431,12 +455,20 @@ def local_shortcut(text):
                               "you can go", "goodbye benham", "good night benham", "disconnect")):
         return ("sleep", None)
 
+    # Reset personality (local, zero API)
+    if any(p in low for p in ("reset your personality", "reset personality", "default personality",
+                              "normal personality", "be your normal self", "be yourself again",
+                              "back to normal", "personality reset")):
+        return ("persona_reset", None)
+
     # Voice / rate / volume — build relative or absolute changes
     cfg = read_voice_settings()
+    wordset = set(words)
     changes = {}
-    if any(w in low for w in ("female", "woman", "zira", "girl")):
+    # Whole-word match only — otherwise "man" fires inside "manipulate", "male" inside "female", etc.
+    if wordset & {"female", "woman", "zira", "girl"}:
         changes["voice"] = "Microsoft Zira Desktop"
-    elif any(w in low for w in ("male", "man", "david", "guy")):
+    elif wordset & {"male", "man", "david", "guy"}:
         changes["voice"] = "Microsoft David Desktop"
     if any(p in low for p in ("slower", "slow down", "too fast")):
         changes["rate"] = int(cfg.get("rate", 0)) - 3
@@ -498,6 +530,11 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
             _open_convo(gid, speaker)
             await speak_in_channel(voice_channel, confirm)
             return
+        if kind == "persona_reset":
+            reset_overrides()
+            _open_convo(gid, speaker)
+            await speak_in_channel(voice_channel, "Okay, back to my usual self.")
+            return
         if kind == "ping":
             _open_convo(gid, speaker)
             await speak_in_channel(voice_channel, payload)
@@ -522,6 +559,9 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
     changes = brain.parse_directive(reply)
     if changes:
         apply_voice_settings(changes)
+    trait = brain.parse_persona_directive(reply)
+    if trait:
+        append_override(trait)  # takes effect on the next reply
     spoken = brain.strip_directive(reply)
     conv.append({"role": "assistant", "content": spoken or reply})
 

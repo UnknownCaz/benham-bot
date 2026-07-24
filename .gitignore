@@ -10,3 +10,4 @@ __pycache__/
 venv-voice/
 .last_wake
 .wake_seen
+personality_overrides.txt
