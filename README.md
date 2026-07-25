@@ -70,19 +70,26 @@ the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
 
 ### In-Discord slash commands
 
-Typed in a channel of the **Testing Server** - they are guild-scoped there (synced to `guild_id` in
-`exaroton_watch.json`), so they do not appear in other servers. Backed by `exaroton_ops.py`.
+Registered per Discord guild via `command_guilds` in `exaroton_watch.json`. Backed by
+`exaroton_ops.py`.
 
-| command | who | what it does |
-|---------|-----|--------------|
-| `/server status <server>` | anyone | Show a server's status and player count. |
-| `/server start <server>` | operators | Start a server. |
-| `/server stop <server>` | operators | Stop a server. |
-| `/server restart <server>` | operators | Restart a server. |
+| command | what it does |
+|---------|--------------|
+| `/server status <server>` | Show a server's status and player count. |
+| `/server start <server>` | Start a server. |
+| `/server stop <server>` | Stop a server. |
+| `/server restart <server>` | Restart a server. |
 
-`<server>` autocompletes from `exaroton_watch.json`. **Operator** = a Discord user ID in `owner_ids`,
-OR anyone with Administrator / Manage Server in that guild. A background **watchdog** also posts
-crash / offline / back-online alerts for servers flagged `watch: true`.
+**What can be controlled is gated per Discord guild, not per user** (`command_guilds`):
+- `servers`: which exaroton servers that guild may see/control - `"*"` for all, or a list of IDs.
+  The `<server>` argument only autocompletes to these; anything else is rejected.
+- `require_operator`: if `true`, `start`/`stop`/`restart` also need an **operator** (a user ID in
+  `owner_ids`, or anyone with Administrator / Manage Server); if `false`, anyone in that guild may
+  control the whitelisted servers. `status` is always open within the whitelist.
+
+Current setup: **Testing Server** = all servers, operators required; **Chillbar** = Isle of Berk
+only, no operator needed. A background **watchdog** also posts crash / offline / back-online alerts
+for servers flagged `watch: true`.
 
 Plain text messages are **not** command-triggered: the bot only records what it sees to `inbox.jsonl`
 and never auto-responds in text chat (voice wake words are the only autonomous trigger).
