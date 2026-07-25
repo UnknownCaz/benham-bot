@@ -11,3 +11,5 @@ venv-voice/
 .last_wake
 .wake_seen
 personality_overrides.txt
+*.log
+exaroton_watch.json
