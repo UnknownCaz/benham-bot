@@ -129,6 +129,33 @@ OWNER_IDS = set(WATCH.get("owner_ids", []))
 # this only gates the self-answering path.
 AUTO_REPLY_GUILDS = set(int(g) for g in WATCH.get("auto_reply_guilds", [GUILD_ID]))
 
+# --- Per-guild /server command config: a SERVER whitelist per Discord guild (not per user) ---
+# command_guilds maps guild_id -> {"servers": "*" | [exaroton ids], "require_operator": bool}.
+# From a given Discord guild you can only see/control the listed exaroton servers; require_operator
+# decides whether start/stop/restart still need an operator there (owner_ids or a guild admin).
+# The /server commands are registered to exactly these guilds. Default: Testing only, all servers,
+# operators required.
+COMMAND_GUILDS = {
+    int(gid): cfg for gid, cfg in
+    WATCH.get("command_guilds", {str(GUILD_ID): {"servers": "*", "require_operator": True}}).items()
+}
+
+
+def allowed_servers(guild_id):
+    """Set of exaroton server IDs controllable from this Discord guild ("*" => all configured)."""
+    cfg = COMMAND_GUILDS.get(guild_id)
+    if not cfg:
+        return set()
+    servers = cfg.get("servers", "*")
+    known = set(WATCH["servers"].keys())
+    return known if servers == "*" else (set(servers) & known)
+
+
+def guild_requires_operator(guild_id):
+    """Whether start/stop/restart need an operator in this guild (default: yes)."""
+    cfg = COMMAND_GUILDS.get(guild_id)
+    return bool(cfg.get("require_operator", True)) if cfg else True
+
 # --- DAVE receive-decryption patch (this is what makes voice listening work) ---
 # discord.py 2.7 negotiates DAVE (E2E voice encryption) and requires the `davey` lib, but
 # discord-ext-voice-recv only does transport decryption — so received frames are still
@@ -752,10 +779,11 @@ def is_operator(interaction):
 
 async def server_autocomplete(interaction: discord.Interaction, current: str):
     cur = (current or "").lower()
+    allow = allowed_servers(interaction.guild_id)  # only servers this Discord guild may control
     out = [
         app_commands.Choice(name=cfg["name"], value=sid)
         for sid, cfg in WATCH["servers"].items()
-        if cur in cfg["name"].lower()
+        if sid in allow and cur in cfg["name"].lower()
     ]
     return out[:25]
 
@@ -768,6 +796,10 @@ server_group = app_commands.Group(
 @app_commands.describe(server="Which server")
 @app_commands.autocomplete(server=server_autocomplete)
 async def server_status(interaction: discord.Interaction, server: str):
+    if server not in allowed_servers(interaction.guild_id):
+        await interaction.response.send_message(
+            "That server can't be controlled from this Discord server.", ephemeral=True)
+        return
     await interaction.response.defer(thinking=True)
     try:
         d = await exa.one_server(server)
@@ -783,12 +815,18 @@ async def server_status(interaction: discord.Interaction, server: str):
 
 
 async def _power_command(interaction, server, verb, fn):
-    if not is_operator(interaction):
+    gid = interaction.guild_id
+    # Primary gate is the per-guild SERVER whitelist: you can only control servers this Discord
+    # guild is allowed to (also blocks anything not in exaroton_watch.json).
+    if server not in allowed_servers(gid):
         await interaction.response.send_message(
-            "⛔ Only Tyler or a server admin can do that.", ephemeral=True)
+            f"**{_server_label(server)}** can't be controlled from this Discord server.",
+            ephemeral=True)
         return
-    if server not in WATCH["servers"]:
-        await interaction.response.send_message(f"Unknown server `{server}`.", ephemeral=True)
+    # Then, only where the guild requires it, also require an operator (owner_ids or a guild admin).
+    if guild_requires_operator(gid) and not is_operator(interaction):
+        await interaction.response.send_message(
+            "⛔ Only Tyler or a server admin can do that here.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True)
     if verb in ("stop", "restart"):
@@ -926,11 +964,18 @@ async def on_ready():
         poll_outbox.start()
     if not flush_utterances.is_running():
         flush_utterances.start()
-    try:
-        await tree.sync(guild=discord.Object(id=GUILD_ID))
-        log(f"Synced /server commands to guild {GUILD_ID}")
-    except Exception:  # noqa: BLE001
-        log("Slash command sync failed:\n" + traceback.format_exc())
+    # Register /server to each command guild. The group is added GLOBALLY (tree.add_command), so we
+    # copy globals into each guild and sync that guild — guild-scoped syncs appear instantly, and
+    # (unlike the old code, which synced the empty guild scope) this actually registers the commands.
+    for gid in COMMAND_GUILDS:
+        try:
+            gobj = discord.Object(id=gid)
+            tree.clear_commands(guild=gobj)       # idempotent across reconnects
+            tree.copy_global_to(guild=gobj)       # copy the /server group into this guild
+            synced = await tree.sync(guild=gobj)
+            log(f"Synced {len(synced)} command(s) to guild {gid}: {[c.name for c in synced]}")
+        except Exception:  # noqa: BLE001
+            log(f"Slash command sync failed for guild {gid}:\n" + traceback.format_exc())
     if not exaroton_watchdog.is_running():
         exaroton_watchdog.start()
 
