@@ -993,6 +993,20 @@ async def poll_outbox():
                 )
                 _finish(path, fname, SENT, result)
                 log(f"Edited message {message_id} in #{getattr(channel, 'name', channel_id)}")
+            elif action == "delete":
+                message_id = int(req["message_id"])
+                msg = await channel.fetch_message(message_id)
+                await msg.delete()
+                result.update(
+                    {
+                        "status": "deleted",
+                        "request": req,
+                        "message_id": message_id,
+                        "channel": str(channel),
+                    }
+                )
+                _finish(path, fname, SENT, result)
+                log(f"Deleted message {message_id} in #{getattr(channel, 'name', channel_id)}")
             elif action == "history":
                 limit = int(req.get("limit", 20))
                 msgs = []
