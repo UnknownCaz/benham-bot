@@ -218,7 +218,20 @@ tree = app_commands.CommandTree(client)
 
 def log(msg):
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-    print(f"[{stamp}] {msg}", flush=True)
+    line = f"[{stamp}] {msg}"
+    try:
+        print(line, flush=True)
+    except Exception:  # noqa: BLE001 — logging must never raise, for any reason
+        # Discord content and channel names carry emoji, and console_utf8() cannot
+        # help if stdout was replaced after startup. Beyond UnicodeEncodeError this
+        # also swallows a bogus .encoding codec name (LookupError) and a closed or
+        # broken redirect target (ValueError/OSError). A log() that raises inside
+        # poll_outbox's try would corrupt that loop's success/failure accounting.
+        try:
+            enc = getattr(sys.stdout, "encoding", None) or "ascii"
+            print(line.encode(enc, "backslashreplace").decode(enc, "replace"), flush=True)
+        except Exception:  # noqa: BLE001 — give up silently rather than propagate
+            pass
 
 
 def dump_channels():
@@ -996,6 +1009,11 @@ async def poll_outbox():
     for fname in files:
         path = os.path.join(OUTBOX, fname)
         result = {"processed_at": datetime.now(timezone.utc).isoformat()}
+        # Set the moment an action's irreversible side effect has fired (the message
+        # is sent, the purge has run). Everything after that point -- archiving, and
+        # especially the success log() -- is bookkeeping that must never be able to
+        # turn a completed action into a FAILED one.
+        action_done = False
         try:
             with open(path, "r", encoding="utf-8") as f:
                 req = json.load(f)
@@ -1008,11 +1026,13 @@ async def poll_outbox():
             if action == "listen":
                 await start_listening(channel)
                 result.update({"status": "listening", "request": req, "channel": str(channel)})
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Listening in #{getattr(channel, 'name', channel_id)}")
             elif action == "stop_listen":
                 await stop_listening(channel.guild)
                 result.update({"status": "stopped_listening", "request": req, "channel": str(channel)})
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Stopped listening in #{getattr(channel, 'name', channel_id)}")
             elif action == "speak":
@@ -1021,6 +1041,7 @@ async def poll_outbox():
                 result.update(
                     {"status": "spoke", "request": req, "channel": str(channel)}
                 )
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Spoke in #{getattr(channel, 'name', channel_id)}: {text!r}")
             elif action == "edit":
@@ -1036,6 +1057,7 @@ async def poll_outbox():
                         "channel": str(channel),
                     }
                 )
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Edited message {message_id} in #{getattr(channel, 'name', channel_id)}")
             elif action == "delete":
@@ -1050,6 +1072,7 @@ async def poll_outbox():
                         "channel": str(channel),
                     }
                 )
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Deleted message {message_id} in #{getattr(channel, 'name', channel_id)}")
             elif action == "history":
@@ -1069,6 +1092,7 @@ async def poll_outbox():
                 result.update(
                     {"status": "fetched", "request": req, "channel": str(channel), "messages": msgs}
                 )
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Fetched {len(msgs)} msg(s) from #{getattr(channel, 'name', channel_id)}")
             elif action == "purge":
@@ -1109,6 +1133,7 @@ async def poll_outbox():
                     "deleted_by_channel": per_channel,
                     "errors": errors,
                 })
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Purge complete: {total} msg(s) deleted, errors={errors}")
             else:
@@ -1122,9 +1147,21 @@ async def poll_outbox():
                         "channel": str(channel),
                     }
                 )
+                action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Sent to #{getattr(channel, 'name', channel_id)}: {content!r}")
         except Exception as e:  # noqa: BLE001 — record everything, keep the loop alive
+            if action_done:
+                # The action already happened on Discord's side. Re-filing it as
+                # FAILED would lie to the caller, and calling _finish again would
+                # either double-archive or clobber the result. Deliberately keyed
+                # on the side effect, not on whether the request file still exists:
+                # _finish can fail to move it, which would leave the file in place
+                # after a genuinely completed action.
+                log(f"Post-completion error on {fname} (action already done): "
+                    f"{type(e).__name__}: {e}")
+                log(traceback.format_exc())
+                continue
             result.update({"status": "failed", "error": f"{type(e).__name__}: {e}"})
             log(f"FAILED {fname}: {result['error']}")
             log(traceback.format_exc())
@@ -1132,16 +1169,40 @@ async def poll_outbox():
 
 
 def _finish(path, fname, dest_dir, result):
-    """Move the request file to dest_dir and write a sibling _result.json."""
+    """Move the request file to dest_dir and write a sibling _result.json.
+
+    Returns True only when BOTH halves succeeded. The two failures are reported
+    separately on purpose: a failed move leaves the request sitting in the outbox
+    to be picked up again, while a failed result-write leaves the caller polling
+    for a result that will never appear. Collapsing them into one silent handler
+    made a half-archived request indistinguishable from a clean one.
+    """
+    base = os.path.splitext(fname)[0]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    dest = os.path.join(dest_dir, f"{base}_{stamp}.json")
     try:
-        base = os.path.splitext(fname)[0]
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        dest = os.path.join(dest_dir, f"{base}_{stamp}.json")
         shutil.move(path, dest)
+    except Exception:  # noqa: BLE001
+        log(f"ARCHIVE FAILED {fname}:\n" + traceback.format_exc())
+        # Quarantine it. The poller globs "*.json", so leaving a request whose
+        # action already fired sitting in the outbox means the next cycle -- two
+        # seconds later -- re-sends the message or re-runs the purge, forever.
+        # Renaming out of the glob costs one syscall and bounds the damage at one
+        # duplicate; the payload is preserved for a human to inspect.
+        try:
+            os.replace(path, path + ".stuck")
+            log(f"Quarantined {fname} -> {fname}.stuck (its action already ran)")
+        except Exception:  # noqa: BLE001
+            log(f"COULD NOT QUARANTINE {fname} -- it WILL be reprocessed:\n"
+                + traceback.format_exc())
+        return False
+    try:
         with open(os.path.splitext(dest)[0] + "_result.json", "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
     except Exception:  # noqa: BLE001
-        log("Could not archive request file:\n" + traceback.format_exc())
+        log(f"ARCHIVED BUT NO RESULT FILE {fname} -> {dest}:\n" + traceback.format_exc())
+        return False
+    return True
 
 
 @poll_outbox.before_loop
@@ -1149,7 +1210,23 @@ async def before_poll():
     await client.wait_until_ready()
 
 
+def console_utf8():
+    """Force UTF-8 on the console streams, with a replacing fallback.
+
+    supervise_bot.bat redirects stdout to a file, and on Windows that makes
+    Python pick cp1252 -- which cannot encode the emoji that routinely appear in
+    Discord channel names and message content. Without this, printing them raises
+    UnicodeEncodeError deep inside the outbox loop.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    console_utf8()
     token = os.environ.get("BOT_KEY")
     if not token:
         raise SystemExit("BOT_KEY not set — put it in environ.env as BOT_KEY=<token>")
