@@ -1,7 +1,8 @@
 {
-  "_comment": "Config for the /server slash commands + watchdog. Public IDs only, no secrets. owner_ids = Discord user IDs that may start/stop/restart (in addition to guild admins); empty [] means 'guild admins only'. Get your ID: Discord Settings > Advanced > Developer Mode ON, then right-click your name > Copy User ID. servers: key = exaroton server ID; watch=true means the watchdog alerts on its crash/up/down; auto_stop_empty stops it after empty_grace_seconds with no players.",
+  "_comment": "Config for the /server slash commands + watchdog. Public IDs only, no secrets. owner_ids = Discord user IDs that may start/stop/restart (in addition to guild admins); empty [] means 'guild admins only'. Get your ID: Discord Settings > Advanced > Developer Mode ON, then right-click your name > Copy User ID. servers: key = exaroton server ID; watch=true means the watchdog alerts on its crash/up/down; auto_stop_empty stops it after empty_grace_seconds with no players. auto_reply_guilds = guild IDs where the autonomous voice brain (BENHAM_AUTO_REPLY=1) may self-reply; omit or set to just your test guild so Benham never auto-replies in friend servers.",
   "guild_id": 736988645562646619,
   "alert_channel_id": 809357286036078612,
+  "auto_reply_guilds": [736988645562646619],
   "owner_ids": [111111111111111111],
   "poll_seconds": 30,
   "alert_cooldown_seconds": 300,

@@ -13,3 +13,9 @@ venv-voice/
 personality_overrides.txt
 *.log
 exaroton_watch.json
+
+# Friend-server reads / derived social data — private, never commit
+read_full*
+*.u8
+*.tsv
+stats.tsv

@@ -123,6 +123,11 @@ with open(os.path.join(BASE_DIR, "exaroton_watch.json"), encoding="utf-8") as _w
 GUILD_ID = int(WATCH["guild_id"])
 ALERT_CHAN = int(WATCH["alert_channel_id"])
 OWNER_IDS = set(WATCH.get("owner_ids", []))
+# Guilds where the autonomous voice brain (AUTO_REPLY) may engage. Defaults to the Testing Server
+# only, so even with AUTO_REPLY=1 Benham never auto-replies in friend servers (e.g. Chillbar)
+# unless a guild id is explicitly added here. Wake detection/transcription still work everywhere;
+# this only gates the self-answering path.
+AUTO_REPLY_GUILDS = set(int(g) for g in WATCH.get("auto_reply_guilds", [GUILD_ID]))
 
 # --- DAVE receive-decryption patch (this is what makes voice listening work) ---
 # discord.py 2.7 negotiates DAVE (E2E voice encryption) and requires the `davey` lib, but
@@ -664,6 +669,8 @@ async def flush_utterances():
             if vc_channel is None:
                 continue
             gid = vc_channel.guild.id
+            if gid not in AUTO_REPLY_GUILDS:
+                continue  # autonomous replies only in allowlisted guilds (default: Testing only)
             # Engage if the name was said, OR a conversation is already open for this speaker
             # (continuous mode) and the utterance isn't obvious silence-hallucination noise.
             engage = rec["contains_wake"] or (convo_active(gid, name) and not looks_like_noise(text))
@@ -912,6 +919,8 @@ async def before_watchdog():
 async def on_ready():
     log(f"Logged in as {client.user} (id {client.user.id})")
     log(f"AUTO_REPLY mode: {'ON (autonomous API brain, ' + brain.MODEL + ')' if AUTO_REPLY else 'OFF (live-Claude loop)'}")
+    if AUTO_REPLY:
+        log(f"AUTO_REPLY allowed guilds: {sorted(AUTO_REPLY_GUILDS)} (autonomous replies gated to these)")
     dump_channels()
     if not poll_outbox.is_running():
         poll_outbox.start()
