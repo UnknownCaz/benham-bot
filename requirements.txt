@@ -10,3 +10,5 @@ faster-whisper>=1.0
 anthropic>=0.40
 # Natural neural TTS (replaces Windows SAPI)
 edge-tts>=7.0
+# exaroton /server slash commands + watchdog (exaroton_ops.py; also used by the exaroton skill)
+requests>=2.28

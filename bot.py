@@ -34,16 +34,18 @@ import tempfile
 import threading
 import subprocess
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from collections import deque
 
 import discord
+from discord import app_commands
 from discord.ext import tasks
 from discord.ext import voice_recv
 from dotenv import load_dotenv
 
 import brain
+import exaroton_ops as exa
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -115,6 +117,13 @@ _ping_idx = [0]
 for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
 
+# --- exaroton /server commands + watchdog config (public IDs only; no secrets here) ---
+with open(os.path.join(BASE_DIR, "exaroton_watch.json"), encoding="utf-8") as _wf:
+    WATCH = json.load(_wf)
+GUILD_ID = int(WATCH["guild_id"])
+ALERT_CHAN = int(WATCH["alert_channel_id"])
+OWNER_IDS = set(WATCH.get("owner_ids", []))
+
 # --- DAVE receive-decryption patch (this is what makes voice listening work) ---
 # discord.py 2.7 negotiates DAVE (E2E voice encryption) and requires the `davey` lib, but
 # discord-ext-voice-recv only does transport decryption — so received frames are still
@@ -172,6 +181,7 @@ _vr_opus.PacketDecoder._decode_packet = _dave_decode_packet
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
 
 def log(msg):
@@ -699,6 +709,205 @@ async def before_flush():
     await client.wait_until_ready()
 
 
+# ===================== exaroton: /server slash commands + watchdog =====================
+# Pure ops layer over the exaroton skill (imported as `exa`). A /server command group
+# (status = anyone; start/stop/restart = operators) plus a background watchdog loop that
+# alerts on crash / unexpected-offline / back-online for servers flagged watch:true in
+# exaroton_watch.json. No MOTD / world / whitelist / naming changes — Tyler keeps those.
+
+STATUS_EMOJI = {
+    0: "⚪ offline", 1: "🟢 online", 2: "🟡 starting", 3: "🟠 stopping",
+    4: "🔵 restarting", 5: "💾 saving", 6: "⏳ loading", 7: "🔴 CRASHED",
+    8: "⏳ pending", 9: "🔀 transferring", 10: "⏳ preparing",
+}
+
+# --- watchdog state (module-level) ---
+_wd_last_status = {}    # sid -> int last-seen status code (absent until primed)
+_wd_last_alert = {}     # (sid, event) -> monotonic ts, for per-event cooldown
+_wd_empty_since = {}    # sid -> monotonic ts first seen empty while online
+_wd_expected_stop = {}  # sid -> monotonic ts of an operator/auto stop (suppresses "down" alert)
+_wd_primed = {"done": False}
+_wd_poll_count = {"n": 0}
+
+
+def _server_label(sid):
+    return WATCH["servers"].get(sid, {}).get("name", sid)
+
+
+def is_operator(interaction):
+    """Operator = explicit owner_ids allowlist OR Discord admin/manage_guild in this guild.
+    (exaroton has no notion of Discord roles, so guild-admin is the practical stand-in.)"""
+    if interaction.user.id in OWNER_IDS:
+        return True
+    perms = getattr(interaction.user, "guild_permissions", None)
+    return bool(perms and (perms.administrator or perms.manage_guild))
+
+
+async def server_autocomplete(interaction: discord.Interaction, current: str):
+    cur = (current or "").lower()
+    out = [
+        app_commands.Choice(name=cfg["name"], value=sid)
+        for sid, cfg in WATCH["servers"].items()
+        if cur in cfg["name"].lower()
+    ]
+    return out[:25]
+
+
+server_group = app_commands.Group(
+    name="server", description="Control Tyler's exaroton Minecraft servers")
+
+
+@server_group.command(name="status", description="Show a server's current status")
+@app_commands.describe(server="Which server")
+@app_commands.autocomplete(server=server_autocomplete)
+async def server_status(interaction: discord.Interaction, server: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        d = await exa.one_server(server)
+    except Exception as e:  # noqa: BLE001
+        await interaction.followup.send(f"⚠️ exaroton error: {e}")
+        return
+    st = STATUS_EMOJI.get(d.get("status"), "unknown")
+    players = d.get("players") or {}
+    who = ""
+    if d.get("status") == 1:
+        who = f" — {players.get('count', 0)}/{players.get('max', '?')} online"
+    await interaction.followup.send(f"**{d.get('name', _server_label(server))}**: {st}{who}")
+
+
+async def _power_command(interaction, server, verb, fn):
+    if not is_operator(interaction):
+        await interaction.response.send_message(
+            "⛔ Only Tyler or a server admin can do that.", ephemeral=True)
+        return
+    if server not in WATCH["servers"]:
+        await interaction.response.send_message(f"Unknown server `{server}`.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True)
+    if verb in ("stop", "restart"):
+        _wd_expected_stop[server] = time.monotonic()  # suppress the watchdog "down" alert
+    try:
+        await fn(server)
+    except Exception as e:  # noqa: BLE001
+        _wd_expected_stop.pop(server, None)
+        await interaction.followup.send(f"⚠️ exaroton error: {e}")
+        return
+    await interaction.followup.send(f"✅ **{verb}** sent to **{_server_label(server)}**.")
+    log(f"/server {verb} {server} by {interaction.user} ({interaction.user.id})")
+
+
+@server_group.command(name="start", description="Start a server (operators only)")
+@app_commands.describe(server="Which server")
+@app_commands.autocomplete(server=server_autocomplete)
+async def server_start_cmd(interaction: discord.Interaction, server: str):
+    await _power_command(interaction, server, "start", exa.start)
+
+
+@server_group.command(name="stop", description="Stop a server (operators only)")
+@app_commands.describe(server="Which server")
+@app_commands.autocomplete(server=server_autocomplete)
+async def server_stop_cmd(interaction: discord.Interaction, server: str):
+    await _power_command(interaction, server, "stop", exa.stop)
+
+
+@server_group.command(name="restart", description="Restart a server (operators only)")
+@app_commands.describe(server="Which server")
+@app_commands.autocomplete(server=server_autocomplete)
+async def server_restart_cmd(interaction: discord.Interaction, server: str):
+    await _power_command(interaction, server, "restart", exa.restart)
+
+
+tree.add_command(server_group)
+
+
+async def send_alert(text):
+    """Post a watchdog alert to the configured channel (same resolution poll_outbox uses)."""
+    ch = client.get_channel(ALERT_CHAN)
+    if ch is None:
+        ch = await client.fetch_channel(ALERT_CHAN)
+    await ch.send(text)
+
+
+async def _wd_emit(sid, event, text):
+    """Send an alert, gated by a per-(server,event) cooldown to absorb flapping."""
+    now = time.monotonic()
+    if now - _wd_last_alert.get((sid, event), 0.0) < WATCH.get("alert_cooldown_seconds", 300):
+        return
+    _wd_last_alert[(sid, event)] = now
+    try:
+        await send_alert(text)
+    except Exception:  # noqa: BLE001
+        log("[watchdog] alert send failed:\n" + traceback.format_exc())
+
+
+@tasks.loop(seconds=WATCH.get("poll_seconds", 30))
+async def exaroton_watchdog():
+    now = time.monotonic()
+    try:
+        servers = await exa.all_servers()          # ONE call covers every watched server
+    except Exception as e:  # noqa: BLE001 — transient blip: skip cycle, don't alert-storm
+        log(f"[watchdog] poll failed: {e}")
+        return
+    by_id = {s.get("id"): s for s in servers}
+    for sid, cfg in WATCH["servers"].items():
+        if not cfg.get("watch"):
+            continue
+        s = by_id.get(sid)
+        if not s:
+            continue
+        new = s.get("status")
+        prev = _wd_last_status.get(sid)
+        players = (s.get("players") or {}).get("count", 0)
+
+        # Alert only after priming (first poll just seeds state -> no boot-time storm).
+        if _wd_primed["done"] and prev is not None and new != prev:
+            expected_fresh = (now - _wd_expected_stop.get(sid, 0.0)) < 120
+            if new == 7 and prev != 7:
+                await _wd_emit(sid, "crashed", f"🔴 **{cfg['name']}** CRASHED")
+            elif new == 0 and prev in (1, 2, 6):
+                if expected_fresh:
+                    _wd_expected_stop.pop(sid, None)   # clean/operator stop -> silent
+                else:
+                    await _wd_emit(sid, "down", f"🟠 **{cfg['name']}** went offline unexpectedly")
+            elif new == 1 and prev != 1:
+                await _wd_emit(sid, "up", f"🟢 **{cfg['name']}** is online")
+
+        # optional auto-stop-when-empty (off by default in config)
+        if cfg.get("auto_stop_empty") and new == 1:
+            if players == 0:
+                _wd_empty_since.setdefault(sid, now)
+                if now - _wd_empty_since[sid] >= cfg.get("empty_grace_seconds", 900):
+                    _wd_expected_stop[sid] = now
+                    try:
+                        await exa.stop(sid)
+                        await send_alert(f"ℹ️ **{cfg['name']}** auto-stopped (empty, saving credits)")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"[watchdog] auto-stop failed: {e}")
+                    _wd_empty_since.pop(sid, None)
+            else:
+                _wd_empty_since.pop(sid, None)
+
+        _wd_last_status[sid] = new
+
+    _wd_poll_count["n"] += 1
+    if _wd_poll_count["n"] % WATCH.get("credit_check_every", 20) == 0:
+        try:
+            c = await exa.credits()
+            if c < WATCH.get("credit_floor", 50):
+                await _wd_emit("__acct__", "lowcredit", f"⚠️ exaroton credits low: {c:.1f}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    _wd_primed["done"] = True
+
+
+@exaroton_watchdog.before_loop
+async def before_watchdog():
+    await client.wait_until_ready()
+
+# =================== end exaroton /server + watchdog block ===================
+
+
 @client.event
 async def on_ready():
     log(f"Logged in as {client.user} (id {client.user.id})")
@@ -708,6 +917,13 @@ async def on_ready():
         poll_outbox.start()
     if not flush_utterances.is_running():
         flush_utterances.start()
+    try:
+        await tree.sync(guild=discord.Object(id=GUILD_ID))
+        log(f"Synced /server commands to guild {GUILD_ID}")
+    except Exception:  # noqa: BLE001
+        log("Slash command sync failed:\n" + traceback.format_exc())
+    if not exaroton_watchdog.is_running():
+        exaroton_watchdog.start()
 
 
 @client.event
@@ -787,6 +1003,46 @@ async def poll_outbox():
                 )
                 _finish(path, fname, SENT, result)
                 log(f"Fetched {len(msgs)} msg(s) from #{getattr(channel, 'name', channel_id)}")
+            elif action == "purge":
+                # Delete messages older than `older_than_days` (default 7).
+                # scope: "channel" (default) purges just this channel;
+                #        "guild" sweeps every text channel in the guild.
+                days = int(req.get("older_than_days", 7))
+                scope = req.get("scope", "channel")
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                if scope == "guild" and getattr(channel, "guild", None) is not None:
+                    targets = list(channel.guild.text_channels)
+                else:
+                    targets = [channel]
+                per_channel = {}
+                total = 0
+                errors = {}
+                for ch in targets:
+                    try:
+                        # discord.py bulk-deletes messages < 14 days old and
+                        # falls back to individual deletes for older ones.
+                        deleted = await ch.purge(limit=None, before=cutoff, bulk=True)
+                        per_channel[f"#{ch.name}"] = len(deleted)
+                        total += len(deleted)
+                        log(f"Purged {len(deleted)} msg(s) older than {days}d from #{ch.name}")
+                    except discord.Forbidden:
+                        errors[f"#{ch.name}"] = "missing Manage Messages permission"
+                        log(f"PURGE forbidden in #{getattr(ch,'name','?')} (need Manage Messages)")
+                    except Exception as e:  # noqa: BLE001
+                        errors[f"#{ch.name}"] = str(e)
+                        log(f"PURGE error in #{getattr(ch,'name','?')}: {e}")
+                result.update({
+                    "status": "purged",
+                    "request": req,
+                    "scope": scope,
+                    "older_than_days": days,
+                    "cutoff": cutoff.isoformat(),
+                    "deleted_total": total,
+                    "deleted_by_channel": per_channel,
+                    "errors": errors,
+                })
+                _finish(path, fname, SENT, result)
+                log(f"Purge complete: {total} msg(s) deleted, errors={errors}")
             else:
                 content = str(req["content"])
                 sent = await channel.send(content)
