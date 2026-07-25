@@ -21,10 +21,21 @@ import os
 import re
 import json
 
+from dotenv import load_dotenv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# This module reads BENHAM_* at import time, and bot.py imports it BEFORE running
+# its own load_dotenv -- so relying on the importer left every BENHAM_* setting in
+# environ.env silently ignored, with only real shell env vars taking effect.
+# Loading here makes the module self-sufficient regardless of import order.
+# load_dotenv does not overwrite variables that are already set, so loading it
+# twice is harmless and a real environment variable still wins over the file.
+load_dotenv(os.path.join(BASE_DIR, "environ.env"))
+
 MODEL = os.environ.get("BENHAM_MODEL", "claude-haiku-4-5")  # $1/$5 per 1M — cheap voice tier
 MAX_TOKENS = int(os.environ.get("BENHAM_MAX_TOKENS", "160"))  # spoken replies are short
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GUARDRAILS_FILE = os.path.join(BASE_DIR, "guardrails.md")
 PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
 OVERRIDES_FILE = os.path.join(BASE_DIR, "personality_overrides.txt")
