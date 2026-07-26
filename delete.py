@@ -1,5 +1,5 @@
 """
-delete.py — ask the running bot.py to delete ONE specific message by id.
+delete.py - ask the running bot.py to delete ONE specific message by id.
 
 Usage:
     python delete.py <channel_id> <message_id>
@@ -9,46 +9,27 @@ message and deletes it (~2s). The bot can always delete its OWN messages; deleti
 someone else's needs the Manage Messages permission. Deletion is PERMANENT.
 
 Use it to clean up a stray/accidental Benham post or a bad draft. To remove many
-old messages at once, use the bulk `purge` action instead (see bot.py).
+old messages at once, use purge.py.
 """
 
-import os
 import sys
-import json
-import uuid
-from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTBOX = os.path.join(BASE_DIR, "outbox")
+from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 
 def main(argv):
+    console_utf8()
     if len(argv) < 3:
-        print("Usage: python delete.py <channel_id> <message_id>", file=sys.stderr)
-        return 2
-    try:
-        channel_id = int(argv[1])
-        message_id = int(argv[2])
-    except ValueError:
-        print("channel_id and message_id must both be integers", file=sys.stderr)
-        return 2
+        return usage("Usage: python delete.py <channel_id> <message_id>")
+    ids, err = parse_ids(argv[1:3], ["channel_id", "message_id"])
+    if err:
+        return usage(err)
+    channel_id, message_id = ids
 
-    os.makedirs(OUTBOX, exist_ok=True)
-    req = {
-        "action": "delete",
-        "channel_id": channel_id,
-        "message_id": message_id,
-        "queued_at": datetime.now(timezone.utc).isoformat(),
-    }
-    name = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-    tmp = os.path.join(OUTBOX, name + ".json.tmp")
-    final = os.path.join(OUTBOX, name + ".json")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(req, f, indent=2)
-    os.replace(tmp, final)  # atomic
+    final = enqueue(action="delete", channel_id=channel_id, message_id=message_id)
     print(f"Delete request queued -> {final}")
     print(f"  channel {channel_id}, message {message_id}")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

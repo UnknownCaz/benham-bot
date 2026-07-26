@@ -28,6 +28,7 @@ import sys
 import json
 import time
 import shutil
+import logging
 import difflib
 import asyncio
 import tempfile
@@ -46,6 +47,7 @@ from dotenv import load_dotenv
 
 import brain
 import exaroton_ops as exa
+import jsonio
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -285,8 +287,7 @@ def record_message(message):
         "content": message.content,
         "message_id": message.id,
     }
-    with open(INBOX_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    jsonio.append_jsonl(INBOX_FILE, rec)
     return rec
 
 
@@ -466,19 +467,18 @@ def write_voice_transcript(channel_id, speaker, speaker_id, text):
         "text": text,
         "contains_wake": contains_wake,
     }
-    with open(VOICE_TRANSCRIPT, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    jsonio.append_jsonl(VOICE_TRANSCRIPT, rec)
     tag = "WAKE " if contains_wake else ""
     log(f"{tag}voice <{speaker}>: {text!r}")
     return rec
 
 
 def read_voice_settings():
-    try:
-        with open(VOICE_SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:  # noqa: BLE001
-        return {"voice": "Microsoft David Desktop", "rate": 0, "volume": 100}
+    # The fallback voice is an edge-tts id; the old SAPI default ("Microsoft David
+    # Desktop") lingered here long after synth_tts moved to edge-tts, and synth_tts
+    # had to special-case Microsoft* names to migrate it at call time.
+    return jsonio.read_json(VOICE_SETTINGS_FILE,
+                            default={"voice": brain.VOICE_MALE, "rate": 0, "volume": 100})
 
 
 def apply_voice_settings(changes):
@@ -510,13 +510,20 @@ def append_override(trait):
 
 
 def reset_overrides():
-    """Clear all user personality tweaks, back to the base persona.md."""
+    """Clear all user personality tweaks, back to the base persona.md.
+
+    Returns True only if the overrides are actually gone. The caller announces the
+    reset out loud, so claiming success after a failed remove would tell Tyler the
+    personality had been cleared while the old traits were still live.
+    """
     try:
         if os.path.exists(PERSONALITY_OVERRIDES_FILE):
             os.remove(PERSONALITY_OVERRIDES_FILE)
-    except Exception:  # noqa: BLE001
-        pass
+    except OSError as e:
+        log(f"Personality override reset FAILED (old traits still active): {e}")
+        return False
     log("Personality overrides reset")
+    return True
 
 
 _FILLER = {"benham", "claude", "hey", "yo", "hi", "hello", "ok", "okay", "um", "uh", "so", "please"}
@@ -633,9 +640,13 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
             await speak_in_channel(voice_channel, confirm)
             return
         if kind == "persona_reset":
-            reset_overrides()
+            cleared = reset_overrides()
             _open_convo(gid, speaker)
-            await speak_in_channel(voice_channel, "Okay, back to my usual self.")
+            await speak_in_channel(
+                voice_channel,
+                "Okay, back to my usual self." if cleared
+                else "I couldn't clear my personality tweaks - they're still active.",
+            )
             return
         if kind == "voices_list":
             names = brain.voice_names()
@@ -952,8 +963,11 @@ async def exaroton_watchdog():
             c = await exa.credits()
             if c < WATCH.get("credit_floor", 50):
                 await _wd_emit("__acct__", "lowcredit", f"⚠️ exaroton credits low: {c:.1f}")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 — a blip must not kill the watchdog loop
+            # Silently swallowing this meant a broken credits endpoint disabled the
+            # low-credit alarm entirely, with nothing to show the alarm had stopped
+            # working. Log it; the next cycle retries anyway.
+            log(f"[watchdog] credit check failed (low-credit alarm not evaluated): {e}")
 
     _wd_primed["done"] = True
 
@@ -1235,12 +1249,32 @@ def console_utf8():
             pass
 
 
+def configure_logging():
+    """Route library logging through one UTC format matching log()'s own lines."""
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%SZ",
+    )
+    formatter.converter = time.gmtime          # log() stamps UTC; match it
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(logging.INFO)
+
+
 def main():
     console_utf8()
     token = os.environ.get("BOT_KEY")
     if not token:
         raise SystemExit("BOT_KEY not set — put it in environ.env as BOT_KEY=<token>")
-    client.run(token)
+    configure_logging()
+    # log_handler=None stops discord.py installing a handler of its own. Its records
+    # still propagate to the root handler set up above, so the gateway diagnostics
+    # (connects, RESUMEs, voice 4006s) are kept -- they matter for a process that
+    # runs for days -- but now share one timestamp format with log() instead of
+    # interleaving a second one in the same file.
+    client.run(token, log_handler=None)
 
 
 if __name__ == "__main__":

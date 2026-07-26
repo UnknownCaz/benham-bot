@@ -14,14 +14,9 @@ DMs from server members. If that is not the case the request lands in
 outbox/failed with a Forbidden error rather than failing silently.
 """
 
-import os
 import sys
-import json
-import uuid
-from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTBOX = os.path.join(BASE_DIR, "outbox")
+from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 # The bot's owner. Kept here rather than in a config file because dm.py is the
 # only thing that needs it; move it out if a second caller ever appears.
@@ -29,43 +24,26 @@ TYLER_ID = 273967061619965952
 
 
 def main(argv):
+    console_utf8()
     if len(argv) < 3:
-        print('Usage: python dm.py <user_id|--tyler> "message text"', file=sys.stderr)
-        return 2
+        return usage('Usage: python dm.py <user_id|--tyler> "message text"')
 
-    target = argv[1]
-    if target == "--tyler":
+    if argv[1] == "--tyler":
         user_id = TYLER_ID
     else:
-        try:
-            user_id = int(target)
-        except ValueError:
-            print(f"user_id must be an integer or --tyler, got {target!r}", file=sys.stderr)
-            return 2
+        ids, err = parse_ids(argv[1:2], ["user_id"])
+        if err:
+            return usage(f"{err} (or pass --tyler)")
+        (user_id,) = ids
 
     content = " ".join(argv[2:])
     if not content.strip():
-        print("refusing to send an empty message", file=sys.stderr)
-        return 2
+        return usage("refusing to send an empty message")
 
-    req = {
-        "action": "dm",
-        "user_id": user_id,
-        "content": content,
-        "queued_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    os.makedirs(OUTBOX, exist_ok=True)
-    name = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-    tmp = os.path.join(OUTBOX, name + ".json.tmp")
-    final = os.path.join(OUTBOX, name + ".json")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(req, f, indent=2)
-    os.replace(tmp, final)  # atomic: the poller never sees a half-written request
-
+    final = enqueue(action="dm", user_id=user_id, content=content)
     print(f"Queued DM -> {final}")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    raise SystemExit(main(sys.argv))
