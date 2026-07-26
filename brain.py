@@ -91,8 +91,19 @@ _client = None
 _static_cache = None  # guardrails + persona (only re-read on restart)
 
 _VOICE_RE = re.compile(r"<<\s*(?:voice|rate|volume)\b.*?>>", re.IGNORECASE | re.DOTALL)
+# --- Directive grammar. KEEP IN SYNC with double-relay/relay_and_log.py, which
+# --- implements the same protocol for the text path. The two drifted once already:
+# --- this side accepted <<persona= ...>> and the relay did not, so an "=" reply
+# --- retuned the voice personality while the relay leaked the directive verbatim
+# --- into Discord. Both now accept ":" and "=" and persist to the same file.
 _PERSONA_RE = re.compile(r"<<\s*persona\s*[:=]\s*(.*?)>>", re.IGNORECASE | re.DOTALL)
-_ANY_DIRECTIVE_RE = re.compile(r"<<.*?>>", re.DOTALL)
+
+# Strips directive-SHAPED tokens only: <<word>>, <<word: value>>, <<word=value>>.
+# The previous `<<.*?>>` was lazy but unanchored, so a reply that merely mentioned
+# "<<" and later contained ">>" had the entire span between them silently deleted.
+# Requiring a bare word before the delimiter, and forbidding angle brackets inside,
+# means ordinary prose survives while every real directive is still removed.
+_ANY_DIRECTIVE_RE = re.compile(r"<<\s*[A-Za-z_]+\s*(?:[:=][^<>]*)?>>", re.DOTALL)
 
 
 def _get_client():
