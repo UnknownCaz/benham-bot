@@ -1,45 +1,38 @@
 """
-exaroton_ops.py — async, bot-safe access layer over Tyler's exaroton skill.
+exaroton_ops.py - async, bot-safe access layer over Tyler's exaroton skill.
 
-Reuses the skill's auth (`headers`/`load_token`) and `BASE` URL, but wraps every HTTP call
-so a network blip or API error raises a NORMAL exception (ExarotonError / requests errors)
-instead of the skill's `sys.exit(...)`, which would kill the long-lived bot process. Calls
-run in a worker thread so they never block the discord.py event loop.
+The skill's api() used to sys.exit on every error path, which is fatal inside a bot
+that runs for days, so this module reimplemented the whole HTTP layer just to get an
+exception instead. The skill now raises ExarotonError and only converts it to an exit
+code at its own CLI boundary, so there is one request implementation again and one
+status table - this file just moves the call off the event loop.
 
-All ops take a RAW exaroton server ID (never `resolve_server`) — that avoids a per-call
-`GET /servers/` and the "'Isle of Berk' is a world label, not the API name" resolution trap.
+All ops take a RAW exaroton server ID (never `resolve_server`) - that avoids a
+per-call `GET /servers/` and the "'Isle of Berk' is a world label, not the API name"
+resolution trap.
 """
 
-import sys
 import asyncio
+import os
+import sys
 
-import requests
-
-# The exaroton skill holds the token (.env) + constants. Reuse ONLY its auth + BASE,
-# NOT its sys.exit-y api() helper.
-EXA_DIR = r"C:\Users\Tyler\.claude\skills\exaroton"
+# The exaroton skill holds the token (.env), the request layer and the status table.
+# Path is overridable because this hardcoded absolute path was the one thing in the
+# file that made it machine-specific.
+EXA_DIR = os.environ.get(
+    "EXAROTON_SKILL_DIR",
+    os.path.join(os.path.expanduser("~"), ".claude", "skills", "exaroton"),
+)
 if EXA_DIR not in sys.path:
     sys.path.insert(0, EXA_DIR)
 
-from exaroton import headers, BASE  # noqa: E402
-
-
-class ExarotonError(Exception):
-    """Raised on any non-success exaroton API response (never SystemExit)."""
-
-
-def _sync_request(method, path, timeout=15.0):
-    r = requests.request(method, f"{BASE}{path}", headers=headers(), timeout=timeout)
-    r.raise_for_status()
-    body = r.json()
-    if not body.get("success", False):
-        raise ExarotonError(body.get("error") or f"{method} {path} failed")
-    return body.get("data")
+# ExarotonError is re-exported so callers (bot.py) keep importing it from here.
+from exaroton import ExarotonError, api, status_label  # noqa: E402,F401
 
 
 async def _exa(method, path):
     """Async, non-blocking exaroton call. Raises ExarotonError / requests exceptions."""
-    return await asyncio.to_thread(_sync_request, method, path)
+    return await asyncio.to_thread(api, method, path)
 
 
 # --- high-level ops (all by raw server ID) ---
