@@ -772,11 +772,22 @@ async def before_flush():
 # alerts on crash / unexpected-offline / back-online for servers flagged watch:true in
 # exaroton_watch.json. No MOTD / world / whitelist / naming changes — Tyler keeps those.
 
-STATUS_EMOJI = {
-    0: "⚪ offline", 1: "🟢 online", 2: "🟡 starting", 3: "🟠 stopping",
-    4: "🔵 restarting", 5: "💾 saving", 6: "⏳ loading", 7: "🔴 CRASHED",
-    8: "⏳ pending", 9: "🔀 transferring", 10: "⏳ preparing",
+# Emoji per status NAME, not per numeric code. The exaroton skill already owns the
+# code -> name table; spelling the 11 codes out a third time here meant three copies
+# that had to be kept in step by hand.
+_STATUS_EMOJI_BY_NAME = {
+    "OFFLINE": "⚪", "ONLINE": "🟢", "STARTING": "🟡", "STOPPING": "🟠",
+    "RESTARTING": "🔵", "SAVING": "💾", "LOADING": "⏳", "CRASHED": "🔴",
+    "PENDING": "⏳", "TRANSFERRING": "🔀", "PREPARING": "⏳",
 }
+
+
+def status_badge(code):
+    """'🟢 online' for a status code, or a readable fallback for an unknown one."""
+    name = exa.status_label(code)          # single source of truth, from the skill
+    emoji = _STATUS_EMOJI_BY_NAME.get(name, "❔")
+    # CRASHED stays shouty; everything else reads better lowercase.
+    return f"{emoji} {name if name == 'CRASHED' else name.lower()}"
 
 # --- watchdog state (module-level) ---
 _wd_last_status = {}    # sid -> int last-seen status code (absent until primed)
@@ -829,7 +840,7 @@ async def server_status(interaction: discord.Interaction, server: str):
     except Exception as e:  # noqa: BLE001
         await interaction.followup.send(f"⚠️ exaroton error: {e}")
         return
-    st = STATUS_EMOJI.get(d.get("status"), "unknown")
+    st = status_badge(d.get("status"))
     players = d.get("players") or {}
     who = ""
     if d.get("status") == 1:
