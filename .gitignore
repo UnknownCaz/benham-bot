@@ -2,14 +2,13 @@
 webhooks.json
 outbox/
 channels.json
-inbox.jsonl
-voice_transcript.jsonl
+# Runtime transcripts and message logs. Catch-all rather than a per-file list, so
+# a new *.jsonl cannot be committed by accident.
+*.jsonl
 bot.log
 __pycache__/
 *.pyc
 venv-voice/
-.last_wake
-.wake_seen
 personality_overrides.txt
 *.log
 exaroton_watch.json
