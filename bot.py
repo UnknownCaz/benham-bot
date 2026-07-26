@@ -1017,10 +1017,21 @@ async def poll_outbox():
             with open(path, "r", encoding="utf-8") as f:
                 req = json.load(f)
             action = req.get("action", "send")
-            channel_id = int(req["channel_id"])
-            channel = client.get_channel(channel_id)
-            if channel is None:
-                channel = await client.fetch_channel(channel_id)
+            if action == "dm":
+                # A DM request carries user_id, not channel_id: resolve the user's
+                # private channel and create it if this is the first message.
+                # Discord only permits this for a user who shares a guild with the
+                # bot and has not blocked DMs from server members.
+                user_id = int(req["user_id"])
+                user = client.get_user(user_id) or await client.fetch_user(user_id)
+                channel = user.dm_channel or await user.create_dm()
+                channel_id = channel.id
+                # Falls through to the same send path as a channel message below.
+            else:
+                channel_id = int(req["channel_id"])
+                channel = client.get_channel(channel_id)
+                if channel is None:
+                    channel = await client.fetch_channel(channel_id)
 
             if action == "listen":
                 await start_listening(channel)
