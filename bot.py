@@ -59,7 +59,6 @@ FAILED = os.path.join(OUTBOX, "failed")
 CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
 INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
 VOICE_TRANSCRIPT = os.path.join(BASE_DIR, "voice_transcript.jsonl")
-TTS_SCRIPT = os.path.join(BASE_DIR, "tts.ps1")
 
 # Canonical wake names. Detection is FUZZY (see is_wake): each word / adjacent word-pair in an
 # utterance is compared to these, so Whisper mishears of "Benham" (Bentham, Ben ham, Benum, Bnham,

@@ -1,14 +1,25 @@
-discord.py>=2.3
 python-dotenv>=1.0
 PyNaCl>=1.5
-davey>=0.1
-# Voice listening (receive+STT). Blocked on discord.py 2.7 by DAVE E2E encryption;
-# intended for a future pre-DAVE (discord.py 2.4.x) venv. See bot.py note.
-discord-ext-voice-recv>=0.5
+
+# --- Voice receive + STT ---
+# This trio is version-locked on purpose. bot.py monkeypatches a PRIVATE API
+# (discord.ext.voice_recv.opus.PacketDecoder._decode_packet) to run each frame
+# through the active DAVE session before opus decode, because voice-recv only
+# does transport decryption and downgrading to pre-DAVE discord.py no longer
+# connects (voice gateway rejects with 4006). A minor upgrade to any of the three
+# can move or rename that private symbol and silently break voice listening.
+# These exact versions are the ones the patch was verified against.
+discord.py==2.7.*
+discord-ext-voice-recv==0.5.2a179
+davey==0.1.*
 faster-whisper>=1.0
+# Pulled in transitively by faster-whisper, but bot.py imports it directly
+# (pcm_to_whisper_array), so declare it rather than rely on that.
+numpy>=1.26
+
 # Autonomous AUTO_REPLY mode (bot answers via the Anthropic API itself)
 anthropic>=0.40
-# Natural neural TTS (replaces Windows SAPI)
+# Natural neural TTS. Needs network access; there is no offline fallback.
 edge-tts>=7.0
 # exaroton /server slash commands + watchdog (exaroton_ops.py; also used by the exaroton skill)
 requests>=2.28
