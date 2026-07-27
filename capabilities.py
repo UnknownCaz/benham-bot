@@ -901,7 +901,17 @@ async def _pc_task(ctx, p):
     import codesession
     if not codesession.ENABLED:
         raise ActionError("PC access is off (pc.enabled in control.json)")
-    result = await codesession.run_task(str(p["task"]))
+
+    # Report each tool as it is used, rather than only a summary once the task is
+    # over. run_task always accepted this callback and nothing ever passed one, so
+    # a session doing things on the machine was invisible until it finished - which
+    # is the wrong half of the timeline to be able to see. watch_pc.py gives the
+    # detailed live view; this is the coarse one that lands in bot.log next to
+    # everything else.
+    async def _progress(tool_name):
+        ctx.log(f"  pc_task ... {tool_name}")
+
+    result = await codesession.run_task(str(p["task"]), on_progress=_progress)
     return {"status": "completed", "task": str(p["task"])[:200], "result": result}
 
 
