@@ -46,7 +46,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # environment variable still wins and loading twice is harmless.
 load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 MEMORY_FILE = os.path.join(BASE_DIR, "agent_memory.json")
-PERSONA_FILE = os.path.join(BASE_DIR, "agent_persona.md")
+# The one shared personality file, also read by brain.py (voice) and codesession.py
+# (PC). Benham used to be three different characters depending on how you reached
+# him - a casual "one of the guys" in voice, something terser in DMs - which is a
+# strange thing for a proxy that is supposed to be one person.
+PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))
@@ -219,9 +223,11 @@ def _system_blocks(where, actor_name):
 - You cannot see message content you were not given. If you need context, read the
   channel with a tool rather than guessing.
 
-## Style
-Discord markdown works: **bold**, `code`, > quote. Keep messages under ~1500
-characters; if something is genuinely longer, say so and offer to split it.
+## This surface
+Discord text. Tone and identity come from the persona above; this is only the
+delivery constraint: keep a message under ~1500 characters. Longer replies get
+split across messages, which reads badly - say it will be long and offer to split
+it deliberately instead.
 """
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
