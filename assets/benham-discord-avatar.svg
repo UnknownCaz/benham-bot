@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Benham - letter B signet seal">
+  <title>Benham - letter B signet</title>
+  <defs>
+    <!-- octagon, flats at 0/45/90..., vertex radius 100, apothem 92.39 -->
+    <path id="oct" d="M 38.27,-92.39 L 92.39,-38.27 L 92.39,38.27 L 38.27,92.39 L -38.27,92.39 L -92.39,38.27 L -92.39,-38.27 L -38.27,-92.39 Z"/>
+
+    <!-- level-meter wing: maroon backing segments (R=221, band 201-241) -->
+    <g id="wingM">
+      <path d="M 191.39,-110.50 A 221,221 0 0 1 215.70,-48.10"/>
+      <path d="M 218.45,-33.47 A 221,221 0 0 1 218.45,33.47"/>
+      <path d="M 215.70,48.10 A 221,221 0 0 1 191.39,110.50"/>
+    </g>
+    <!-- level-meter wing: orange faces, inset at every cap (band 209-233) -->
+    <g id="wingO">
+      <path d="M 195.27,-103.49 A 221,221 0 0 1 213.79,-55.99"/>
+      <path d="M 219.52,-25.53 A 221,221 0 0 1 219.52,25.53"/>
+      <path d="M 213.79,55.99 A 221,221 0 0 1 195.27,103.49"/>
+    </g>
+
+    <!-- wake-word lens, rises from behind the plate's top edge -->
+    <path id="lens" d="M 0,-230 C 26,-212 26,-190 0,-168 C -26,-190 -26,-212 0,-230 Z"/>
+
+    <!-- hero letterform: locked spine (38) + two tunable bowls (30) -->
+    <g id="bee" fill="none" stroke-linecap="butt" stroke-linejoin="round">
+      <path d="M -60,-105 L -60,105" stroke-width="38"/>
+      <path d="M -60,-90 H 8 A 39,39 0 0 1 8,-12 H -60" stroke-width="30"/>
+      <path d="M -60,-12 H 13 A 51,51 0 0 1 13,90 H -60" stroke-width="30"/>
+    </g>
+  </defs>
+
+  <rect width="512" height="512" fill="#523041"/>
+
+  <g transform="translate(256,256)">
+
+    <!-- meter wings at 3 and 9 o'clock -->
+    <g fill="none" stroke="#673638" stroke-width="40">
+      <use href="#wingM"/>
+      <use href="#wingM" transform="rotate(180)"/>
+    </g>
+    <g fill="none" stroke="#dd7a2f" stroke-width="24">
+      <use href="#wingO"/>
+      <use href="#wingO" transform="rotate(180)"/>
+    </g>
+
+    <!-- accents tucked BEHIND the plate: lens above, nameplate tab below -->
+    <g fill="#e63230" stroke="#673638" stroke-width="12" stroke-linejoin="round">
+      <use href="#lens"/>
+      <use href="#lens" transform="rotate(45)"/>
+      <use href="#lens" transform="rotate(-45)"/>
+      <use href="#lens" transform="rotate(135)"/>
+      <use href="#lens" transform="rotate(-135)"/>
+      <use href="#lens" transform="rotate(180)"/>
+    </g>
+
+    <!-- seal plate: orange keyline (20 wide) over deep-red face -->
+    <use href="#oct" fill="#dd7a2f" transform="scale(1.96)"/>
+    <use href="#oct" fill="#973a37" transform="scale(1.74)"/>
+
+    <!-- the signature -->
+    <g stroke="#dd7a2f" transform="translate(0,4) scale(1.15)">
+      <use href="#bee"/>
+    </g>
+
+  </g>
+</svg>
