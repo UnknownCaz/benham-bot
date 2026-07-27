@@ -214,7 +214,7 @@ def _options():
         # useful to him specifically.
         setting_sources=["user", "project", "local"],
         system_prompt={"type": "preset", "preset": "claude_code",
-                       "append": _APPEND_PROMPT},
+                       "append": _persona() + _APPEND_PROMPT},
     )
     if MODEL:
         kw["model"] = MODEL
@@ -237,6 +237,21 @@ def _options():
             kw["env"] = {"ANTHROPIC_API_KEY": key}
 
     return ClaudeAgentOptions(**kw)
+
+
+PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
+
+
+def _persona():
+    """The shared personality, so the Benham running commands is the same character
+    as the one in DMs and voice. Appended to Claude Code's own preset prompt, which
+    keeps its tool knowledge intact and only changes who is doing the talking."""
+    try:
+        with open(PERSONA_FILE, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        return f"\n\n# Who you are\n\n{text}\n" if text else ""
+    except OSError:
+        return ""
 
 
 _APPEND_PROMPT = """
