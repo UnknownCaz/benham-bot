@@ -162,8 +162,10 @@ def target(guild_id, channel_id=999):
     return CallContext.owner_dm(TYLER, 111).for_target(guild_id, channel_id)
 
 
-check("purge allowed in Testing",
-      policy.authorize_target(purge, target(TESTING)).allowed, True)
+check("purge not DENIED in Testing (it asks for confirmation instead)",
+      policy.authorize_target(purge, target(TESTING)).denied, False)
+check("...and what it asks for is a confirmation",
+      policy.authorize_target(purge, target(TESTING)).needs_confirm, True)
 check("purge refused in Chillbar",
       policy.authorize_target(purge, target(CHILLBAR)).allowed, False)
 check("purge refused with no guild (a DM)",
@@ -177,6 +179,8 @@ check("the refusal says a confirmation cannot unlock it",
       True)
 check("non-destructive actions are unaffected in Chillbar",
       policy.authorize_target(send_a, target(CHILLBAR)).allowed, True)
+check("a destructive action is still DENIED, not merely asked, in Chillbar",
+      policy.authorize_target(purge, target(CHILLBAR)).denied, True)
 check("a missing target context is refused",
       policy.authorize_target(purge, None).allowed, False)
 
@@ -206,6 +210,37 @@ check("non-posting actions are unaffected outside the list",
 check("reading is never capped by posting scope",
       policy.authorize_target(capabilities.REGISTRY["read_channel"],
                               target(OUTSIDE_GUILD, 999)).allowed, True)
+
+section("Stage 5 — confirms and outward-taint are policy decisions now")
+D = policy.Decision
+
+
+def verdict(action_name, tainted=False, guild_id=TESTING, channel_id=809357286036078612):
+    act = capabilities.REGISTRY[action_name]
+    ctx = CallContext.owner_dm(TYLER, 111, tainted=tainted).for_target(guild_id, channel_id)
+    return policy.authorize_target(act, ctx)
+
+
+check("purge asks for confirmation", verdict("purge_messages").verdict, D.CONFIRM)
+check("add_role asks every time", verdict("add_role").verdict, D.CONFIRM)
+check("send_message is free in a clean turn", verdict("send_message").verdict, D.ALLOW)
+check("send_message asks once the turn is tainted",
+      verdict("send_message", tainted=True).verdict, D.CONFIRM)
+check("...and names the taint rule",
+      verdict("send_message", tainted=True).rule, "outward_tainted")
+check("dm_user asks once tainted", verdict("dm_user", tainted=True).verdict, D.CONFIRM)
+check("pin_message stays free even tainted (not outward)",
+      verdict("pin_message", tainted=True).verdict, D.ALLOW)
+check("read_channel stays free even tainted",
+      verdict("read_channel", tainted=True).verdict, D.ALLOW)
+
+# Deny must beat confirm: an action refused outright should never come back asking
+# to be approved, or Tyler could say yes to something that was never on offer.
+check("a refused destructive action DENIES, it does not ask",
+      verdict("purge_messages", guild_id=CHILLBAR).verdict, D.DENY)
+check("a refused post DENIES even when tainted",
+      verdict("send_message", tainted=True, guild_id=4040404040404040404,
+              channel_id=999).verdict, D.DENY)
 
 section("Full matrix — every action against every origin")
 ORIGINS = [Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
