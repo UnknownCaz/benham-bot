@@ -231,10 +231,22 @@ def _options():
     #               browser and an interactive terminal, so it cannot be done from
     #               here. Set pc.use_api_key false once he has logged in; passing
     #               the key would otherwise take precedence and keep billing the API.
+    # Measured, not assumed. With a deliberately INVALID key in the environment the
+    # CLI still authenticated and answered, so the stored OAuth login wins over the
+    # key - the opposite of what the earlier comment here claimed. Which means
+    # simply not passing the key does NOT select API billing, and simply passing it
+    # does not select it either.
+    #
+    # So be explicit in both directions rather than relying on a precedence that
+    # turned out to be backwards. Note that omitting `env` entirely does not clear
+    # anything: the subprocess inherits bot.py's environment, which has already
+    # loaded ANTHROPIC_API_KEY from environ.env.
     if _pc_cfg.get("use_api_key", True):
         key = os.environ.get("ANTHROPIC_API_KEY")
         if key:
             kw["env"] = {"ANTHROPIC_API_KEY": key}
+    else:
+        kw["env"] = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
     return ClaudeAgentOptions(**kw)
 
