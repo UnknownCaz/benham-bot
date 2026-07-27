@@ -290,6 +290,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             model=MODEL, max_tokens=MAX_TOKENS, system=system,
             messages=turns, tools=tools,
         )
+        _log_usage(log, resp, f"round {round_no + 1}")
         text_blocks = [b.text for b in resp.content if b.type == "text"]
         tool_calls = [b for b in resp.content if b.type == "tool_use"]
         if text_blocks:
@@ -381,6 +382,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                 model=MODEL, max_tokens=MAX_TOKENS, system=system,
                 messages=turns, tools=tools,
             )
+            _log_usage(log, resp, "confirm-explain")
             final = [b.text for b in resp.content if b.type == "text"]
             reply_parts.extend(t for t in final if t.strip())
             turns.append({"role": "assistant",
@@ -394,6 +396,33 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     reply = "\n\n".join(p.strip() for p in reply_parts if p and p.strip())
     _remember(conversation_key, text, reply)
     return (reply or None), pending
+
+
+def _log_usage(log, resp, label):
+    """Record what one API call cost, in tokens.
+
+    The voice brain has always logged its own usage; this path - the one Tyler
+    actually uses all day - discarded it, so the most-exercised part of the bot was
+    the only part with no measurement behind it.
+
+    cache_read is broken out deliberately rather than folded into input. The static
+    prefix here is ~7.4k tokens of tool schemas and system prompt, and whether that
+    is being read from cache or rebuilt is the single biggest factor in what a
+    message costs - a cache miss is roughly ten times the price of a hit. Summing
+    them into one number would hide exactly the thing worth watching.
+    """
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    parts = [f"in={getattr(u, 'input_tokens', '?')}",
+             f"out={getattr(u, 'output_tokens', '?')}"]
+    read = getattr(u, "cache_read_input_tokens", 0) or 0
+    write = getattr(u, "cache_creation_input_tokens", 0) or 0
+    if read:
+        parts.append(f"cache_read={read}")
+    if write:
+        parts.append(f"cache_write={write}")
+    log(f"agent usage [{label}] {' '.join(parts)} model={MODEL}")
 
 
 def _truncate(obj, limit=6000):
