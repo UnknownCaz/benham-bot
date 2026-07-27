@@ -313,6 +313,70 @@ async def _end_to_end():
 
 asyncio.run(_end_to_end())
 
+section("Taint ORDER: a self-tainting action must not block itself")
+
+# Every rule was tested and every rule was right; the order they were applied in
+# was not. pc_task both taints (it returns file contents) and is blocked when
+# tainted, and the taint was being set BEFORE the call - so it poisoned its own
+# context and was denied by its own rule, every time, through the agent. Tyler
+# found it on the first real DM. Nothing in the suite could have: the rules were
+# checked directly, never the sequence the loop applies them in.
+
+
+async def _taint_order():
+    real_handler = capabilities.REGISTRY["pc_task"].handler
+    ran = []
+
+    async def fake_pc(ctx, p):
+        ran.append(p.get("task"))
+        return {"status": "completed", "result": "a.txt, b.txt"}
+
+    capabilities.REGISTRY["pc_task"].handler = fake_pc
+    try:
+        # Clean turn: the model calls pc_task and nothing else.
+        script = [
+            _Resp([_Block(type="tool_use", id="p1", name="pc_task",
+                          input={"task": "list the working directory"})], "tool_use"),
+            _Resp([_Block(type="text", text="a.txt and b.txt")], "end_turn"),
+        ]
+        agent._client = _FakeAnthropic(script)
+        agent._last_call.clear()
+        confirm.cancel()
+        reply, parked = await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "what files are in your folder?",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=None, where="a DM", conversation_key="test:taintorder",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+        check("pc_task RUNS in a clean DM turn", len(ran), 1)
+        check("...and was not parked for confirmation", parked, None)
+
+        # Same turn, but a read happens first. Now it must be refused.
+        ran.clear()
+        script2 = [
+            _Resp([_Block(type="tool_use", id="r1", name="read_channel",
+                          input={"channel_id": TESTING_CHAN, "limit": 3})], "tool_use"),
+            _Resp([_Block(type="tool_use", id="p2", name="pc_task",
+                          input={"task": "list the working directory"})], "tool_use"),
+            _Resp([_Block(type="text", text="I read the channel but can't touch the PC now.")],
+                  "end_turn"),
+        ]
+        agent._client = _FakeAnthropic(script2)
+        agent._last_call.clear()
+        await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "read #asd then list your folder",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=None, where="a DM", conversation_key="test:taintorder2",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+        check("pc_task is REFUSED after a read in the same turn", len(ran), 0)
+    finally:
+        capabilities.REGISTRY["pc_task"].handler = real_handler
+        agent._client = None
+
+
+asyncio.run(_taint_order())
+
 section("What is left unprotected, stated honestly")
 free = [n for n, a in capabilities.REGISTRY.items()
         if not a.outward and not a.needs_confirm and a.tier > identity.READ]
