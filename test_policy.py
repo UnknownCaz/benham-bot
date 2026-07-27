@@ -186,6 +186,27 @@ check("caller phase still decides pc_task with no target resolved",
       policy.authorize(capabilities.REGISTRY["pc_task"],
                        CallContext.owner_guild(TYLER, TESTING)).allowed, False)
 
+section("Stage 4 — the posting allowlist, now a policy rule")
+OUTSIDE_GUILD = 4040404040404040404
+check("posting into Testing allowed",
+      policy.authorize_target(send_a, target(TESTING, 809357286036078612)).allowed, True)
+check("posting into Chillbar allowed (it is on the list)",
+      policy.authorize_target(send_a, target(CHILLBAR, 123)).allowed, True)
+check("posting into a guild Benham is invited to later is REFUSED",
+      policy.authorize_target(send_a, target(OUTSIDE_GUILD, 999)).allowed, False)
+check("the refusal names the rule",
+      policy.authorize_target(send_a, target(OUTSIDE_GUILD, 999)).rule, "posting_scope")
+for nm in ("send_embed", "send_file"):
+    check(f"{nm} is capped too",
+          policy.authorize_target(capabilities.REGISTRY[nm],
+                                  target(OUTSIDE_GUILD, 999)).allowed, False)
+check("non-posting actions are unaffected outside the list",
+      policy.authorize_target(capabilities.REGISTRY["pin_message"],
+                              target(OUTSIDE_GUILD, 999)).allowed, True)
+check("reading is never capped by posting scope",
+      policy.authorize_target(capabilities.REGISTRY["read_channel"],
+                              target(OUTSIDE_GUILD, 999)).allowed, True)
+
 section("Full matrix — every action against every origin")
 ORIGINS = [Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
            Origin.LOCAL_CLI, Origin.SYSTEM]

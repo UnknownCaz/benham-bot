@@ -1144,17 +1144,6 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
             f"[rule={target_decision.rule}, guild={gid}]")
         raise ActionError(target_decision.reason)
 
-    # Posting scope cap. Arithmetic rather than judgement: it does not matter who
-    # asked or why, Benham cannot put content into a channel outside this list. The
-    # case it covers is Benham being invited to a new server whose members can then
-    # post text engineered to look like instructions.
-    if act.posts and not identity.posting_allowed(gid, clean.get("channel_id")):
-        raise ActionError(
-            f"`{name}` would post into channel {clean.get('channel_id')} "
-            f"(guild {gid}), which is not on the posting allowlist in control.json. "
-            "This is a hard scope limit - it is not something a confirmation unlocks."
-        )
-
     if act.needs_confirm and not force:
         ctx.dry_run = True
         preview = await act.handler(ctx, clean)
