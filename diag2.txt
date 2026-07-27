@@ -1,7 +1,0 @@
-A: starting
-B: imported bot in 0.8s
-C: console_utf8 ok
-D: BOT_KEY present: True
-E: logging configured
-[2026-07-27 12:29:32Z] F: log() works
-G: about to call client.run
