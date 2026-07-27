@@ -68,6 +68,45 @@ check("an unknown origin is denied",
 check("the denial names the rule",
       policy.authorize(send, None).rule, "context_present")
 
+section("Stage 2 — the owner rule, now stated at the capability too")
+STRANGER = 999000999000999000
+
+
+def as_user(origin, uid, guild_id=TESTING):
+    if origin == Origin.OWNER_DM:
+        return CallContext.owner_dm(uid, 111)
+    if origin == Origin.OWNER_GUILD:
+        return CallContext.owner_guild(uid, guild_id, 111)
+    if origin == Origin.OWNER_VOICE:
+        return CallContext.owner_voice(uid, guild_id, 111)
+    raise AssertionError(origin)
+
+
+for origin in (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE):
+    check(f"a stranger is refused from {origin}",
+          policy.authorize(send, as_user(origin, STRANGER)).allowed, False)
+    check(f"Tyler is allowed from {origin}",
+          policy.authorize(send, as_user(origin, TYLER)).allowed, True)
+
+check("the refusal names the owner rule",
+      policy.authorize(send, as_user(Origin.OWNER_DM, STRANGER)).rule, "owner")
+check("a stranger cannot engage the agent either",
+      policy.may_engage_agent(CallContext.owner_dm(STRANGER)).allowed, False)
+check("None as an actor is refused",
+      policy.authorize(send, CallContext.owner_dm(None)).allowed, False)
+check("a spoofed string actor id is still checked",
+      policy.authorize(send, CallContext.owner_dm("999")).allowed, False)
+check("Tyler's id as a string still works",
+      policy.authorize(send, CallContext.owner_dm(str(TYLER))).allowed, True)
+
+# LOCAL_CLI and SYSTEM carry no Discord actor to verify. Requiring one would deny
+# every automated call; they are constrained by rule_origin_allowed instead.
+check("LOCAL_CLI needs no actor id",
+      policy.authorize(send, CallContext.local()).allowed, True)
+check("SYSTEM needs no actor id (but reaches almost nothing)",
+      policy.authorize(capabilities.REGISTRY["set_presence"],
+                       CallContext.system()).allowed, True)
+
 section("pc_task — the capability this stage exists for")
 check("reachable from Tyler's DM", allowed("pc_task", Origin.OWNER_DM), True)
 check("reachable from the local CLI", allowed("pc_task", Origin.LOCAL_CLI), True)
