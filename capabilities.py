@@ -537,6 +537,36 @@ async def _react(ctx, p):
     return {"status": "reacted", "message_id": m.id, "emoji": str(p["emoji"])}
 
 
+_voice_speaker = None
+
+
+def set_voice_speaker(fn):
+    """Register bot.py's speak_in_channel.
+
+    A callback rather than an import: speaking needs the TTS pipeline and the live
+    voice client, both of which live in bot.py, and bot.py already imports this
+    module. Registering the function at startup keeps the dependency one-way, the
+    same shape codesession.configure uses for its permission prompt.
+    """
+    global _voice_speaker
+    _voice_speaker = fn
+
+
+@action("speak_in_voice", identity.SPEAK,
+        "Say something aloud in a voice channel Benham is connected to.",
+        {"channel_id": {"type": "int", "required": True},
+         "content": {"type": "str", "required": True}},
+        outward=True)
+async def _speak_in_voice(ctx, p):
+    if _voice_speaker is None:
+        raise ActionError("voice output is not wired up (bot.py did not register a speaker)")
+    ch = await ctx.channel(p["channel_id"])
+    text = str(p["content"])
+    await _voice_speaker(ch, text)
+    return {"status": "spoke", "channel": getattr(ch, "name", str(ch)),
+            "chars": len(text)}
+
+
 @action("typing", identity.SPEAK,
         "Show the 'Benham is typing...' indicator for a few seconds.",
         {"channel_id": {"type": "int", "required": True},

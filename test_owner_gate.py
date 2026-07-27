@@ -94,6 +94,21 @@ class _Message:
 class _StubClient:
     def __init__(self):
         self.user = _User(752313060970201218, "Benham#2721")
+        # speak_in_voice resolves its channel by id through the client, the same as
+        # every other capability, so the stub has to be able to answer that.
+        self.channels = {}
+
+    def get_channel(self, cid):
+        return self.channels.get(int(cid))
+
+    async def fetch_channel(self, cid):
+        ch = self.channels.get(int(cid))
+        if ch is None:
+            raise capabilities.ActionError(f"no channel {cid}")
+        return ch
+
+    def get_guild(self, gid):
+        return _Guild(int(gid), f"guild-{gid}")
 
 
 async def _fake_agent(*args, **kwargs):
@@ -192,12 +207,21 @@ async def main():
     reset()
     spoke = []
     shortcuts = []
-    bot.speak_in_channel = lambda ch, t: spoke.append(t) or asyncio.sleep(0)
+    # Registered with the REGISTRY, not just patched onto bot. Voice speech now
+    # reaches the speaker through capabilities.run, so stubbing bot.speak_in_channel
+    # alone would leave this measuring a function nothing calls - the same shape of
+    # mistake the whole policy refactor exists to prevent.
+    async def _record_speech(ch, t):
+        spoke.append(t)
+    bot.speak_in_channel = _record_speech
+    capabilities.set_voice_speaker(_record_speech)
     bot.stop_listening = lambda g: shortcuts.append("stop") or asyncio.sleep(0)
     bot.reset_overrides = lambda: shortcuts.append("persona_reset") or True
     brain_calls = []
     bot.brain.respond = lambda conv: (brain_calls.append(conv) or ("hi", None))
     vc = _Channel(777, "voice")
+    vc.guild = testing
+    bot.client.channels[777] = vc
 
     await bot.handle_auto_reply(testing, vc, "stranger", STRANGER, "benham what's up")
     check("stranger got no spoken reply", len(spoke), 0)
@@ -224,6 +248,21 @@ async def main():
     await bot.handle_auto_reply(testing, vc, "caz6666", TYLER,
                                 "benham what do you make of this modpack")
     check("Tyler's real question DID reach the brain", len(brain_calls), 1)
+
+    print("\nVoice: speech itself now passes the chokepoint")
+    # OWNER_VOICE was a declared origin with no production caller until now: voice
+    # was the one outward action that never reached policy. Its owner gate was
+    # sound, but it was sound because handle_auto_reply remembered to check - the
+    # arrangement this refactor exists to eliminate.
+    spoke.clear()
+    await bot.say(vc, "hello from Tyler", TYLER)
+    check("Tyler's speech reaches the speaker", len(spoke), 1)
+    spoke.clear()
+    await bot.say(vc, "hello from a stranger", STRANGER)
+    check("a stranger's speech is refused by policy itself", len(spoke), 0)
+    check("speak_in_voice is a registered capability",
+          "speak_in_voice" in capabilities.REGISTRY, True)
+    check("...and is marked outward", capabilities.REGISTRY["speak_in_voice"].outward, True)
 
     print("\nVoice: the continuous-conversation window is keyed on user id")
     bot._convo_until.clear(); bot._convo_speaker.clear()
