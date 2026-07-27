@@ -177,6 +177,50 @@ async def main():
                                   guild=testing))
     check("un-addressed owner message ignored too", len(agent_calls), 0)
 
+    print("\nVoice: a stranger says the wake word")
+    reset()
+    spoke = []
+    shortcuts = []
+    bot.speak_in_channel = lambda ch, t: spoke.append(t) or asyncio.sleep(0)
+    bot.stop_listening = lambda g: shortcuts.append("stop") or asyncio.sleep(0)
+    bot.reset_overrides = lambda: shortcuts.append("persona_reset") or True
+    brain_calls = []
+    bot.brain.respond = lambda conv: (brain_calls.append(conv) or ("hi", None))
+    vc = _Channel(777, "voice")
+
+    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER, "benham what's up")
+    check("stranger got no spoken reply", len(spoke), 0)
+    check("stranger did not reach the brain", len(brain_calls), 0)
+
+    # The local shortcuts are free of API cost but not free of consequence, so the
+    # gate has to sit above them too - not merely above the API call.
+    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER, "benham go to sleep")
+    check("stranger cannot disconnect Benham", "stop" in shortcuts, False)
+    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER,
+                                "benham reset your personality")
+    check("stranger cannot reset the personality", "persona_reset" in shortcuts, False)
+
+    print("\nVoice: Tyler says the wake word")
+    reset()
+    spoke.clear(); brain_calls.clear()
+    # A shortcut phrase answers locally and never calls the API - that is the point
+    # of the shortcuts, so assert the free path stays free.
+    await bot.handle_auto_reply(testing, vc, "caz6666", TYLER, "benham you there")
+    check("Tyler gets a local reply", len(spoke) >= 1, True)
+    check("...with no API call", len(brain_calls), 0)
+
+    spoke.clear(); brain_calls.clear()
+    await bot.handle_auto_reply(testing, vc, "caz6666", TYLER,
+                                "benham what do you make of this modpack")
+    check("Tyler's real question DID reach the brain", len(brain_calls), 1)
+
+    print("\nVoice: the continuous-conversation window is keyed on user id")
+    bot._convo_until.clear(); bot._convo_speaker.clear()
+    bot._open_convo(TESTING, TYLER)
+    check("Tyler's window is open", bot.convo_active(TESTING, TYLER), True)
+    check("a stranger cannot ride Tyler's open window",
+          bot.convo_active(TESTING, STRANGER), False)
+
     print("\nWhat a stranger could reach IF the gate were bypassed")
     tiers = {}
     for name, act in capabilities.REGISTRY.items():

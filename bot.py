@@ -617,24 +617,52 @@ def local_shortcut(text):
     return None
 
 
-def _open_convo(gid, speaker):
-    """(Re)open the continuous-conversation window for this speaker."""
+def _open_convo(gid, speaker_id):
+    """(Re)open the continuous-conversation window for this speaker.
+
+    Keyed on the Discord user id, not the display name. A display name is
+    self-chosen and changeable by anyone, so keying a "no wake word needed" window
+    on it meant another member could rename themselves to match and inherit an open
+    window. The owner check below makes that moot, but an id is the correct key
+    regardless.
+    """
     if CONVO_WINDOW_SEC > 0:
         _convo_until[gid] = time.monotonic() + CONVO_WINDOW_SEC
-        _convo_speaker[gid] = speaker
+        _convo_speaker[gid] = speaker_id
 
 
-def convo_active(gid, speaker):
+def convo_active(gid, speaker_id):
     """True if a continuous conversation is open for this speaker (so no wake word needed)."""
     return (
         CONVO_WINDOW_SEC > 0
-        and _convo_speaker.get(gid) == speaker
+        and _convo_speaker.get(gid) == speaker_id
         and _convo_until.get(gid, 0.0) > time.monotonic()
     )
 
 
-async def handle_auto_reply(guild, voice_channel, speaker, text):
-    """Respond to a wake/continuation utterance (local shortcut or one API call)."""
+async def handle_auto_reply(guild, voice_channel, speaker, speaker_id, text):
+    """Respond to a wake/continuation utterance (local shortcut or one API call).
+
+    The owner check is the first statement in this function, deliberately and
+    unconditionally. Voice used to be the weak half of Benham: the text path
+    checked identity.is_owner in code, while voice relied on a line in
+    guardrails.md telling the model that only Tyler was trusted. A prompt is not a
+    gate - anyone who could join a voice channel was talking to the brain, and the
+    only thing between them and it was the model choosing to behave.
+
+    It sits above the dedup and the local shortcuts, not just above the API call,
+    because the shortcuts have real effects too: "go to sleep" disconnects Benham
+    and "reset your personality" rewrites his tuning. Those being free of API cost
+    never made them free of consequence.
+
+    Note what is NOT gated: transcription. Everything said in the channel still
+    reaches voice_transcript.jsonl, so Benham can still tell Tyler what the room
+    said. Same shape as the text side - hears everyone, answers one person.
+    """
+    if not identity.is_owner(speaker_id):
+        log(f"voice: ignoring wake from non-owner {speaker} ({speaker_id})")
+        return
+
     gid = guild.id
     if text == _last_wake_text.get(gid):
         return  # dedup Whisper repeats
@@ -652,12 +680,12 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
         if kind == "voice":
             changes, confirm = payload
             apply_voice_settings(changes)
-            _open_convo(gid, speaker)
+            _open_convo(gid, speaker_id)
             await speak_in_channel(voice_channel, confirm)
             return
         if kind == "persona_reset":
             cleared = reset_overrides()
-            _open_convo(gid, speaker)
+            _open_convo(gid, speaker_id)
             await speak_in_channel(
                 voice_channel,
                 "Okay, back to my usual self." if cleared
@@ -667,12 +695,12 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
         if kind == "voices_list":
             names = brain.voice_names()
             spoken = ", ".join(names[:-1]) + (", or " + names[-1] if len(names) > 1 else "")
-            _open_convo(gid, speaker)
+            _open_convo(gid, speaker_id)
             await speak_in_channel(
                 voice_channel, f"I can be {spoken}. Just say switch to one of them.")
             return
         if kind == "ping":
-            _open_convo(gid, speaker)
+            _open_convo(gid, speaker_id)
             await speak_in_channel(voice_channel, payload)
             return
 
@@ -690,7 +718,7 @@ async def handle_auto_reply(guild, voice_channel, speaker, text):
         conv.pop()  # don't keep a user turn we never answered
         return
     _last_reply_at[gid] = time.monotonic()
-    _open_convo(gid, speaker)  # keep the conversation open for follow-ups without the name
+    _open_convo(gid, speaker_id)  # keep the conversation open for follow-ups without the name
 
     changes = brain.parse_directive(reply)
     if changes:
@@ -739,10 +767,10 @@ async def flush_utterances():
                 continue  # autonomous replies only in allowlisted guilds (default: Testing only)
             # Engage if the name was said, OR a conversation is already open for this speaker
             # (continuous mode) and the utterance isn't obvious silence-hallucination noise.
-            engage = rec["contains_wake"] or (convo_active(gid, name) and not looks_like_noise(text))
+            engage = rec["contains_wake"] or (convo_active(gid, uid) and not looks_like_noise(text))
             if engage:
                 try:
-                    await handle_auto_reply(vc_channel.guild, vc_channel, name, text)
+                    await handle_auto_reply(vc_channel.guild, vc_channel, name, uid, text)
                 except Exception:  # noqa: BLE001
                     log("Auto-reply error:\n" + traceback.format_exc())
 
