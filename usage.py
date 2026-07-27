@@ -34,6 +34,9 @@ import sys
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Rotated-out captures live here; the live boot*.out stays in BASE_DIR while its
+# process holds the handle, so both directories have to be searched.
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
 # Per million tokens, list price. Cache reads are a tenth of input; cache writes
 # are 1.25x. Only used for the estimate, and only for the direct-API paths.
@@ -179,6 +182,15 @@ def bar(label, value, total, width=28):
     return f"  {label:<16} {'#' * fill}{'.' * (width - fill)} {value}"
 
 
+def log_candidates():
+    """Every bot capture worth scanning, live ones and archived ones alike."""
+    paths = []
+    for d in (BASE_DIR, LOGS_DIR):
+        paths += glob.glob(os.path.join(d, "*.out"))
+        paths += glob.glob(os.path.join(d, "bot*.log"))
+    return paths
+
+
 def main(argv):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -193,12 +205,9 @@ def main(argv):
     if args.log:
         paths = [args.log]
     elif args.all:
-        paths = sorted(glob.glob(os.path.join(BASE_DIR, "*.out"))
-                       + glob.glob(os.path.join(BASE_DIR, "bot*.log")))
+        paths = sorted(log_candidates())
     else:
-        cands = sorted(glob.glob(os.path.join(BASE_DIR, "*.out"))
-                       + glob.glob(os.path.join(BASE_DIR, "bot*.log")),
-                       key=os.path.getmtime)
+        cands = sorted(log_candidates(), key=os.path.getmtime)
         paths = [cands[-1]] if cands else []
     if not paths:
         print("No bot logs found.", file=sys.stderr)

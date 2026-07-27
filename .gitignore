@@ -27,6 +27,9 @@ stats.tsv
 # but the redirect targets do not always end in .log).
 *.out
 *.err
+# Rotated-out captures. The patterns above already match inside it; this is here so
+# the intent is obvious and nothing else in logs/ can sneak into a commit.
+logs/
 # Throwaway diagnostic output from debugging sessions.
 diag*.txt
 d[0-9].txt

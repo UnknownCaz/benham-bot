@@ -67,7 +67,10 @@ def auto_reply_flag():
 
 def newest_log_tail(patterns=("restart_run.log", "bot.log", "supervise.log"), keep=("Logged in as", "AUTO_REPLY", "Synced")):
     logs = [os.path.join(BASE_DIR, p) for p in patterns if os.path.exists(os.path.join(BASE_DIR, p))]
-    logs += [p for p in glob.glob(os.path.join(BASE_DIR, "*.log")) if p not in logs]
+    # logs/ holds the rotated-out captures; the live ones are still in BASE_DIR.
+    for d in (BASE_DIR, os.path.join(BASE_DIR, "logs")):
+        logs += [p for p in glob.glob(os.path.join(d, "*.log")) if p not in logs]
+    logs += [p for p in glob.glob(os.path.join(BASE_DIR, "boot*.out")) if p not in logs]
     if not logs:
         return None, []
     newest = max(logs, key=lambda p: os.path.getmtime(p))

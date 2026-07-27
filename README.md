@@ -324,9 +324,17 @@ Portal.
 | `agent_persona.md` | text-agent personality (editable) | yes |
 | `agent_memory.json` | per-conversation history | no (gitignored - private) |
 | `webhooks.json` | webhook URLs | no (gitignored) |
+| `logs/` | rotated-out `boot*.out/.err` and run logs | no (gitignored) |
 
 Friend-server reads and derived data (`read_full*`, `*.u8`, `*.tsv`) are gitignored so private chat
 is never committed.
+
+### Logs
+
+A boot writes `boot<N>.out` / `.err` in the repo root and keeps the handle open for the life of
+the process, so the live pair stays there; older pairs get moved into `logs/`. Both `usage.py` and
+`status.py` search the root and `logs/`, so archiving a capture never hides it from a report -
+`usage.py --all` still sees the full history. Pruning `logs/` is what actually discards it.
 
 ### Privileged intents
 
