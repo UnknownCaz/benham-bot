@@ -235,8 +235,49 @@ transcription still run everywhere; only the self-answering path is gated.
 
 ## Safety model
 
-- **One owner.** `identity.is_owner()` gates every entry point - DM, mention, outbox, slash
-  command. No guild-admin inheritance, no operator role. Non-owners can converse; they cannot direct.
+Every capability decision is made in one place: `policy.py`. A capability declares what it
+requires, one function decides, and every entry point must state where the request came from.
+
+This exists because of a specific bug. `identity.agent_allowed()` encoded "the owner cannot drive
+the agent from Chillbar", was asserted by a passing test, and was **dead code** - `bot.on_message`
+re-implemented a subset inline and left the guild check out. The test was green while the live
+code did the opposite. A gate that is written but not wired is indistinguishable, from the suite,
+from a gate that works. So the design goal is narrow: make that shape impossible.
+
+**Origins.** Where a request arrived from, not who sent it - the same person carries different
+assurance by channel. `OWNER_DM`, `OWNER_GUILD`, `OWNER_VOICE`, `LOCAL_CLI`, `SYSTEM`. A call with
+no context, or an unrecognised origin, is **denied** - so threading a new call site wrong fails
+loudly instead of permitting silently. `SYSTEM` is opt-in per capability, so an automated caller
+reaches only what named it (today: `set_presence`).
+
+**Two phases.** `authorize()` answers the caller rules with no network access at all; a refusal
+never resolves a channel and never reports anything about one. `authorize_target()` runs afterwards
+on the resolved target, because "may this touch that guild" is not answerable until the parameters
+are validated.
+
+| rule | phase | verdict |
+|---|---|---|
+| `context_present` | caller | deny - no context, no decision |
+| `owner` | caller | deny - human origins must be Tyler |
+| `origin_allowed` | caller | deny - the capability must permit this route |
+| `agent_guild` | caller | deny - guild mentions need `agent_guilds` |
+| `blocked_when_tainted` | caller | deny - `pc_task` after reading strangers' text |
+| `destructive_guild` | target | deny - tier 3 outside `destructive_guilds` |
+| `posting_scope` | target | deny - content outside `post_guilds` |
+| `always_confirm` | target | **confirm** - destructive + role changes |
+| `outward_tainted` | target | **confirm** - outward action in a tainted turn |
+
+Deny rules run before confirm rules, so a refused action never comes back asking to be approved.
+`force` (meaning "the confirmation already happened") deliberately does not exist in `policy.py` -
+policy says what a call needs; whether that need is met is the caller's bookkeeping.
+
+**`pc_task` is the tightest.** `origins={OWNER_DM, LOCAL_CLI}`, `blocked_when_tainted=True`. A real
+Claude Code session on the machine is reachable only from a direct DM or the local CLI, and not at
+all once the turn has read what other people wrote.
+
+- **One owner.** `identity.is_owner()` gates every entry point - DM, mention, voice, outbox - and
+  `rule_owner` says it again at the capability. No guild-admin inheritance, no operator role.
+  Non-owners can converse; they cannot direct.
 - **Guild allowlist for destruction.** `destructive_guilds` is a hand-edited list. Chillbar is
   structurally safe rather than safe-because-Claude-was-careful, and nothing said in chat can
   change that.
@@ -306,8 +347,30 @@ whole channel dumps along with it.
 ## Testing
 
 ```
-python test_control.py   # 47 offline checks: owner gate, allowlist, confirm matching, history shape
+python test_control.py      # gates, allowlists, confirm matching, agent history shape
+python test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
+python test_injection.py    # can text someone else wrote make Benham act?
+python test_policy.py       # every capability x every origin, plus the rule matrix
 ```
 
-Deliberately offline with a stub client - "does it refuse to purge Chillbar" is not a thing you
-want to verify by trying it in Chillbar.
+Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want
+to verify by trying it in Chillbar.
+
+Two of these exist because of mistakes worth not repeating. `test_owner_gate` drives the real
+handlers rather than the helper functions, because the original bug was a helper that passed while
+nothing called it. And `test_injection`'s watcher records **every** invocation, not just forced
+ones - an earlier version watched the wrong flag and reported a pass while the action it was
+guarding actually executed.
+
+## Outside the chokepoint
+
+Two things deliberately do not go through `policy.py`, and it is worth knowing which:
+
+- **`webhook.py`** posts via a saved webhook URL with no bot involved at all - no gateway, no
+  token, works while `bot.py` is stopped. It exists because Benham is only in Testing and Chillbar,
+  while the Isle of Berk changelog channel is in a server it was never invited to; `send_message`
+  physically cannot reach it. Nothing in the codebase calls it. The cost of leaving it out is a
+  hole in the audit trail: a webhook post writes no log line anywhere, so `bot.log` will not show
+  it. The agent cannot reach it either - only a `pc_task` shell command could, which needs a DM
+  origin, an untainted turn, and a per-command approval.
+- **The exaroton watchdog** posts crash alerts straight through `channel.send`.
