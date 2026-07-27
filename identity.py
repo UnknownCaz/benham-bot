@@ -101,25 +101,6 @@ def destructive_allowed(guild_id):
         return False
 
 
-def agent_allowed(guild_id, user_id, is_dm):
-    """Whether the autonomous agent may engage with this message.
-
-    An owner DM always qualifies: that channel is private to the two of us and is
-    the primary way Tyler reaches Claude when away from the PC. In a guild, both
-    conditions must hold - the guild is on the agent list AND the speaker is an
-    owner. Benham can read every channel it can see, but it only *answers to* one
-    person, so a mention from anyone else is recorded and ignored.
-    """
-    if not is_owner(user_id):
-        return False
-    if is_dm:
-        return True
-    try:
-        return int(guild_id) in AGENT_GUILDS
-    except (TypeError, ValueError):
-        return False
-
-
 def posting_allowed(guild_id, channel_id):
     """Whether Benham may post content into this channel at all.
 

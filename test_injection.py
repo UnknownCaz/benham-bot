@@ -30,6 +30,7 @@ import agent
 import capabilities
 import confirm
 import identity
+import policy
 
 TYLER = 273967061619965952
 TESTING = 736988645562646619
@@ -119,7 +120,8 @@ stub = _StubClient({TESTING_CHAN: TESTING, OUTSIDE_CHAN: OUTSIDE_GUILD})
 async def _err(name, params, force=False):
     try:
         await capabilities.run(stub, lambda *_: None, name, params,
-                               actor_id=TYLER, force=force)
+                               actor_id=TYLER, force=force,
+                               call_ctx=policy.CallContext.local(TYLER))
         return None
     except capabilities.ActionError as e:
         return str(e)
@@ -142,7 +144,8 @@ async def _async_checks():
     section("Role changes always take the confirm round-trip")
     res, preview = await capabilities.run(
         stub, lambda *_: None, "create_role",
-        {"guild_id": TESTING, "name": "Admin"}, actor_id=TYLER, force=False)
+        {"guild_id": TESTING, "name": "Admin"}, actor_id=TYLER, force=False,
+        call_ctx=policy.CallContext.local(TYLER))
     check("create_role returns a preview, not a result", res, None)
     check("preview describes it", "Admin" in (preview or {}).get("summary", ""), True)
 
@@ -216,9 +219,19 @@ class _FakeAnthropic:
 
 
 class _PoisonedChannel:
-    """A channel whose history contains the attack payload."""
+    """A channel whose history contains the attack payload.
+
+    send() records rather than raising, on purpose: the first version of this stub
+    had no send() at all, so an unwanted send would have died on AttributeError and
+    been reported as a caught error instead of as the security failure it was.
+    """
     id = TESTING_CHAN
     guild = _StubGuild(TESTING)
+    sent = []
+
+    async def send(self, content=None, **kw):
+        _PoisonedChannel.sent.append(content)
+        return _Block(id=999, jump_url="x")
 
     def __str__(self):
         return "asd"
@@ -257,11 +270,17 @@ async def _end_to_end():
     posted = []
     real_run = capabilities.run
 
-    async def watched_run(client, log, name, params, actor_id=None, dry_run=False, force=False):
-        if name == "send_message" and force:
-            posted.append(params)      # only reached if the gate let it through
-        return await real_run(client, log, name, params,
-                              actor_id=actor_id, dry_run=dry_run, force=force)
+    async def watched_run(client, log, name, params, actor_id=None, dry_run=False,
+                          force=False, call_ctx=None):
+        # Record EVERY invocation, not just force=True ones. The original version
+        # of this watcher only counted force=True and therefore passed while the
+        # gate was executing the send with force=False - the exact bug it existed
+        # to catch. A test that watches the wrong flag is worse than no test,
+        # because it is reported as coverage.
+        if name == "send_message":
+            posted.append({"force": force, **params})
+        return await real_run(client, log, name, params, actor_id=actor_id,
+                              dry_run=dry_run, force=force, call_ctx=call_ctx)
 
     capabilities.run = watched_run
     try:
@@ -269,12 +288,14 @@ async def _end_to_end():
             _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
             "what's been said in #asd lately?",
             actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
-            guild_id=TESTING, where="a DM", conversation_key="test:injection")
+            guild_id=TESTING, where="a DM", conversation_key="test:injection",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
     finally:
         capabilities.run = real_run
         agent._client = None
 
-    check("the poisoned post was NOT sent", len(posted), 0)
+    check("send_message was never invoked at all", len(posted), 0)
+    check("...and the poisoned channel never received a send", len(_PoisonedChannel.sent), 0)
     check("it was parked for Tyler instead", parked is not None, True)
     if parked:
         check("the parked action is the send", parked.action, "send_message")

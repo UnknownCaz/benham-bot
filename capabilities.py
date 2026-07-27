@@ -27,6 +27,7 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 import identity
+import policy
 
 REGISTRY = {}
 
@@ -54,7 +55,8 @@ class Action:
     """
 
     def __init__(self, name, tier, summary, params, handler, needs_guild,
-                 outward=False, taints=False, always_confirm=False, posts=False):
+                 outward=False, taints=False, always_confirm=False, posts=False,
+                 origins=None, blocked_when_tainted=False):
         self.name = name
         self.tier = tier
         self.summary = summary
@@ -65,6 +67,10 @@ class Action:
         self.taints = taints
         self.always_confirm = always_confirm
         self.posts = posts          # writes content into a channel -> allowlist applies
+        # None means policy.DEFAULT_ORIGINS. Declared as a set of policy.Origin
+        # values when a capability should not be reachable from every direction.
+        self.origins = frozenset(origins) if origins is not None else None
+        self.blocked_when_tainted = blocked_when_tainted
 
     @property
     def destructive(self):
@@ -83,12 +89,15 @@ class Action:
 
 
 def action(name, tier, summary, params=None, needs_guild=False,
-           outward=False, taints=False, always_confirm=False, posts=False):
+           outward=False, taints=False, always_confirm=False, posts=False,
+           origins=None, blocked_when_tainted=False):
     """Register one capability."""
     def deco(fn):
         REGISTRY[name] = Action(name, tier, summary, params, fn, needs_guild,
                                 outward=outward, taints=taints,
-                                always_confirm=always_confirm, posts=posts)
+                                always_confirm=always_confirm, posts=posts,
+                                origins=origins,
+                                blocked_when_tainted=blocked_when_tainted)
         return fn
     return deco
 
@@ -621,7 +630,7 @@ async def _archive_thread(ctx, p):
          "user_id": {"type": "int", "required": True},
          "role_id": {"type": "int", "required": True},
          "reason": {"type": "str"}}, needs_guild=True,
-        outward=True, always_confirm=True)
+        outward=True, always_confirm=True, taints=True)
 async def _add_role(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     role = m.guild.get_role(int(p["role_id"]))
@@ -651,7 +660,7 @@ async def _add_role(ctx, p):
          "user_id": {"type": "int", "required": True},
          "role_id": {"type": "int", "required": True},
          "reason": {"type": "str"}}, needs_guild=True,
-        outward=True, always_confirm=True)
+        outward=True, always_confirm=True, taints=True)
 async def _remove_role(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     role = m.guild.get_role(int(p["role_id"]))
@@ -690,7 +699,7 @@ async def _create_role(ctx, p):
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True},
          "nickname": {"type": "str"}}, needs_guild=True,
-        outward=True)
+        outward=True, taints=True)
 async def _set_nickname(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     old = m.nick
@@ -704,7 +713,7 @@ async def _set_nickname(ctx, p):
          "user_id": {"type": "int", "required": True},
          "minutes": {"type": "int", "required": True, "desc": "0 lifts the timeout; max 40320 (28d)"},
          "reason": {"type": "str"}}, needs_guild=True,
-        outward=True)
+        outward=True, taints=True)
 async def _timeout_member(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     mins = int(p["minutes"])
@@ -738,7 +747,7 @@ async def _create_channel(ctx, p):
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str"}, "topic": {"type": "str"},
          "slowmode_seconds": {"type": "int", "desc": "0-21600"},
-         "category_id": {"type": "int"}, "nsfw": {"type": "bool"}})
+         "category_id": {"type": "int"}, "nsfw": {"type": "bool"}}, taints=True)
 async def _edit_channel(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     before = channel_dict(ch)
@@ -777,7 +786,7 @@ async def _create_invite(ctx, p):
 @action("unban_member", identity.MANAGE, "Lift a ban (restorative, so not tier 3).",
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True}}, needs_guild=True,
-        outward=True)
+        outward=True, taints=True)
 async def _unban_member(ctx, p):
     g = ctx.guild(p["guild_id"])
     u = await ctx.user(p["user_id"])
@@ -791,7 +800,9 @@ async def _unban_member(ctx, p):
 @action("set_presence", identity.MANAGE, "Set Benham's status and activity.",
         {"status": {"type": "str", "desc": "online | idle | dnd | invisible"},
          "activity_type": {"type": "str", "desc": "playing | listening | watching | competing | none"},
-         "activity_name": {"type": "str"}})
+         "activity_name": {"type": "str"}},
+        # Applied on login by on_ready, which has no human behind it.
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM})
 async def _set_presence(ctx, p):
     status = {"online": discord.Status.online, "idle": discord.Status.idle,
               "dnd": discord.Status.dnd, "invisible": discord.Status.invisible
@@ -813,7 +824,7 @@ async def _set_presence(ctx, p):
 
 @action("set_bot_nickname", identity.MANAGE, "Change Benham's own nickname in a server.",
         {"guild_id": {"type": "int", "required": True},
-         "nickname": {"type": "str", "desc": "Blank resets to 'Benham'"}}, needs_guild=True)
+         "nickname": {"type": "str", "desc": "Blank resets to 'Benham'"}}, needs_guild=True, taints=True)
 async def _set_bot_nickname(ctx, p):
     g = ctx.guild(p["guild_id"])
     old = g.me.nick
@@ -843,7 +854,16 @@ async def _create_webhook(ctx, p):
         "this to take a while and do not retry if he says no.",
         {"task": {"type": "str", "required": True,
                   "desc": "What to do, in plain language, with enough context to act alone"}},
-        taints=True)
+        taints=True,
+        # The most consequential capability here, and the only one restricted by
+        # where the request arrived from. A DM is a private two-party channel; a
+        # guild mention happens in a room strangers can write in, and a voice
+        # channel is whoever is sitting in it. LOCAL_CLI is included because writing
+        # into outbox/ already requires having the machine, so denying it would cost
+        # capability without closing anything.
+        origins={policy.Origin.OWNER_DM, policy.Origin.LOCAL_CLI},
+        # And not even from a DM once the turn has read what strangers wrote.
+        blocked_when_tainted=True)
 async def _pc_task(ctx, p):
     # Imported lazily: the SDK pulls in a large dependency tree and spawns the
     # Claude Code CLI, and neither should be a cost paid by a bot that never
@@ -1082,7 +1102,8 @@ async def _infer_guild(ctx, params):
     return None
 
 
-async def run(client, log, name, params, actor_id=None, dry_run=False, force=False):
+async def run(client, log, name, params, actor_id=None, dry_run=False, force=False,
+              call_ctx=None):
     """Execute one action by name. The single chokepoint every caller goes through.
 
     Returns (result_dict, pending_preview_or_None). When a destructive action is
@@ -1095,6 +1116,16 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
     act = REGISTRY.get(name)
     if act is None:
         raise ActionError(f"unknown action {name!r}. Known: {', '.join(sorted(REGISTRY))}")
+
+    # policy.authorize is consulted BEFORE the parameters are even validated. A
+    # capability this route may not reach should not report which arguments it
+    # would have wanted - and more practically, an origin refusal is not something
+    # a caller should be able to probe for shape by sending malformed input.
+    decision = policy.authorize(act, call_ctx)
+    if decision.denied:
+        log(f"DENIED {name} by {actor_id or 'code-session'} "
+            f"[rule={decision.rule}, origin={getattr(call_ctx, 'origin', None)}]")
+        raise ActionError(decision.reason)
 
     clean = validate(act, params or {})
     ctx = Ctx(client, log, dry_run=False, actor_id=actor_id)
@@ -1148,6 +1179,36 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
                 if k not in set(result.get("_sensitive", [])) and k != "_sensitive"}
     log(f"action {name} by {actor_id or 'code-session'}: {loggable}")
     return result, None
+
+
+def describe_call(name, params):
+    """Summarise a call WITHOUT running it. Used to park a confirmation.
+
+    This exists because of a real bug. The taint gate used to build its preview by
+    calling run(force=False) and assuming that meant "dry run" - but run() only
+    dry-runs when the action needs confirmation, and the taint branch fires
+    precisely on actions that do NOT. So the call fell through to the handler, the
+    message was actually sent, and the model was then told "NOT EXECUTED" and asked
+    to get Tyler's approval to do the thing it had already done. Confirming fired
+    it a second time.
+
+    Calling a handler with dry_run=True would not have fixed it either: only tier-3
+    and always-confirm handlers check that flag, and send_message ignores it. The
+    only safe way to describe an arbitrary action is to not invoke it at all.
+    """
+    act = REGISTRY.get(name)
+    if act is None:
+        return {"summary": f"unknown action `{name}`"}
+    bits = []
+    for key in ("channel_id", "user_id", "guild_id", "message_id", "role_id"):
+        if params.get(key):
+            bits.append(f"{key}={params[key]}")
+    body = params.get("content") or params.get("task") or params.get("nickname") or ""
+    detail = f"> {str(body)[:400]}" if body else ""
+    return {
+        "summary": f"`{name}`" + (f" ({', '.join(bits)})" if bits else ""),
+        "detail": detail,
+    }
 
 
 def catalog(min_tier=None, max_tier=None):
