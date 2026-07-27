@@ -314,14 +314,9 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             # same. This branch used to decide the taint question itself, and got it
             # wrong in a way that executed the action it was describing.
 
-            # Set BEFORE the call, not after a successful one. An ActionError
-            # message routinely quotes third-party strings back ("no channel named
-            # <topic>", "user <nickname> is not a member"), and that text reaches
-            # the model as a tool_result exactly like a success would. Taint set
-            # only on the success path meant a failed read laundered attacker text
-            # into an untainted turn.
-            if act is not None and act.taints:
-                tainted = True
+            # `tainted` here is the state BEFORE this call - what earlier calls in
+            # this turn have already pulled into context. It is updated in the
+            # finally block below, after this call, for the reason documented there.
             try:
                 result, preview = await capabilities.run(
                     client, log, call.name, params, actor_id=actor_id, force=False,
@@ -360,6 +355,23 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                 results.append({"type": "tool_result", "tool_use_id": call.id,
                                 "content": f"FAILED: {type(e).__name__}: {e}",
                                 "is_error": True})
+            finally:
+                # AFTER the call, and on every path including failure.
+                #
+                # After, because an action's own output taints what comes NEXT, not
+                # itself. Setting it first looked equivalent and was not: pc_task
+                # both taints (it returns file contents) and is blocked when tainted,
+                # so it poisoned its own context and was denied by its own rule. It
+                # could never run through the agent at all. Found by Tyler on the
+                # first real test, having passed every suite - because the tests
+                # exercised the rules, and this was the order they were applied in.
+                #
+                # On every path, because an ActionError quotes third-party strings
+                # back ("no channel named <topic>") and reaches the model exactly as
+                # a success would; taint only on success laundered attacker text
+                # into an untainted turn.
+                if act is not None and act.taints:
+                    tainted = True
 
         turns.append({"role": "user", "content": results})
 
