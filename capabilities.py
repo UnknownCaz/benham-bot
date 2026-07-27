@@ -109,11 +109,16 @@ def action(name, tier, summary, params=None, needs_guild=False,
 class Ctx:
     """What a handler is given: the client, a logger, and the dry-run flag."""
 
-    def __init__(self, client, log, dry_run=False, actor_id=None):
+    def __init__(self, client, log, dry_run=False, actor_id=None, on_progress=None):
         self.client = client
         self.log = log
         self.dry_run = dry_run
         self.actor_id = actor_id
+        # Optional live-progress sink, async fn(kind, detail). Carried on the
+        # context rather than passed as a parameter: it is a callable, so it could
+        # not be declared in the tool schema, and validate() rightly refuses
+        # anything undeclared.
+        self.on_progress = on_progress
 
     async def channel(self, cid):
         """Resolve a channel id, falling back to an API fetch for uncached ones."""
@@ -908,8 +913,10 @@ async def _pc_task(ctx, p):
     # is the wrong half of the timeline to be able to see. watch_pc.py gives the
     # detailed live view; this is the coarse one that lands in bot.log next to
     # everything else.
-    async def _progress(tool_name):
-        ctx.log(f"  pc_task ... {tool_name}")
+    async def _progress(kind, detail):
+        ctx.log(f"  pc_task ... {detail if kind == 'tool' else '(thinking)'}")
+        if ctx.on_progress:
+            await ctx.on_progress(kind, detail)
 
     result = await codesession.run_task(str(p["task"]), on_progress=_progress)
     return {"status": "completed", "task": str(p["task"])[:200], "result": result}
@@ -1143,7 +1150,7 @@ async def _infer_guild(ctx, params):
 
 
 async def run(client, log, name, params, actor_id=None, dry_run=False, force=False,
-              call_ctx=None):
+              call_ctx=None, on_progress=None):
     """Execute one action by name. The single chokepoint every caller goes through.
 
     Returns (result_dict, pending_preview_or_None). When a destructive action is
@@ -1168,7 +1175,7 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         raise ActionError(decision.reason)
 
     clean = validate(act, params or {})
-    ctx = Ctx(client, log, dry_run=False, actor_id=actor_id)
+    ctx = Ctx(client, log, dry_run=False, actor_id=actor_id, on_progress=on_progress)
 
     gid = None
     if act.destructive or act.posts or act.needs_confirm:

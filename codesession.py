@@ -120,6 +120,22 @@ def _describe(tool_name, tool_input):
     return f"use **{tool_name}**" + (f" ({detail})" if detail else "")
 
 
+def _progress_label(block):
+    """A short 'Bash: ls -la' style label for a live feed.
+
+    Deliberately terser than _describe(), which exists to get an approval decision
+    right and therefore shows the whole command. This is glanceable status on a
+    phone; the full text still goes to the approval prompt when one is needed.
+    """
+    inp = getattr(block, "input", None) or {}
+    detail = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
+              or inp.get("description") or inp.get("task") or "")
+    detail = " ".join(str(detail).split())
+    if len(detail) > 60:
+        detail = detail[:57] + "..."
+    return f"{block.name}: {detail}" if detail else block.name
+
+
 def answer(request_id, approved):
     """Resolve a pending permission request. Called from bot.py's message handler.
 
@@ -313,10 +329,16 @@ async def run_task(prompt, on_progress=None):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         parts.append(block.text.strip())
+                        # The session's own narration between steps. Reported as
+                        # progress too, because "what is it thinking" is most of
+                        # what makes a long task bearable to wait through - the
+                        # tool names alone read as activity without reason.
+                        if on_progress:
+                            await on_progress("text", block.text.strip())
                     elif isinstance(block, ToolUseBlock):
                         tools_used.append(block.name)
                         if on_progress:
-                            await on_progress(block.name)
+                            await on_progress("tool", _progress_label(block))
             elif isinstance(msg, ResultMessage):
                 if getattr(msg, "is_error", False):
                     parts.append(f"(the session ended with an error: "
