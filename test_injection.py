@@ -294,13 +294,20 @@ async def _end_to_end():
         capabilities.run = real_run
         agent._client = None
 
-    check("send_message was never invoked at all", len(posted), 0)
-    check("...and the poisoned channel never received a send", len(_PoisonedChannel.sent), 0)
+    # run() IS reached now - policy decides there, and returns a preview with
+    # nothing done. The property under test was never "run went uncalled"; it is
+    # that no message left the building.
+    check("the poisoned channel never received a send", len(_PoisonedChannel.sent), 0)
+    check("nothing was invoked with force (which would mean it executed)",
+          [p for p in posted if p.get("force")], [])
     check("it was parked for Tyler instead", parked is not None, True)
     if parked:
         check("the parked action is the send", parked.action, "send_message")
-        check("the prompt explains why it is asking",
-              "read messages other people wrote" in parked.preview.get("summary", ""), True)
+        check("the parked preview records why it is asking",
+              "already read content other people wrote" in parked.preview.get("reason", ""),
+              True)
+        check("and Tyler's prompt actually shows that reason",
+              "already read content other people wrote" in confirm.describe(parked), True)
     check("Tyler still got a reply", bool(reply), True)
 
 

@@ -1144,15 +1144,31 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
             f"[rule={target_decision.rule}, guild={gid}]")
         raise ActionError(target_decision.reason)
 
-    if act.needs_confirm and not force:
-        ctx.dry_run = True
-        preview = await act.handler(ctx, clean)
+    # `force` means the confirmation already happened, so it is checked here and
+    # deliberately not inside policy - policy states what a call needs, this decides
+    # whether that need has been met. Keeping them apart is what stops "he already
+    # asked for it" from quietly becoming "so it no longer needs checking".
+    if target_decision.needs_confirm and not force:
+        if act.needs_confirm:
+            # Destructive and role actions implement a real dry_run branch that
+            # gathers facts - counts, date spans, who holds the role - without
+            # touching anything.
+            ctx.dry_run = True
+            preview = await act.handler(ctx, clean)
+        else:
+            # A taint-induced confirmation. The handler must NOT be called: only
+            # tier-3 handlers honour dry_run, and send_message ignores it and sends.
+            # That exact assumption is what made the first version of this defence
+            # execute the action it claimed to be previewing.
+            preview = describe_call(name, clean)
+        preview = dict(preview)
+        preview.setdefault("reason", target_decision.reason)
         # Log the PROPOSAL, not just the execution. Without this the audit trail
         # records only what was destroyed, so a preview that was declined, ignored,
         # or left to expire leaves no trace at all - and "what did it try to do"
         # is exactly the question worth being able to answer after the fact.
         log(f"PROPOSED {name} by {actor_id or 'code-session'} "
-            f"(guild {gid}): {preview.get('summary', '?')}")
+            f"(guild {gid}) [rule={target_decision.rule}]: {preview.get('summary', '?')}")
         return None, preview
 
     try:

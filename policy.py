@@ -342,6 +342,53 @@ def rule_posting_scope(action, ctx):
                  "confirmation unlocks.")
 
 
+def _confirm(rule, reason):
+    return Decision(Decision.CONFIRM, reason, rule)
+
+
+def rule_always_confirm(action, ctx):
+    """Destructive actions, and role changes, need an explicit yes every time.
+
+    Stage 5. Returns CONFIRM rather than DENY: the caller is expected to produce a
+    preview and park it, and a later call with force=True - meaning the
+    confirmation already happened - skips this. `force` deliberately does not exist
+    in this file. Policy says what a call needs; whether that need has already been
+    met is the caller's bookkeeping, and mixing the two is how "already asked for
+    it" turns into "no longer checked".
+    """
+    if action.needs_confirm:
+        return _confirm("always_confirm",
+                        f"`{action.name}` needs an explicit confirmation.")
+    return None
+
+
+def rule_outward_tainted(action, ctx):
+    """An outward action stops being free once the turn has read stranger-written text.
+
+    Stage 5, and the rule worth re-deriving rather than relocating - the version of
+    this that lived in agent.py did not work. It built its preview by calling
+    run(force=False) on the assumption that meant "dry run", but run() only
+    dry-runs actions that need confirmation and this rule fires precisely on the
+    ones that do not. So the message was really sent, the model was told "NOT
+    EXECUTED", and confirming sent it twice.
+
+    Stating it here fixes the shape as well as the bug: policy returns CONFIRM, and
+    the single place that honours CONFIRM knows that a taint-induced one must never
+    invoke the handler to describe itself, because only tier-3 handlers implement
+    dry_run at all.
+
+    The value of the rule is that it does not require the model to be un-foolable.
+    Reading downgrades Benham's own authority, so the most a crafted message
+    achieves is an action Tyler is shown and must approve.
+    """
+    if action.outward and ctx.tainted:
+        return _confirm("outward_tainted",
+                        f"`{action.name}` is outward and I have already read content "
+                        "other people wrote in this conversation, so it needs your "
+                        "approval.")
+    return None
+
+
 # Caller rules: everything decidable from who is asking and how they reached us.
 # Order matters - context validity, then whether this route may reach this
 # capability at all, then conditions that depend on the state of the turn.
@@ -356,9 +403,14 @@ RULES = (
 # Target rules: everything that depends on what the call points AT. Evaluated in a
 # second phase because resolving the target needs validated parameters and an async
 # channel lookup, neither of which should have to happen before an origin refusal.
+# Deny rules first, then confirm rules. The order is load-bearing: first non-None
+# wins, so an action that is refused outright never comes back asking to be
+# confirmed - which would invite answering yes to something that was never on offer.
 TARGET_RULES = (
     rule_destructive_guild,
     rule_posting_scope,
+    rule_always_confirm,
+    rule_outward_tainted,
 )
 
 

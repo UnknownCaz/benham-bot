@@ -178,13 +178,21 @@ def read_reply(text):
 def describe(p):
     """Render a pending action as the confirmation prompt Tyler sees."""
     lines = [
-        f"**Confirm required** - `{p.action}` (destructive, no undo)",
+        f"**Confirm required** - `{p.action}`",
         "",
         p.preview.get("summary", "(no preview available)"),
     ]
     detail = p.preview.get("detail")
     if detail:
         lines += ["", detail]
+    # Why it is being asked, in policy's own words. Confirmations now arise for two
+    # different reasons - the action is destructive, or the turn is tainted - and
+    # they call for different judgement from Tyler. A prompt that does not say
+    # which is asking him to approve something without telling him what kind of
+    # decision he is making.
+    reason = p.preview.get("reason")
+    if reason:
+        lines += ["", f"_{reason}_"]
     lines += [
         "",
         f"Reply **yes** to run it, or **no** to cancel. Token `{p.token}`, "
