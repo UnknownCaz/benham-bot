@@ -1134,13 +1134,15 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
     if act.destructive or act.posts or act.needs_confirm:
         gid = await _infer_guild(ctx, clean)
 
-    if act.destructive and not identity.destructive_allowed(gid):
-        gname = "a DM" if gid is None else f"guild {gid}"
-        raise ActionError(
-            f"`{name}` is destructive and {gname} is not on the destructive_guilds "
-            "allowlist in control.json. No confirmation can override this - the "
-            "allowlist is edited by hand, on purpose."
-        )
+    # Second authorization phase: the rules that depend on what this call points at
+    # rather than on who is asking. Resolving that needs validated parameters and a
+    # channel lookup, which is why it cannot happen alongside the caller rules.
+    target_decision = policy.authorize_target(
+        act, (call_ctx or policy.CallContext.system()).for_target(gid, clean.get("channel_id")))
+    if target_decision.denied:
+        log(f"DENIED {name} by {actor_id or 'code-session'} "
+            f"[rule={target_decision.rule}, guild={gid}]")
+        raise ActionError(target_decision.reason)
 
     # Posting scope cap. Arithmetic rather than judgement: it does not matter who
     # asked or why, Benham cannot put content into a channel outside this list. The

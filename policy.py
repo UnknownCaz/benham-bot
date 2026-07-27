@@ -117,6 +117,20 @@ class CallContext:
     def system(cls, guild_id=None):
         return cls(Origin.SYSTEM, guild_id=guild_id)
 
+    def for_target(self, guild_id, channel_id=None):
+        """A copy naming the guild/channel this call actually targets.
+
+        The caller's own guild and the call's target are not the same thing and it
+        matters here: Tyler DMs Benham (ctx.guild_id is None) and asks it to purge a
+        channel in Testing. The rule that decides that is about Testing, not about
+        the DM. Resolving the target needs an async channel lookup and validated
+        parameters, which is why the target rules run in a second phase rather than
+        alongside the caller rules.
+        """
+        return CallContext(self.origin, self.actor_id, guild_id,
+                           channel_id if channel_id is not None else self.channel_id,
+                           self.tainted)
+
     def with_taint(self, tainted=True):
         """A copy with the taint flag set. Contexts are treated as immutable so a
         nested call cannot quietly clear a taint its caller had set."""
@@ -274,14 +288,50 @@ def rule_blocked_when_tainted(action, ctx):
     return None
 
 
-# Order matters: context validity, then whether this route may reach this capability
-# at all, then the conditions that depend on the state of the turn.
+def rule_destructive_guild(action, ctx):
+    """Tier-3 actions run only in guilds on the destructive allowlist.
+
+    Stage 3. Moved out of capabilities.run unchanged in behaviour: the same
+    identity.destructive_allowed() predicate, the same hand-edited config, the same
+    refusal that no confirmation can unlock. What changes is that it is now stated
+    next to the other rules instead of buried in the middle of the execution path,
+    where it was reachable only by reading run() top to bottom.
+
+    A target rule, not a caller rule - it depends on which guild the action points
+    at, which is not known until the parameters are validated and the channel is
+    resolved. ctx here is the target context from CallContext.for_target.
+
+    Still evaluated before any dry-run, so a destructive action aimed at a guild it
+    may not touch never reports that guild's contents. Naming what is inside a
+    channel you are not allowed to touch is itself a small leak.
+    """
+    if not action.destructive:
+        return None
+    if identity.destructive_allowed(ctx.guild_id):
+        return None
+    where = "a DM" if ctx.guild_id is None else f"guild {ctx.guild_id}"
+    return _deny("destructive_guild",
+                 f"`{action.name}` is destructive and {where} is not on the "
+                 "destructive_guilds allowlist in control.json. No confirmation can "
+                 "override this - the allowlist is edited by hand, on purpose.")
+
+
+# Caller rules: everything decidable from who is asking and how they reached us.
+# Order matters - context validity, then whether this route may reach this
+# capability at all, then conditions that depend on the state of the turn.
 RULES = (
     rule_context_present,
     rule_owner,
     rule_origin_allowed,
     rule_agent_guild,
     rule_blocked_when_tainted,
+)
+
+# Target rules: everything that depends on what the call points AT. Evaluated in a
+# second phase because resolving the target needs validated parameters and an async
+# channel lookup, neither of which should have to happen before an origin refusal.
+TARGET_RULES = (
+    rule_destructive_guild,
 )
 
 
@@ -325,6 +375,24 @@ def authorize(action, ctx):
     still live in capabilities.run and move here in later stages.
     """
     for rule in RULES:
+        verdict = rule(action, ctx)
+        if verdict is not None:
+            return verdict
+    return _ALLOW
+
+
+def authorize_target(action, ctx):
+    """Second phase: the rules that depend on what the call points at.
+
+    Run after parameter validation and target resolution. Split from authorize()
+    rather than merged because the caller rules must be answerable without touching
+    the network - an origin refusal should not require resolving a channel, and
+    should not report anything about one.
+    """
+    if ctx is None:
+        return _deny("target_context",
+                     f"`{action.name}` reached target checks without a context.")
+    for rule in TARGET_RULES:
         verdict = rule(action, ctx)
         if verdict is not None:
             return verdict

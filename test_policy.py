@@ -153,6 +153,39 @@ derived = base.with_taint(False)
 check("with_taint returns a new object", derived is base, False)
 check("the original keeps its taint", base.tainted, True)
 
+section("Stage 3 — the destructive guild allowlist, now a policy rule")
+purge = capabilities.REGISTRY["purge_messages"]
+send_a = capabilities.REGISTRY["send_message"]
+
+
+def target(guild_id, channel_id=999):
+    return CallContext.owner_dm(TYLER, 111).for_target(guild_id, channel_id)
+
+
+check("purge allowed in Testing",
+      policy.authorize_target(purge, target(TESTING)).allowed, True)
+check("purge refused in Chillbar",
+      policy.authorize_target(purge, target(CHILLBAR)).allowed, False)
+check("purge refused with no guild (a DM)",
+      policy.authorize_target(purge, target(None)).allowed, False)
+check("purge refused in an unknown guild",
+      policy.authorize_target(purge, target(4242)).allowed, False)
+check("the refusal names the rule",
+      policy.authorize_target(purge, target(CHILLBAR)).rule, "destructive_guild")
+check("the refusal says a confirmation cannot unlock it",
+      "No confirmation can override" in policy.authorize_target(purge, target(CHILLBAR)).reason,
+      True)
+check("non-destructive actions are unaffected in Chillbar",
+      policy.authorize_target(send_a, target(CHILLBAR)).allowed, True)
+check("a missing target context is refused",
+      policy.authorize_target(purge, None).allowed, False)
+
+# The caller phase must stay answerable without a resolved target - an origin
+# refusal should never require a channel lookup.
+check("caller phase still decides pc_task with no target resolved",
+      policy.authorize(capabilities.REGISTRY["pc_task"],
+                       CallContext.owner_guild(TYLER, TESTING)).allowed, False)
+
 section("Full matrix — every action against every origin")
 ORIGINS = [Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
            Origin.LOCAL_CLI, Origin.SYSTEM]
