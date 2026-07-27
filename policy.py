@@ -316,6 +316,32 @@ def rule_destructive_guild(action, ctx):
                  "override this - the allowlist is edited by hand, on purpose.")
 
 
+def rule_posting_scope(action, ctx):
+    """Content may only enter channels on the posting allowlist.
+
+    Stage 4. A target rule, and the bluntest one here: arithmetic rather than
+    judgement. It does not consult who asked, why, whether the turn is tainted, or
+    whether a confirmation was given. A refusal is not something a yes unlocks -
+    which is why it must also hold under force=True, where every confirmation path
+    ends up.
+
+    Its job is the case no amount of care inside the model covers: Benham is
+    invited to a server, somebody there writes text engineered to look like an
+    instruction, and a later read pulls it into context. Every other defence
+    against that ends in a judgement call somewhere. This one ends in set
+    membership.
+    """
+    if not action.posts:
+        return None
+    if identity.posting_allowed(ctx.guild_id, ctx.channel_id):
+        return None
+    return _deny("posting_scope",
+                 f"`{action.name}` would post into channel {ctx.channel_id} "
+                 f"(guild {ctx.guild_id}), which is not on the posting allowlist in "
+                 "control.json. This is a hard scope limit - it is not something a "
+                 "confirmation unlocks.")
+
+
 # Caller rules: everything decidable from who is asking and how they reached us.
 # Order matters - context validity, then whether this route may reach this
 # capability at all, then conditions that depend on the state of the turn.
@@ -332,6 +358,7 @@ RULES = (
 # channel lookup, neither of which should have to happen before an origin refusal.
 TARGET_RULES = (
     rule_destructive_guild,
+    rule_posting_scope,
 )
 
 
