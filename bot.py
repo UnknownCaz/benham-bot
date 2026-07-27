@@ -45,8 +45,12 @@ from discord.ext import tasks
 from discord.ext import voice_recv
 from dotenv import load_dotenv
 
+import agent
 import brain
+import capabilities
+import confirm
 import exaroton_ops as exa
+import identity
 import jsonio
 
 try:
@@ -213,6 +217,17 @@ _vr_opus.PacketDecoder._decode_packet = _dave_decode_packet
 # (Bot -> Privileged Gateway Intents -> Message Content Intent) or on_message text is blank.
 intents = discord.Intents.default()
 intents.message_content = True
+
+# members/presences are ALSO privileged, and unlike message_content they default OFF
+# here on purpose: discord.py refuses to log in at all (PrivilegedIntentsRequired) if
+# an intent is requested that the Dev Portal has not granted. Defaulting them on would
+# mean this commit bricks the bot on Tyler's next restart until he clicks two toggles.
+# Off by default costs only list_members / who_is_online / member-aware role lookups,
+# which report a clear "enable the intent" error rather than failing mysteriously.
+_INTENT_CFG = identity.CONTROL.get("intents", {}) or {}
+intents.members = bool(_INTENT_CFG.get("members", False))
+intents.presences = bool(_INTENT_CFG.get("presences", False))
+
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -996,6 +1011,25 @@ async def on_ready():
     log(f"AUTO_REPLY mode: {'ON (autonomous API brain, ' + brain.MODEL + ')' if AUTO_REPLY else 'OFF (live-Claude loop)'}")
     if AUTO_REPLY:
         log(f"AUTO_REPLY allowed guilds: {sorted(AUTO_REPLY_GUILDS)} (autonomous replies gated to these)")
+
+    # --- control plane (identity.py / control.json) ---
+    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — Benham takes direction from these only")
+    log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
+        f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)")
+    log(f"Destructive actions allowed in guilds: {sorted(identity.DESTRUCTIVE_GUILDS) or 'NONE'}")
+    log(f"Capabilities registered: {len(capabilities.REGISTRY)} "
+        f"({', '.join(f'{identity.TIER_NAMES[t]}={sum(1 for a in capabilities.REGISTRY.values() if a.tier == t)}' for t in (0, 1, 2, 3))})")
+    if not intents.members:
+        log("Note: Server Members intent OFF — list_members/who_is_online will report "
+            "that it needs enabling (Dev Portal → Bot → Privileged Gateway Intents)")
+
+    pres = identity.CONTROL.get("presence", {}) or {}
+    if pres:
+        try:
+            await capabilities.run(client, log, "set_presence", pres, force=True)
+        except Exception:  # noqa: BLE001 — cosmetic; never block startup
+            log(f"presence setup failed:\n{traceback.format_exc()}")
+
     dump_channels()
     if not poll_outbox.is_running():
         poll_outbox.start()
@@ -1017,11 +1051,133 @@ async def on_ready():
         exaroton_watchdog.start()
 
 
+DISCORD_MSG_LIMIT = 2000
+
+
+def split_for_discord(text, limit=DISCORD_MSG_LIMIT):
+    """Split a reply into Discord-sized chunks, preferring paragraph then line breaks.
+
+    A reply that exceeds the limit raises HTTPException and is lost entirely, which
+    for the agent path means the API call was paid for and produced nothing.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return [text] if text else []
+    chunks, rest = [], text
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = window.rfind("\n\n")
+        if cut < limit // 2:
+            cut = window.rfind("\n")
+        if cut < limit // 2:
+            cut = window.rfind(" ")
+        if cut <= 0:
+            cut = limit
+        chunks.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+async def reply_in(channel, text):
+    """Send a possibly-long reply, in order."""
+    for chunk in split_for_discord(text):
+        await channel.send(chunk)
+
+
+async def fire_confirmed(pending, channel):
+    """Run a confirmed destructive action. Never reached from inside the agent loop.
+
+    This is deliberately a plain function called straight from on_message: Tyler's
+    "yes" is read by code, matched to a parked token, and executed here. The model
+    never sees the confirmation and never gets to produce one, so no message content
+    anywhere - his, someone else's, or a channel Benham read - can talk its way into
+    firing a delete.
+    """
+    try:
+        result, _ = await capabilities.run(
+            client, log, pending.action, pending.params,
+            actor_id=pending.requested_by, force=True)
+        log(f"CONFIRMED {pending.action} (token {pending.token}) by {pending.requested_by}: {result}")
+        await reply_in(channel, f"Done — `{pending.action}`: {json.dumps(result, default=str)}")
+    except capabilities.ActionError as e:
+        await reply_in(channel, f"Couldn't do it: {e}")
+    except Exception as e:  # noqa: BLE001
+        log(f"CONFIRMED action {pending.action} crashed:\n{traceback.format_exc()}")
+        await reply_in(channel, f"That failed: {type(e).__name__}: {e}")
+
+
+def strip_mention(message):
+    """The message text with Benham's own mention removed."""
+    text = message.content or ""
+    if client.user:
+        for form in (f"<@{client.user.id}>", f"<@!{client.user.id}>"):
+            text = text.replace(form, " ")
+    return text.strip()
+
+
 @client.event
 async def on_message(message):
     rec = record_message(message)
-    if not rec["is_self"]:
-        log(f"inbox #{rec['channel']} <{rec['author']}>: {rec['content']!r}")
+    if rec["is_self"]:
+        return
+    log(f"inbox #{rec['channel']} <{rec['author']}>: {rec['content']!r}")
+
+    is_dm = message.guild is None
+    mentioned = bool(client.user and client.user in message.mentions)
+    if not (is_dm or mentioned):
+        return  # Benham reads everything, but only engages when addressed.
+
+    # The owner gate. Everyone else can talk TO Benham; nobody else directs it.
+    if not identity.is_owner(message.author.id):
+        log(f"ignoring direction from non-owner {message.author} ({message.author.id})")
+        if is_dm:
+            await reply_in(message.channel, identity.refusal(message.author.id))
+        return
+
+    text = strip_mention(message)
+    if not text:
+        return
+
+    # Confirmation is checked BEFORE the agent, and resolved without it. A pending
+    # action only exists in the seconds after a preview, so an "ok" in ordinary
+    # conversation falls through to the agent as normal.
+    pending = confirm.current()
+    if pending is not None:
+        verdict, token = confirm.read_reply(text)
+        target = confirm.get(token) if token else pending
+        if verdict == "yes" and target is not None:
+            confirm.consume(target.token)
+            await fire_confirmed(target, message.channel)
+            return
+        if verdict == "no":
+            confirm.cancel()
+            await reply_in(message.channel, "Cancelled — nothing was touched.")
+            return
+
+    if not agent.ENABLED:
+        return
+
+    where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
+    key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
+    try:
+        async with message.channel.typing():
+            reply, parked = await agent.respond(
+                client, log, text,
+                actor_id=message.author.id, actor_name=str(message.author),
+                channel_id=message.channel.id,
+                guild_id=message.guild.id if message.guild else None,
+                where=where, conversation_key=key)
+    except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
+        log(f"agent failed:\n{traceback.format_exc()}")
+        await reply_in(message.channel, f"My brain threw an error: {type(e).__name__}: {e}")
+        return
+
+    if reply:
+        await reply_in(message.channel, reply)
+    if parked is not None:
+        await reply_in(message.channel, confirm.describe(parked))
 
 
 @tasks.loop(seconds=2)
@@ -1042,6 +1198,61 @@ async def poll_outbox():
             with open(path, "r", encoding="utf-8") as f:
                 req = json.load(f)
             action = req.get("action", "send")
+
+            # --- capability-registry actions (capabilities.py) ---
+            # The legacy names below (send/dm/speak/edit/delete/history/purge) predate
+            # the registry and keep their own handling; everything added since is
+            # declared once in capabilities.py and dispatched here. The two name sets
+            # are disjoint (send vs send_message, purge vs purge_messages), so an old
+            # request file still routes exactly where it always did.
+            if action in capabilities.REGISTRY:
+                act = capabilities.REGISTRY[action]
+                params = {k: v for k, v in req.items()
+                          if k not in ("action", "queued_at", "confirm_token", "actor_id")}
+                token = req.get("confirm_token")
+
+                if act.destructive and not token:
+                    # Step one of two. Nothing is touched: this runs the dry-run,
+                    # parks the real parameters, and hands back a token. The caller
+                    # re-submits with that token to actually fire it. Same "no inline
+                    # shortcut" rule the DM path follows, in the machine channel.
+                    _, preview = await capabilities.run(
+                        client, log, action, params,
+                        actor_id=req.get("actor_id"), force=False)
+                    parked = confirm.park(action, params, preview,
+                                          req.get("actor_id"), "outbox")
+                    result.update({"status": "confirmation_required", "request": req,
+                                   "action": action, "confirm_token": parked.token,
+                                   "preview": preview,
+                                   "expires_in_seconds": parked.seconds_left})
+                    # No side effect fired, but this request file is resolved — the
+                    # flag exists to stop the handler below from _finish-ing twice.
+                    action_done = True
+                    _finish(path, fname, SENT, result)
+                    log(f"{action}: dry-run only, confirm with token {parked.token}")
+                    continue
+
+                if act.destructive:
+                    parked = confirm.consume(token)
+                    if parked is None:
+                        raise ValueError(
+                            f"confirm_token {token!r} is unknown or expired. Expiry means "
+                            "cancelled — re-submit without a token for a fresh dry-run.")
+                    if parked.action != action:
+                        raise ValueError(
+                            f"confirm_token {token!r} was issued for `{parked.action}`, "
+                            f"not `{action}`")
+                    params = parked.params  # fire exactly what was previewed, not a re-read
+
+                res, _ = await capabilities.run(
+                    client, log, action, params,
+                    actor_id=req.get("actor_id"), force=True)
+                result.update({"status": "ok", "action": action,
+                               "request": req, "result": res})
+                action_done = True
+                _finish(path, fname, SENT, result)
+                continue
+
             if action == "dm":
                 # A DM request carries user_id, not channel_id: resolve the user's
                 # private channel and create it if this is the first message.
