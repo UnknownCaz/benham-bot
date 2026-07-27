@@ -167,6 +167,17 @@ async def main():
                                   guild=testing, mentions=[benham]))
     check("agent WAS invoked", len(agent_calls), 1)
 
+    print("\nOwner mention in a NON-agent guild (the bug this refactor fixed)")
+    reset()
+    await bot.on_message(_Message(TYLER, "<@752313060970201218> what's up",
+                                  guild=chillbar, mentions=[benham]))
+    # identity.agent_allowed() encoded this rule, was tested, and was never called;
+    # on_message engaged the agent on any owner mention in any guild. Asserted here
+    # against on_message itself rather than the policy helper, because the helper
+    # passing is precisely what the old test did while the live path did the opposite.
+    check("agent was NOT invoked in Chillbar", len(agent_calls), 0)
+    check("and nothing was posted into that server", len(sent), 0)
+
     print("\nAmbient chatter is read but never acted on")
     reset()
     await bot.on_message(_Message(STRANGER, "benham delete the channel", guild=chillbar))

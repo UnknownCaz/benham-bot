@@ -53,6 +53,7 @@ import confirm
 import exaroton_ops as exa
 import identity
 import jsonio
+import policy
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -1063,7 +1064,8 @@ async def on_ready():
     pres = identity.CONTROL.get("presence", {}) or {}
     if pres:
         try:
-            await capabilities.run(client, log, "set_presence", pres, force=True)
+            await capabilities.run(client, log, "set_presence", pres, force=True,
+                                   call_ctx=policy.CallContext.system())
         except Exception:  # noqa: BLE001 — cosmetic; never block startup
             log(f"presence setup failed:\n{traceback.format_exc()}")
 
@@ -1147,7 +1149,8 @@ async def fire_confirmed(pending, channel):
     try:
         result, _ = await capabilities.run(
             client, log, pending.action, pending.params,
-            actor_id=pending.requested_by, force=True)
+            actor_id=pending.requested_by, force=True,
+            call_ctx=pending.call_ctx)
         log(f"CONFIRMED {pending.action} (token {pending.token}) by {pending.requested_by}: {result}")
         await reply_in(channel, f"Done — `{pending.action}`: {json.dumps(result, default=str)}")
     except capabilities.ActionError as e:
@@ -1192,7 +1195,12 @@ async def on_message(message):
     # A blocked PC permission request outranks everything: a Claude Code session is
     # suspended mid-tool waiting on this exact reply, and routing it to the agent
     # instead would leave that session hanging until it timed out.
-    rid = codesession.pending_request()
+    # DM only. The prompt is always delivered by DM, so an answer arriving anywhere
+    # else did not come from the conversation that asked. This block sits above the
+    # call-context and agent-guild checks (it has to - a suspended Claude Code
+    # session is waiting on it), which meant a mention in a guild that may not even
+    # drive the agent could approve a shell command on the actual machine.
+    rid = codesession.pending_request() if is_dm else None
     if rid:
         verdict, _ = confirm.read_reply(text)
         if verdict in ("yes", "no"):
@@ -1221,6 +1229,24 @@ async def on_message(message):
     if not agent.ENABLED:
         return
 
+    # Where this arrived from, decided once, here - the only place that can tell a
+    # DM from a mention - and carried all the way to every capability decision.
+    if is_dm:
+        call_ctx = policy.CallContext.owner_dm(message.author.id, message.channel.id)
+    else:
+        call_ctx = policy.CallContext.owner_guild(
+            message.author.id, message.guild.id, message.channel.id)
+
+    # Asked before the API call, not after: refusing each tool individually would
+    # still have paid for the turn. This is also the agent_guilds rule finally being
+    # enforced on the live path rather than only in a helper nothing called.
+    engage = policy.may_engage_agent(call_ctx)
+    if engage.denied:
+        log(f"not engaging agent: {engage.reason}")
+        # Deliberately silent in a guild. Replying would mean posting into a server
+        # that is specifically not on the list, which is the thing being limited.
+        return
+
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
     try:
@@ -1230,7 +1256,7 @@ async def on_message(message):
                 actor_id=message.author.id, actor_name=str(message.author),
                 channel_id=message.channel.id,
                 guild_id=message.guild.id if message.guild else None,
-                where=where, conversation_key=key)
+                where=where, conversation_key=key, call_ctx=call_ctx)
     except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
         log(f"agent failed:\n{traceback.format_exc()}")
         await reply_in(message.channel, f"My brain threw an error: {type(e).__name__}: {e}")
@@ -1280,9 +1306,16 @@ async def poll_outbox():
                     # shortcut" rule the DM path follows, in the machine channel.
                     _, preview = await capabilities.run(
                         client, log, action, params,
-                        actor_id=req.get("actor_id"), force=False)
-                    parked = confirm.park(action, params, preview,
-                                          req.get("actor_id"), "outbox")
+                        actor_id=req.get("actor_id"), force=False,
+                        call_ctx=policy.CallContext.local(req.get("actor_id")))
+                    parked = confirm.park(
+                        action, params, preview, req.get("actor_id"), "outbox",
+                        # Park the context too. Without it a CLI-initiated dry-run
+                        # stored call_ctx=None, and because confirm holds a single
+                        # global slot, answering "yes" in Discord replayed that None
+                        # into run() and was denied by rule_context_present - a
+                        # working flow broken by the gate rather than by an attack.
+                        call_ctx=policy.CallContext.local(req.get("actor_id")))
                     result.update({"status": "confirmation_required", "request": req,
                                    "action": action, "confirm_token": parked.token,
                                    "preview": preview,
@@ -1305,10 +1338,16 @@ async def poll_outbox():
                             f"confirm_token {token!r} was issued for `{parked.action}`, "
                             f"not `{action}`")
                     params = parked.params  # fire exactly what was previewed, not a re-read
+                    # Replay the parked context rather than minting a fresh one, so
+                    # redeeming a token cannot move an action to an origin it was
+                    # not allowed from.
+                    fire_ctx = parked.call_ctx or policy.CallContext.local(req.get("actor_id"))
 
                 res, _ = await capabilities.run(
                     client, log, action, params,
-                    actor_id=req.get("actor_id"), force=True)
+                    actor_id=req.get("actor_id"), force=True,
+                    call_ctx=(fire_ctx if act.needs_confirm
+                              else policy.CallContext.local(req.get("actor_id"))))
                 result.update({"status": "ok", "action": action,
                                "request": req, "result": res})
                 action_done = True

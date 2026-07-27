@@ -47,13 +47,20 @@ _NEGATIVE = {
 class Pending:
     """One parked action awaiting an explicit yes."""
 
-    def __init__(self, token, action, params, preview, requested_by, origin, ttl):
+    def __init__(self, token, action, params, preview, requested_by, origin, ttl,
+                 call_ctx=None):
         self.token = token
         self.action = action
         self.params = params
         self.preview = preview          # the dry-run result: real counts, names, ids
         self.requested_by = requested_by
         self.origin = origin            # "dm" | "channel" | "outbox" | "self"
+        # The policy context the action was parked under, replayed verbatim when it
+        # fires. Without this a confirmation would launder an action into whatever
+        # origin happened to be firing it - a request that policy refused from a
+        # guild mention could be parked, then confirmed, and run as if it had come
+        # from somewhere it was allowed.
+        self.call_ctx = call_ctx
         self.expires_at = time.monotonic() + ttl
 
     @property
@@ -75,7 +82,7 @@ def _ttl_for(origin):
     return int(cfg.get("ttl_seconds", 3600))
 
 
-def park(action, params, preview, requested_by, origin):
+def park(action, params, preview, requested_by, origin, call_ctx=None):
     """Store a dry-run result awaiting confirmation. Returns the Pending.
 
     Supersedes any existing pending action - see the module docstring on why this
@@ -83,7 +90,8 @@ def park(action, params, preview, requested_by, origin):
     """
     _pending.clear()
     token = uuid.uuid4().hex[:6]
-    p = Pending(token, action, params, preview, requested_by, origin, _ttl_for(origin))
+    p = Pending(token, action, params, preview, requested_by, origin,
+                _ttl_for(origin), call_ctx=call_ctx)
     _pending[token] = p
     return p
 

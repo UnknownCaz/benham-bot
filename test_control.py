@@ -19,6 +19,7 @@ import discord
 import capabilities
 import confirm
 import identity
+import policy
 
 TESTING = 736988645562646619
 CHILLBAR = 1491485711076167711
@@ -48,12 +49,23 @@ check("string id still works", identity.is_owner(str(TYLER)), True)
 check("None is not an owner", identity.is_owner(None), False)
 check("garbage is not an owner", identity.is_owner("nope"), False)
 
-section("Agent engagement")
-check("owner DM engages", identity.agent_allowed(None, TYLER, True), True)
-check("stranger DM does not", identity.agent_allowed(None, STRANGER, True), False)
-check("owner in Testing engages", identity.agent_allowed(TESTING, TYLER, False), True)
-check("owner in Chillbar does not", identity.agent_allowed(CHILLBAR, TYLER, False), False)
-check("stranger in Testing does not", identity.agent_allowed(TESTING, STRANGER, False), False)
+section("Agent engagement — via policy, which bot.on_message actually calls")
+# These used to assert against identity.agent_allowed(), a helper nothing in
+# production called. They passed while the live code did the opposite. They now go
+# through policy.may_engage_agent, which is the function on_message asks.
+check("owner DM engages",
+      policy.may_engage_agent(policy.CallContext.owner_dm(TYLER)).allowed, True)
+check("owner in Testing engages",
+      policy.may_engage_agent(policy.CallContext.owner_guild(TYLER, TESTING)).allowed, True)
+check("owner in Chillbar does NOT",
+      policy.may_engage_agent(policy.CallContext.owner_guild(TYLER, CHILLBAR)).allowed, False)
+check("no context does not engage",
+      policy.may_engage_agent(None).allowed, False)
+check("the local CLI does not engage the chat agent",
+      policy.may_engage_agent(policy.CallContext.local()).allowed, False)
+# Non-owners are stopped by is_owner in on_message before this is reached; the
+# owner-gate suite covers that end to end.
+check("stranger is still not an owner", identity.is_owner(STRANGER), False)
 
 # ------------------------------------------------------- destructive allowlist
 section("Destructive allowlist — the structural wall")
@@ -113,7 +125,8 @@ stub = _StubClient({CHILLBAR_CHAN: CHILLBAR, TESTING_CHAN: TESTING})
 async def _run_expect_error(name, params):
     """Return the ActionError message, or None if it did not raise."""
     try:
-        await capabilities.run(stub, lambda *_: None, name, params, force=False)
+        await capabilities.run(stub, lambda *_: None, name, params, force=False,
+                               call_ctx=policy.CallContext.local())
         return None
     except capabilities.ActionError as e:
         return str(e)
