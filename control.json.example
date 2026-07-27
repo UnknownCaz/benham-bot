@@ -20,6 +20,15 @@
   },
   "_agent": "enabled=false makes Benham a pure relay (no API cost). model: claude-haiku-4-5 is cheap, claude-sonnet-5 is sharper for multi-step tool use. max_tool_rounds bounds one request's agent loop.",
 
+  "pc": {
+    "enabled": false,
+    "workdir": "C:\\Users\\Tyler\\Claude\\Discord-Claude",
+    "permission_timeout_seconds": 300,
+    "max_turns": 30,
+    "use_api_key": true
+  },
+  "_pc": "Gives Benham a REAL Claude Code session on the machine (codesession.py), with Tyler's own skills loaded. Reading/searching is free; every write, command and subagent DMs him for approval and blocks until he answers - a timeout denies. enabled=false switches the whole thing off. use_api_key=true bills ANTHROPIC_API_KEY per task; set it false after running `claude` once interactively to bill a Claude subscription instead. NOTE: workdir is where it starts, NOT a sandbox - a session can reach the whole filesystem.",
+
   "confirm": {
     "ttl_seconds": 3600,
     "conversation_ttl_seconds": 600

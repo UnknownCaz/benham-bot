@@ -131,10 +131,16 @@ def main(argv):
     path = outbox.enqueue(action=name, **params)
     print(f"queued {name} -> {os.path.basename(path)}")
 
-    result, where = _wait_for_result(path)
+    # A PC task drives a whole Claude Code session and can pause indefinitely on a
+    # permission DM, so the 60s that suits a Discord call would report a healthy
+    # bot as dead. The request itself is unaffected either way - it stays queued
+    # and the bot still runs it - but the message printed here would be a lie.
+    timeout = 1800 if name == "pc_task" else 60
+    result, where = _wait_for_result(path, timeout=timeout)
     if result is None:
-        print("no result within 60s — is bot.py running? (check with status.py)",
-              file=sys.stderr)
+        print(f"no result within {timeout}s. The request is still queued and will "
+              f"run when the bot gets to it; check outbox/sent/. "
+              f"(is bot.py running? check with status.py)", file=sys.stderr)
         return outbox.EXIT_FAIL
 
     status = result.get("status")

@@ -48,6 +48,7 @@ from dotenv import load_dotenv
 import agent
 import brain
 import capabilities
+import codesession
 import confirm
 import exaroton_ops as exa
 import identity
@@ -1023,6 +1024,14 @@ async def on_ready():
         log("Note: Server Members intent OFF — list_members/who_is_online will report "
             "that it needs enabling (Dev Portal → Bot → Privileged Gateway Intents)")
 
+    # Wire the PC session's permission gate to a DM. A Claude Code tool call that
+    # needs approval suspends until this round-trips, so it has to reach Tyler
+    # wherever he is - hence a DM rather than a reply in whatever channel started it.
+    codesession.configure(log, ask_owner_dm)
+    log(f"PC access: {'ON — workdir ' + codesession.WORKDIR if codesession.ENABLED else 'OFF'}"
+        + (f", writes/commands ask (timeout {codesession.PERMISSION_TIMEOUT}s)"
+           if codesession.ENABLED else ""))
+
     pres = identity.CONTROL.get("presence", {}) or {}
     if pres:
         try:
@@ -1086,6 +1095,18 @@ async def reply_in(channel, text):
         await channel.send(chunk)
 
 
+async def ask_owner_dm(text):
+    """DM the owner. Used by the PC session's permission gate.
+
+    Raises rather than swallowing a failure: codesession treats an unreachable
+    owner as a denial, and it can only do that if it finds out.
+    """
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    user = client.get_user(owner_id) or await client.fetch_user(owner_id)
+    channel = user.dm_channel or await user.create_dm()
+    await reply_in(channel, text)
+
+
 async def fire_confirmed(pending, channel):
     """Run a confirmed destructive action. Never reached from inside the agent loop.
 
@@ -1139,6 +1160,18 @@ async def on_message(message):
     text = strip_mention(message)
     if not text:
         return
+
+    # A blocked PC permission request outranks everything: a Claude Code session is
+    # suspended mid-tool waiting on this exact reply, and routing it to the agent
+    # instead would leave that session hanging until it timed out.
+    rid = codesession.pending_request()
+    if rid:
+        verdict, _ = confirm.read_reply(text)
+        if verdict in ("yes", "no"):
+            codesession.answer(rid, verdict == "yes")
+            await reply_in(message.channel,
+                           "Running it now." if verdict == "yes" else "Skipping that.")
+            return
 
     # Confirmation is checked BEFORE the agent, and resolved without it. A pending
     # action only exists in the seconds after a preview, so an "ok" in ordinary
