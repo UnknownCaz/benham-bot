@@ -1152,6 +1152,7 @@ async def on_message(message):
             await fire_confirmed(target, message.channel)
             return
         if verdict == "no":
+            log(f"DECLINED {pending.action} (token {pending.token}) by {message.author.id}")
             confirm.cancel()
             await reply_in(message.channel, "Cancelled — nothing was touched.")
             return

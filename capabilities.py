@@ -1010,6 +1010,12 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         if not force:
             ctx.dry_run = True
             preview = await act.handler(ctx, clean)
+            # Log the PROPOSAL, not just the execution. Without this the audit trail
+            # records only what was destroyed, so a preview that was declined, ignored,
+            # or left to expire leaves no trace at all - and "what did it try to do"
+            # is exactly the question worth being able to answer after the fact.
+            log(f"PROPOSED {name} by {actor_id or 'code-session'} "
+                f"(guild {gid}): {preview.get('summary', '?')}")
             return None, preview
 
     try:
