@@ -193,6 +193,31 @@ def rule_context_present(action, ctx):
     return None
 
 
+def rule_owner(action, ctx):
+    """A request carrying a human actor must carry Tyler.
+
+    Stage 2. The check already existed at the entry points - on_message and
+    handle_auto_reply both refuse a non-owner before anything else happens - and
+    those stay exactly where they are. This is not a replacement for them; it is the
+    same rule stated once more at the point where a capability is actually about to
+    run, so that a future entry point that forgets the early check still cannot get
+    past here.
+
+    Only human origins are checked. LOCAL_CLI has no Discord actor to verify (its
+    authority comes from already having the machine) and SYSTEM has no actor at all,
+    so demanding an owner id from either would deny every automated call and every
+    CLI invocation that did not bother to pass one. Both are constrained instead by
+    rule_origin_allowed, which is the appropriate control for them.
+    """
+    if ctx.origin not in Origin.HUMAN:
+        return None
+    if identity.is_owner(ctx.actor_id):
+        return None
+    return _deny("owner",
+                 f"`{action.name}` was requested by user {ctx.actor_id}, who is not "
+                 "my owner. I only take direction from one person.")
+
+
 def rule_origin_allowed(action, ctx):
     """The capability must permit this direction of arrival.
 
@@ -253,6 +278,7 @@ def rule_blocked_when_tainted(action, ctx):
 # at all, then the conditions that depend on the state of the turn.
 RULES = (
     rule_context_present,
+    rule_owner,
     rule_origin_allowed,
     rule_agent_guild,
     rule_blocked_when_tainted,
@@ -273,6 +299,13 @@ def may_engage_agent(ctx):
     """
     if ctx is None or ctx.origin not in Origin.ALL:
         return _deny("engage_context", "No call context; refusing to engage.")
+    # Same reasoning as rule_owner: on_message already refused a non-owner before
+    # reaching here, and this says it again anyway. Spending an API call is itself
+    # the thing being protected, so the check that decides it should not depend on
+    # a caller having done its own.
+    if ctx.origin in Origin.HUMAN and not identity.is_owner(ctx.actor_id):
+        return _deny("engage_owner",
+                     f"user {ctx.actor_id} is not my owner")
     if ctx.origin == Origin.OWNER_DM:
         return _ALLOW
     if ctx.origin == Origin.OWNER_GUILD:

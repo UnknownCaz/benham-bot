@@ -232,13 +232,34 @@ async def main():
     check("a stranger cannot ride Tyler's open window",
           bot.convo_active(TESTING, STRANGER), False)
 
+    print("\nDefence in depth — the capability refuses a stranger on its own")
+    # The whole point of stage 2. on_message would never build a stranger context,
+    # so this reaches past it and asks capabilities.run directly - simulating a
+    # future entry point that forgets the early check. Before stage 2 this ran.
+    import policy
+    stranger_ctx = policy.CallContext.owner_dm(STRANGER, 555)
+    refused = []
+    for name, params in (("send_message", {"channel_id": 555, "content": "x"}),
+                         ("read_channel", {"channel_id": 555}),
+                         ("pc_task", {"task": "anything"})):
+        try:
+            await capabilities.run(bot.client, lambda *_: None, name, params,
+                                   actor_id=STRANGER, call_ctx=stranger_ctx)
+            refused.append(f"{name}=RAN")
+        except capabilities.ActionError as e:
+            refused.append(f"{name}=refused" if "not my owner" in str(e)
+                           else f"{name}=refused({str(e)[:30]})")
+    check("every capability refuses a stranger context",
+          all(r.endswith("=refused") for r in refused), True)
+
     print("\nWhat a stranger could reach IF the gate were bypassed")
     tiers = {}
     for name, act in capabilities.REGISTRY.items():
         tiers.setdefault(identity.TIER_NAMES[act.tier], []).append(name)
     print(f"  tier 3 (needs Tyler's confirm even then): {len(tiers.get('destructive', []))}")
-    print(f"  tiers 0-2 (would run on the model's judgement alone): "
+    print(f"  tiers 0-2 (gated by taint/outward, not by tier alone): "
           f"{len(tiers.get('read', [])) + len(tiers.get('speak', [])) + len(tiers.get('manage', []))}")
+    print(f"  but all of them now refuse a non-owner context: {refused}")
 
 
 asyncio.run(main())
