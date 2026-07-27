@@ -1,2 +1,0 @@
-1 asyncio imported
-2 running trivial coroutine BEFORE importing bot

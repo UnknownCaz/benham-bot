@@ -27,3 +27,7 @@ stats.tsv
 # but the redirect targets do not always end in .log).
 *.out
 *.err
+# Throwaway diagnostic output from debugging sessions.
+diag*.txt
+d[0-9].txt
+m[0-9].txt
