@@ -12,6 +12,11 @@ venv-voice/
 personality_overrides.txt
 *.log
 exaroton_watch.json
+# Control plane: owner user ids + guild allowlists. Real IDs stay local; the
+# committed control.json.example documents the shape.
+control.json
+# Agent conversation history — private message content.
+agent_memory.json
 
 # Friend-server reads / derived social data — private, never commit
 read_full*
