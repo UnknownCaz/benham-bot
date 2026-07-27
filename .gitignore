@@ -23,3 +23,7 @@ read_full*
 *.u8
 *.tsv
 stats.tsv
+# Bot stdout/stderr captures from Start-Process redirects (*.log is already covered,
+# but the redirect targets do not always end in .log).
+*.out
+*.err

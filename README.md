@@ -86,6 +86,51 @@ python do.py purge_messages channel_id=809357286036078612 limit=20 contains="tes
 python do.py purge_messages channel_id=809357286036078612 limit=20 contains="test" confirm_token=80ac01
 ```
 
+## PC access - a real Claude Code session
+
+`codesession.py` gives Benham the machine itself. It is not a reimplementation: it drives the
+actual Claude Code CLI through the agent SDK, with `setting_sources` loading Tyler's own settings,
+so the session has his real skills. "Restart Isle of Berk" works because the `exaroton` skill is
+there, not because anything in this repo knows what exaroton is.
+
+Reached through the `pc_task` capability, so the Discord agent delegates to it when a request is
+about the PC rather than about Discord.
+
+**Permission model: read freely, ask before changing.**
+
+| what | behaviour |
+|---|---|
+| `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `TodoWrite`, ... | runs immediately |
+| anything else - writes, edits, shell commands, subagents | DMs Tyler, **blocks** until he answers |
+| no answer within `permission_timeout_seconds` | **denied** - the session is told no and stops |
+
+The allowlist is of *reads*, not of writes: anything unrecognised is treated as a change and asks.
+When a future Claude Code version adds a tool this file has never heard of, the failure mode is an
+unnecessary question rather than an unreviewed write.
+
+The approval DM shows the **full command**, up to 1200 characters. An early version truncated it to
+80, which would have meant approving a command you could not actually read.
+
+### Two things this does NOT do
+
+**The working directory is not a sandbox.** `Discord-Claude/` is where the session starts. It can
+`cd` anywhere or use absolute paths. It keeps scratch files tidy; it contains nothing.
+
+**Secrets are readable.** Tyler chose full file access deliberately. Reads are free, so anyone who
+can DM Benham can ask it to read `environ.env` and get the bot token and API key. The
+ask-before-changing gate does not help here, because reading is not a change. What the code does
+instead is make it loud: every read of a credential-shaped path logs at `SECRET-READ`. That is a
+trail, not a block. Flipping this to a hard deny is a one-line change to `_SECRET_RE`'s use in
+`_can_use_tool`.
+
+### Billing
+
+`use_api_key: true` (default) passes `ANTHROPIC_API_KEY` to the CLI, so PC tasks bill to API credit
+rather than a Claude subscription. It works headlessly with no setup, which is what an unattended
+bot needs. To use a subscription instead, run `claude` once in a real terminal, log in, then set
+`use_api_key: false` - the env key takes precedence otherwise and would keep billing the API.
+Measured: a trivial task runs a few cents; these are not free.
+
 ## Commands
 
 Two kinds: **CLI commands** run in a terminal (from the repo directory), and **in-Discord slash

@@ -754,6 +754,26 @@ async def _create_webhook(ctx, p):
             "_sensitive": ["url"]}
 
 
+@action("pc_task", identity.MANAGE,
+        "Do something on Tyler's actual PC by running a real Claude Code session "
+        "in the Discord-Claude folder - read/edit files, run commands, use his "
+        "skills (exaroton, drive-api, double, desktop-automation). Give it the task "
+        "in plain language, as you would type it into a terminal session. Reading "
+        "is free; every write or command asks Tyler for approval first, so expect "
+        "this to take a while and do not retry if he says no.",
+        {"task": {"type": "str", "required": True,
+                  "desc": "What to do, in plain language, with enough context to act alone"}})
+async def _pc_task(ctx, p):
+    # Imported lazily: the SDK pulls in a large dependency tree and spawns the
+    # Claude Code CLI, and neither should be a cost paid by a bot that never
+    # touches the PC.
+    import codesession
+    if not codesession.ENABLED:
+        raise ActionError("PC access is off (pc.enabled in control.json)")
+    result = await codesession.run_task(str(p["task"]))
+    return {"status": "completed", "task": str(p["task"])[:200], "result": result}
+
+
 # ==========================================================================
 # TIER 3 - DESTRUCTIVE. No undo. Guild-allowlisted, dry-run first, explicit fire.
 # Each handler must produce a preview under ctx.dry_run WITHOUT touching anything.
