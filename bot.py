@@ -641,6 +641,32 @@ def convo_active(gid, speaker_id):
     )
 
 
+async def say(voice_channel, text, speaker_id):
+    """Speak in voice, through policy rather than around it.
+
+    Every spoken line now carries an OWNER_VOICE context. Until this existed that
+    origin was declared but had no production caller: handle_auto_reply called
+    speak_in_channel directly, so voice output was the one outward action that
+    never passed the chokepoint. Its owner gate was sound - the check at the top of
+    handle_auto_reply - but "sound because this particular function remembers to
+    check" is the exact arrangement the policy refactor exists to eliminate.
+
+    A refusal is logged and swallowed. The alternative is an exception inside the
+    utterance loop, which would take down transcription for the whole call over one
+    unspeakable line.
+    """
+    guild = getattr(voice_channel, "guild", None)
+    try:
+        await capabilities.run(
+            client, log, "speak_in_voice",
+            {"channel_id": voice_channel.id, "content": text},
+            actor_id=speaker_id,
+            call_ctx=policy.CallContext.owner_voice(
+                speaker_id, guild.id if guild else None, voice_channel.id))
+    except capabilities.ActionError as e:
+        log(f"voice: refused to speak - {e}")
+
+
 async def handle_auto_reply(guild, voice_channel, speaker, speaker_id, text):
     """Respond to a wake/continuation utterance (local shortcut or one API call).
 
@@ -675,34 +701,37 @@ async def handle_auto_reply(guild, voice_channel, speaker, speaker_id, text):
         if kind == "sleep":
             _convo_until.pop(gid, None)  # close the conversation window
             _convo_speaker.pop(gid, None)
-            await speak_in_channel(voice_channel, "Alright, going quiet. Call me if you need me.")
+            await say(voice_channel, "Alright, going quiet. Call me if you need me.",
+                     speaker_id)
             await stop_listening(guild)
             return
         if kind == "voice":
             changes, confirm = payload
             apply_voice_settings(changes)
             _open_convo(gid, speaker_id)
-            await speak_in_channel(voice_channel, confirm)
+            await say(voice_channel, confirm, speaker_id)
             return
         if kind == "persona_reset":
             cleared = reset_overrides()
             _open_convo(gid, speaker_id)
-            await speak_in_channel(
+            await say(
                 voice_channel,
                 "Okay, back to my usual self." if cleared
                 else "I couldn't clear my personality tweaks - they're still active.",
+                speaker_id,
             )
             return
         if kind == "voices_list":
             names = brain.voice_names()
             spoken = ", ".join(names[:-1]) + (", or " + names[-1] if len(names) > 1 else "")
             _open_convo(gid, speaker_id)
-            await speak_in_channel(
-                voice_channel, f"I can be {spoken}. Just say switch to one of them.")
+            await say(
+                voice_channel, f"I can be {spoken}. Just say switch to one of them.",
+                speaker_id)
             return
         if kind == "ping":
             _open_convo(gid, speaker_id)
-            await speak_in_channel(voice_channel, payload)
+            await say(voice_channel, payload, speaker_id)
             return
 
     # API path — cooldown guard (drop rapid fragments; dedup already ran)
@@ -735,7 +764,7 @@ async def handle_auto_reply(guild, voice_channel, speaker, speaker_id, text):
         log(f"brain: in={getattr(usage,'input_tokens','?')} out={getattr(usage,'output_tokens','?')} "
             f"reply={spoken!r}")
     if spoken:
-        await speak_in_channel(voice_channel, spoken)
+        await say(voice_channel, spoken, speaker_id)
     if leaving:  # model chose to leave via <<sleep>>
         _convo_until.pop(gid, None)
         _convo_speaker.pop(gid, None)
@@ -1056,6 +1085,11 @@ async def on_ready():
     # Wire the PC session's permission gate to a DM. A Claude Code tool call that
     # needs approval suspends until this round-trips, so it has to reach Tyler
     # wherever he is - hence a DM rather than a reply in whatever channel started it.
+    # Voice output goes through the capability registry, so bot.py hands it the
+    # function that actually speaks. One-way dependency: capabilities never imports
+    # bot.
+    capabilities.set_voice_speaker(speak_in_channel)
+
     codesession.configure(log, ask_owner_dm)
     log(f"PC access: {'ON — workdir ' + codesession.WORKDIR if codesession.ENABLED else 'OFF'}"
         + (f", writes/commands ask (timeout {codesession.PERMISSION_TIMEOUT}s)"
