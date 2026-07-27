@@ -271,6 +271,46 @@ async def main():
     check("a stranger cannot ride Tyler's open window",
           bot.convo_active(TESTING, STRANGER), False)
 
+    print("\nThe pc.. prefix - zero API calls is the entire point")
+    reset()
+    ran, agent_before = [], len(agent_calls)
+    real = capabilities.REGISTRY["pc_task"].handler
+
+    async def fake_pc(ctx, p):
+        ran.append(p.get("task"))
+        return {"status": "completed", "result": "31 .py files"}
+
+    capabilities.REGISTRY["pc_task"].handler = fake_pc
+    try:
+        await bot.on_message(_Message(TYLER, "pc.. count the py files"))
+        check("the task reached the PC session", ran, ["count the py files"])
+        check("NO API call was made", len(agent_calls), agent_before)
+        check("the session's own answer was posted", sent[-1], "31 .py files")
+
+        reset(); ran.clear()
+        await bot.on_message(_Message(TYLER, "PC.. list them"))
+        check("prefix is case-insensitive", ran, ["list them"])
+
+        reset(); ran.clear()
+        await bot.on_message(_Message(TYLER, "pc.."))
+        check("a bare prefix starts no session", ran, [])
+        check("...and says what it wants", "needs something after it" in sent[-1], True)
+
+        # In a guild it must NOT hijack the message - pc_task is DM-only, so the
+        # prefix there would only produce a refusal posted into a server.
+        reset(); ran.clear()
+        await bot.on_message(_Message(TYLER, "pc.. do something",
+                                      guild=testing, mentions=[benham]))
+        check("ignored in a guild (falls through to the agent)", ran, [])
+        check("...and the agent handled it instead", len(agent_calls), 1)
+
+        reset(); ran.clear()
+        await bot.on_message(_Message(TYLER, "pc is short for personal computer"))
+        check("'pc ...' without the dots is NOT the prefix", ran, [])
+    finally:
+        capabilities.REGISTRY["pc_task"].handler = real
+
+
     print("\nDefence in depth — the capability refuses a stranger on its own")
     # The whole point of stage 2. on_message would never build a stranger context,
     # so this reaches past it and asks capabilities.run directly - simulating a

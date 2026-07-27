@@ -1124,6 +1124,10 @@ async def on_ready():
         exaroton_watchdog.start()
 
 
+# Prefix that sends a DM straight to the PC session with no API call. Configurable
+# because the right token is a matter of taste and muscle memory, not of design.
+PC_PREFIX = (identity.CONTROL.get("pc", {}) or {}).get("prefix", "pc..").lower()
+
 DISCORD_MSG_LIMIT = 2000
 
 
@@ -1259,6 +1263,40 @@ async def on_message(message):
             confirm.cancel()
             await reply_in(message.channel, "Cancelled — nothing was touched.")
             return
+
+    # --- the "pc.." fast path: straight to the machine, no API call at all ---
+    # A normal PC request costs two API round trips - one to work out that pc_task
+    # is wanted, one to re-word the result. This skips both. The words after the
+    # prefix become the task verbatim, and the session's own answer is posted as-is;
+    # it already reads like Benham because persona.md is injected into it.
+    #
+    # DM only, deliberately. pc_task's origins are {OWNER_DM, LOCAL_CLI}, so honouring
+    # the prefix in a guild would only produce a refusal - and printing that refusal
+    # into a server that may not even be on the agent list is exactly the noise the
+    # silent-in-guilds rule avoids. In a guild it just falls through to normal handling.
+    if is_dm and text.lower().startswith(PC_PREFIX):
+        task = text[len(PC_PREFIX):].strip()
+        if not task:
+            await reply_in(message.channel,
+                           f"`{PC_PREFIX}` needs something after it - "
+                           f"e.g. `{PC_PREFIX} what's in my Downloads folder`")
+            return
+        log(f"pc-prefix (0 API calls): {task[:120]!r}")
+        try:
+            async with message.channel.typing():
+                result, _ = await capabilities.run(
+                    client, log, "pc_task", {"task": task},
+                    actor_id=message.author.id, force=True,
+                    call_ctx=policy.CallContext.owner_dm(
+                        message.author.id, message.channel.id))
+            await reply_in(message.channel,
+                           (result or {}).get("result") or "(the session returned nothing)")
+        except capabilities.ActionError as e:
+            await reply_in(message.channel, f"Couldn't run that: {e}")
+        except Exception as e:  # noqa: BLE001 — never take the bot down over one task
+            log(f"pc-prefix failed:\n{traceback.format_exc()}")
+            await reply_in(message.channel, f"That failed: {type(e).__name__}: {e}")
+        return
 
     if not agent.ENABLED:
         return
