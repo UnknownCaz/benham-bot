@@ -1163,6 +1163,75 @@ async def reply_in(channel, text):
         await channel.send(chunk)
 
 
+class LiveProgress:
+    """A single Discord message that gets edited as a PC task runs.
+
+    One message edited in place, not a message per step. A long task can take
+    twenty tool calls and posting each one buries the conversation - and Discord
+    rate-limits sends far more tightly than it deserves to be tested.
+
+    Edits are throttled to EVERY seconds because that rate limit is real (roughly
+    five edits per five seconds per channel) and blowing through it would make the
+    library sleep, which would slow down the very task being reported on. Steps are
+    always recorded; only the redraw is deferred, and finish() forces a last one so
+    the trail is never left mid-way.
+
+    Failures here are swallowed on purpose. This is a status indicator - if Discord
+    refuses an edit, the task itself must carry on regardless.
+    """
+
+    EVERY = 2.0        # seconds between edits
+    KEEP = 10          # most recent steps shown; older ones collapse to a count
+
+    def __init__(self, channel, header):
+        self.channel = channel
+        self.header = header
+        self.steps = []
+        self.msg = None
+        self._last = 0.0
+        self._dropped = 0
+
+    def _body(self):
+        shown = self.steps[-self.KEEP:]
+        hidden = len(self.steps) - len(shown)
+        lines = [self.header]
+        if hidden:
+            lines.append(f"_...{hidden} earlier step(s)_")
+        lines += shown
+        return "\n".join(lines)[:DISCORD_MSG_LIMIT]
+
+    async def start(self):
+        try:
+            self.msg = await self.channel.send(self.header)
+        except Exception:  # noqa: BLE001
+            self.msg = None
+
+    async def add(self, kind, detail):
+        if kind == "tool":
+            self.steps.append(f"`{detail}`")
+        else:
+            one_line = " ".join(str(detail).split())
+            self.steps.append(f"> {one_line[:150]}")
+        now = time.monotonic()
+        if now - self._last < self.EVERY:
+            return                      # recorded, just not redrawn yet
+        self._last = now
+        await self._redraw()
+
+    async def _redraw(self):
+        if self.msg is None:
+            return
+        try:
+            await self.msg.edit(content=self._body())
+        except Exception:  # noqa: BLE001 — a status line must never break the task
+            self._dropped += 1
+
+    async def finish(self, footer=None):
+        if footer:
+            self.steps.append(footer)
+        await self._redraw()            # unthrottled: never leave the trail stale
+
+
 async def ask_owner_dm(text):
     """DM the owner. Used by the PC session's permission gate.
 
@@ -1282,13 +1351,18 @@ async def on_message(message):
                            f"e.g. `{PC_PREFIX} what's in my Downloads folder`")
             return
         log(f"pc-prefix (0 API calls): {task[:120]!r}")
+        live = LiveProgress(message.channel, f"**on it** — `{task[:120]}`")
+        started = time.monotonic()
         try:
+            await live.start()
             async with message.channel.typing():
                 result, _ = await capabilities.run(
                     client, log, "pc_task", {"task": task},
                     actor_id=message.author.id, force=True,
+                    on_progress=live.add,
                     call_ctx=policy.CallContext.owner_dm(
                         message.author.id, message.channel.id))
+            await live.finish(f"_done in {time.monotonic() - started:.0f}s_")
             await reply_in(message.channel,
                            (result or {}).get("result") or "(the session returned nothing)")
         except capabilities.ActionError as e:
