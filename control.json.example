@@ -10,6 +10,10 @@
   "agent_guilds": [736988645562646619],
   "_agent_guilds": "Guilds where the autonomous agent may engage from a channel mention. DMs from an owner always work regardless of this list.",
 
+  "post_guilds": [736988645562646619, 1491485711076167711],
+  "post_channels": [],
+  "_posting": "Hard scope cap on where Benham may PUT CONTENT (send_message/send_embed/send_file). post_channels wins when non-empty; otherwise the channel's guild must be in post_guilds. Both empty = no cap. Not a confirmation gate - a refusal here cannot be unlocked by any yes. Reading is never restricted by this. The case it covers: Benham is invited to a new server, and someone there posts text engineered to look like an instruction.",
+
   "agent": {
     "enabled": true,
     "model": "claude-sonnet-5",

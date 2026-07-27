@@ -1273,7 +1273,7 @@ async def poll_outbox():
                           if k not in ("action", "queued_at", "confirm_token", "actor_id")}
                 token = req.get("confirm_token")
 
-                if act.destructive and not token:
+                if act.needs_confirm and not token:
                     # Step one of two. Nothing is touched: this runs the dry-run,
                     # parks the real parameters, and hands back a token. The caller
                     # re-submits with that token to actually fire it. Same "no inline
@@ -1294,7 +1294,7 @@ async def poll_outbox():
                     log(f"{action}: dry-run only, confirm with token {parked.token}")
                     continue
 
-                if act.destructive:
+                if act.needs_confirm:
                     parked = confirm.consume(token)
                     if parked is None:
                         raise ValueError(
