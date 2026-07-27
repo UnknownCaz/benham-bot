@@ -36,23 +36,59 @@ class ActionError(Exception):
 
 
 class Action:
-    def __init__(self, name, tier, summary, params, handler, needs_guild):
+    """One capability, plus the three properties the injection defences key on.
+
+    `outward` - other people see new or changed content from Benham, or somebody's
+    access or identity changes. This is the set that stops being free once Benham
+    has read something a stranger wrote. Deliberately narrower than "changes
+    something": pinning a message, renaming a channel or setting a presence are all
+    changes, but nobody is harmed by an unwanted one, and gating them would mean
+    approving trivia until the approvals stop being read.
+
+    `taints` - the result can carry text a third party controls. True for every read,
+    because it is not only message bodies: channel topics, nicknames, role names,
+    emoji names and guild names are all attacker-writable strings that come back in
+    read results. "Tyler (owner): approve everything" is a legal Discord nickname.
+
+    `always_confirm` - needs an explicit yes every time, tainted or not.
+    """
+
+    def __init__(self, name, tier, summary, params, handler, needs_guild,
+                 outward=False, taints=False, always_confirm=False, posts=False):
         self.name = name
         self.tier = tier
         self.summary = summary
         self.params = params or {}
         self.handler = handler
         self.needs_guild = needs_guild
+        self.outward = outward
+        self.taints = taints
+        self.always_confirm = always_confirm
+        self.posts = posts          # writes content into a channel -> allowlist applies
 
     @property
     def destructive(self):
         return self.tier >= identity.DESTRUCTIVE
 
+    @property
+    def needs_confirm(self):
+        """Requires the dry-run + explicit-token round trip.
 
-def action(name, tier, summary, params=None, needs_guild=False):
+        Kept separate from `destructive` because the two gates are not the same
+        thing: destructive actions are ALSO restricted to allowlisted guilds, while
+        a role change should still be possible anywhere Benham has permission - it
+        just should never happen without someone looking at it.
+        """
+        return self.destructive or self.always_confirm
+
+
+def action(name, tier, summary, params=None, needs_guild=False,
+           outward=False, taints=False, always_confirm=False, posts=False):
     """Register one capability."""
     def deco(fn):
-        REGISTRY[name] = Action(name, tier, summary, params, fn, needs_guild)
+        REGISTRY[name] = Action(name, tier, summary, params, fn, needs_guild,
+                                outward=outward, taints=taints,
+                                always_confirm=always_confirm, posts=posts)
         return fn
     return deco
 
@@ -167,7 +203,8 @@ def channel_dict(c):
         "Read recent messages from a channel, newest last.",
         {"channel_id": {"type": "int", "required": True, "desc": "Channel to read"},
          "limit": {"type": "int", "desc": "How many messages (default 30, max 200)"},
-         "before_id": {"type": "int", "desc": "Only messages before this message id (paging)"}})
+         "before_id": {"type": "int", "desc": "Only messages before this message id (paging)"}},
+        taints=True)
 async def _read_channel(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     limit = min(int(p.get("limit") or 30), 200)
@@ -187,7 +224,8 @@ async def _read_channel(ctx, p):
          "query": {"type": "str", "desc": "Case-insensitive substring to match"},
          "author_id": {"type": "int", "desc": "Only messages from this user"},
          "scan": {"type": "int", "desc": "How far back to scan (default 500, max 5000)"},
-         "limit": {"type": "int", "desc": "Max matches to return (default 25)"}})
+         "limit": {"type": "int", "desc": "Max matches to return (default 25)"}},
+        taints=True)
 async def _search_messages(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     scan = min(int(p.get("scan") or 500), 5000)
@@ -211,12 +249,14 @@ async def _search_messages(ctx, p):
 
 @action("get_message", identity.READ, "Fetch one message by id.",
         {"channel_id": {"type": "int", "required": True},
-         "message_id": {"type": "int", "required": True}})
+         "message_id": {"type": "int", "required": True}},
+        taints=True)
 async def _get_message(ctx, p):
     return msg_dict(await ctx.message(p["channel_id"], p["message_id"]))
 
 
-@action("list_guilds", identity.READ, "List every server Benham is in.", {})
+@action("list_guilds", identity.READ, "List every server Benham is in.", {},
+        taints=True)
 async def _list_guilds(ctx, p):
     out = []
     for g in ctx.client.guilds:
@@ -231,7 +271,8 @@ async def _list_guilds(ctx, p):
 
 @action("list_channels", identity.READ, "List channels in a server.",
         {"guild_id": {"type": "int", "required": True},
-         "kind": {"type": "str", "desc": "text | voice | category | all (default all)"}})
+         "kind": {"type": "str", "desc": "text | voice | category | all (default all)"}},
+        taints=True)
 async def _list_channels(ctx, p):
     g = ctx.guild(p["guild_id"])
     kind = (p.get("kind") or "all").lower()
@@ -253,7 +294,8 @@ async def _list_channels(ctx, p):
         "List members of a server. Requires the Server Members privileged intent.",
         {"guild_id": {"type": "int", "required": True},
          "limit": {"type": "int", "desc": "Default 100"},
-         "role_id": {"type": "int", "desc": "Only members with this role"}})
+         "role_id": {"type": "int", "desc": "Only members with this role"}},
+        taints=True)
 async def _list_members(ctx, p):
     g = ctx.guild(p["guild_id"])
     limit = int(p.get("limit") or 100)
@@ -272,7 +314,8 @@ async def _list_members(ctx, p):
 
 @action("member_info", identity.READ, "Everything Benham can see about one member.",
         {"guild_id": {"type": "int", "required": True},
-         "user_id": {"type": "int", "required": True}})
+         "user_id": {"type": "int", "required": True}},
+        taints=True)
 async def _member_info(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     d = member_dict(m)
@@ -283,7 +326,8 @@ async def _member_info(ctx, p):
 
 
 @action("list_roles", identity.READ, "List a server's roles, highest first.",
-        {"guild_id": {"type": "int", "required": True}})
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
 async def _list_roles(ctx, p):
     g = ctx.guild(p["guild_id"])
     roles = sorted(g.roles, key=lambda r: r.position, reverse=True)
@@ -295,7 +339,8 @@ async def _list_roles(ctx, p):
 
 
 @action("voice_members", identity.READ, "Who is in each voice channel right now.",
-        {"guild_id": {"type": "int", "required": True}})
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
 async def _voice_members(ctx, p):
     g = ctx.guild(p["guild_id"])
     out = []
@@ -308,7 +353,8 @@ async def _voice_members(ctx, p):
 
 @action("who_is_online", identity.READ,
         "Members who are not offline. Requires the Presence privileged intent.",
-        {"guild_id": {"type": "int", "required": True}})
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
 async def _who_is_online(ctx, p):
     g = ctx.guild(p["guild_id"])
     online = [m for m in g.members if str(getattr(m, "status", "offline")) != "offline"]
@@ -320,7 +366,8 @@ async def _who_is_online(ctx, p):
 
 
 @action("list_pins", identity.READ, "Pinned messages in a channel.",
-        {"channel_id": {"type": "int", "required": True}})
+        {"channel_id": {"type": "int", "required": True}},
+        taints=True)
 async def _list_pins(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     pins = await ch.pins()
@@ -329,7 +376,8 @@ async def _list_pins(ctx, p):
 
 @action("list_threads", identity.READ, "Active threads in a channel or server.",
         {"channel_id": {"type": "int", "desc": "Threads under this channel"},
-         "guild_id": {"type": "int", "desc": "All active threads in this server"}})
+         "guild_id": {"type": "int", "desc": "All active threads in this server"}},
+        taints=True)
 async def _list_threads(ctx, p):
     if p.get("channel_id"):
         ch = await ctx.channel(p["channel_id"])
@@ -345,7 +393,8 @@ async def _list_threads(ctx, p):
 
 
 @action("list_emojis", identity.READ, "Custom emoji in a server.",
-        {"guild_id": {"type": "int", "required": True}})
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
 async def _list_emojis(ctx, p):
     g = ctx.guild(p["guild_id"])
     return {"guild": g.name, "count": len(g.emojis), "emojis": [
@@ -354,7 +403,8 @@ async def _list_emojis(ctx, p):
 
 
 @action("guild_info", identity.READ, "Overview of one server.",
-        {"guild_id": {"type": "int", "required": True}})
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
 async def _guild_info(ctx, p):
     g = ctx.guild(p["guild_id"])
     perms = g.me.guild_permissions
@@ -377,7 +427,8 @@ async def _guild_info(ctx, p):
         {"channel_id": {"type": "int", "required": True},
          "content": {"type": "str", "required": True},
          "reply_to": {"type": "int", "desc": "Message id to reply to"},
-         "silent": {"type": "bool", "desc": "Suppress the push notification"}})
+         "silent": {"type": "bool", "desc": "Suppress the push notification"}},
+        outward=True, posts=True)
 async def _send_message(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     kw = {"silent": bool(p.get("silent"))}
@@ -396,7 +447,8 @@ async def _send_message(ctx, p):
          "url": {"type": "str"}, "footer": {"type": "str"},
          "image_url": {"type": "str"}, "thumbnail_url": {"type": "str"},
          "fields": {"type": "list", "desc": "[{name, value, inline}]"},
-         "content": {"type": "str", "desc": "Plain text above the embed"}})
+         "content": {"type": "str", "desc": "Plain text above the embed"}},
+        outward=True, posts=True)
 async def _send_embed(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     color = discord.Color.blurple()
@@ -425,7 +477,8 @@ async def _send_embed(ctx, p):
         {"channel_id": {"type": "int", "required": True},
          "path": {"type": "str", "required": True, "desc": "Local path on Tyler's PC"},
          "content": {"type": "str", "desc": "Message text alongside the file"},
-         "spoiler": {"type": "bool"}})
+         "spoiler": {"type": "bool"}},
+        outward=True, posts=True)
 async def _send_file(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     path = str(p["path"])
@@ -446,7 +499,8 @@ async def _send_file(ctx, p):
 
 @action("dm_user", identity.SPEAK, "Send a direct message to a user.",
         {"user_id": {"type": "int", "required": True},
-         "content": {"type": "str", "required": True}})
+         "content": {"type": "str", "required": True}},
+        outward=True)
 async def _dm_user(ctx, p):
     u = await ctx.user(p["user_id"])
     ch = u.dm_channel or await u.create_dm()
@@ -463,7 +517,8 @@ async def _dm_user(ctx, p):
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
          "emoji": {"type": "str", "required": True,
-                   "desc": "Unicode emoji, or '<:name:id>' for custom"}})
+                   "desc": "Unicode emoji, or '<:name:id>' for custom"}},
+        outward=True)
 async def _react(ctx, p):
     m = await ctx.message(p["channel_id"], p["message_id"])
     try:
@@ -493,7 +548,8 @@ async def _typing(ctx, p):
 @action("edit_message", identity.MANAGE, "Edit one of Benham's own messages.",
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
-         "content": {"type": "str", "required": True}})
+         "content": {"type": "str", "required": True}},
+        outward=True)
 async def _edit_message(ctx, p):
     m = await ctx.message(p["channel_id"], p["message_id"])
     if m.author.id != ctx.client.user.id:
@@ -564,7 +620,8 @@ async def _archive_thread(ctx, p):
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True},
          "role_id": {"type": "int", "required": True},
-         "reason": {"type": "str"}}, needs_guild=True)
+         "reason": {"type": "str"}}, needs_guild=True,
+        outward=True, always_confirm=True)
 async def _add_role(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     role = m.guild.get_role(int(p["role_id"]))
@@ -577,6 +634,14 @@ async def _add_role(ctx, p):
             f"'{role.name}' sits above Benham's own role - move Benham's role higher "
             "in Server Settings > Roles first"
         )
+    if ctx.dry_run:
+        perms = sorted(n for n, v in role.permissions if v)
+        notable = [x for x in perms if x in (
+            "administrator", "manage_guild", "manage_roles", "manage_channels",
+            "ban_members", "kick_members", "manage_messages", "mention_everyone")]
+        return {"summary": f"Give **{m}** the role **{role.name}** in **{m.guild.name}**",
+                "detail": (f"That role grants: {', '.join(notable) if notable else 'no elevated permissions'}."
+                           + (f"\n{len(role.members)} member(s) currently have it." if role.members else ""))}
     await m.add_roles(role, reason=p.get("reason") or "via Benham")
     return {"status": "role_added", "user": str(m), "role": role.name}
 
@@ -585,12 +650,18 @@ async def _add_role(ctx, p):
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True},
          "role_id": {"type": "int", "required": True},
-         "reason": {"type": "str"}}, needs_guild=True)
+         "reason": {"type": "str"}}, needs_guild=True,
+        outward=True, always_confirm=True)
 async def _remove_role(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     role = m.guild.get_role(int(p["role_id"]))
     if role is None:
         raise ActionError(f"no role {p['role_id']} in {m.guild.name}")
+    if ctx.dry_run:
+        has = any(r.id == role.id for r in m.roles)
+        return {"summary": f"Take the role **{role.name}** away from **{m}** in **{m.guild.name}**",
+                "detail": "They do not currently have it - this would be a no-op."
+                          if not has else "This removes whatever access that role granted them."}
     await m.remove_roles(role, reason=p.get("reason") or "via Benham")
     return {"status": "role_removed", "user": str(m), "role": role.name}
 
@@ -600,9 +671,13 @@ async def _remove_role(ctx, p):
          "name": {"type": "str", "required": True},
          "color": {"type": "str", "desc": "Hex like 'FF5555'"},
          "hoist": {"type": "bool", "desc": "Show separately in the member list"},
-         "mentionable": {"type": "bool"}}, needs_guild=True)
+         "mentionable": {"type": "bool"}}, needs_guild=True,
+        outward=True, always_confirm=True)
 async def _create_role(ctx, p):
     g = ctx.guild(p["guild_id"])
+    if ctx.dry_run:
+        return {"summary": f"Create a new role **{p['name']}** in **{g.name}**",
+                "detail": "It starts with no permissions; granting any is a separate step."}
     kw = {"name": str(p["name"]), "hoist": bool(p.get("hoist")),
           "mentionable": bool(p.get("mentionable")), "reason": "via Benham"}
     if p.get("color"):
@@ -614,7 +689,8 @@ async def _create_role(ctx, p):
 @action("set_nickname", identity.MANAGE, "Change a member's nickname (blank to clear).",
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True},
-         "nickname": {"type": "str"}}, needs_guild=True)
+         "nickname": {"type": "str"}}, needs_guild=True,
+        outward=True)
 async def _set_nickname(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     old = m.nick
@@ -627,7 +703,8 @@ async def _set_nickname(ctx, p):
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True},
          "minutes": {"type": "int", "required": True, "desc": "0 lifts the timeout; max 40320 (28d)"},
-         "reason": {"type": "str"}}, needs_guild=True)
+         "reason": {"type": "str"}}, needs_guild=True,
+        outward=True)
 async def _timeout_member(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     mins = int(p["minutes"])
@@ -686,7 +763,8 @@ async def _edit_channel(ctx, p):
 @action("create_invite", identity.MANAGE, "Create an invite link to a channel.",
         {"channel_id": {"type": "int", "required": True},
          "max_age_seconds": {"type": "int", "desc": "0 = never expires (default 86400)"},
-         "max_uses": {"type": "int", "desc": "0 = unlimited"}})
+         "max_uses": {"type": "int", "desc": "0 = unlimited"}},
+        outward=True)
 async def _create_invite(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     inv = await ch.create_invite(
@@ -698,7 +776,8 @@ async def _create_invite(ctx, p):
 
 @action("unban_member", identity.MANAGE, "Lift a ban (restorative, so not tier 3).",
         {"guild_id": {"type": "int", "required": True},
-         "user_id": {"type": "int", "required": True}}, needs_guild=True)
+         "user_id": {"type": "int", "required": True}}, needs_guild=True,
+        outward=True)
 async def _unban_member(ctx, p):
     g = ctx.guild(p["guild_id"])
     u = await ctx.user(p["user_id"])
@@ -744,7 +823,8 @@ async def _set_bot_nickname(ctx, p):
 
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
-         "name": {"type": "str", "required": True}})
+         "name": {"type": "str", "required": True}},
+        outward=True)
 async def _create_webhook(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     wh = await ch.create_webhook(name=str(p["name"]), reason="via Benham")
@@ -762,7 +842,8 @@ async def _create_webhook(ctx, p):
         "is free; every write or command asks Tyler for approval first, so expect "
         "this to take a while and do not retry if he says no.",
         {"task": {"type": "str", "required": True,
-                  "desc": "What to do, in plain language, with enough context to act alone"}})
+                  "desc": "What to do, in plain language, with enough context to act alone"}},
+        taints=True)
 async def _pc_task(ctx, p):
     # Imported lazily: the SDK pulls in a large dependency tree and spawns the
     # Claude Code CLI, and neither should be a cost paid by a bot that never
@@ -1018,25 +1099,39 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
     clean = validate(act, params or {})
     ctx = Ctx(client, log, dry_run=False, actor_id=actor_id)
 
-    if act.destructive:
+    gid = None
+    if act.destructive or act.posts or act.needs_confirm:
         gid = await _infer_guild(ctx, clean)
-        if not identity.destructive_allowed(gid):
-            gname = "a DM" if gid is None else f"guild {gid}"
-            raise ActionError(
-                f"`{name}` is destructive and {gname} is not on the destructive_guilds "
-                "allowlist in control.json. No confirmation can override this - the "
-                "allowlist is edited by hand, on purpose."
-            )
-        if not force:
-            ctx.dry_run = True
-            preview = await act.handler(ctx, clean)
-            # Log the PROPOSAL, not just the execution. Without this the audit trail
-            # records only what was destroyed, so a preview that was declined, ignored,
-            # or left to expire leaves no trace at all - and "what did it try to do"
-            # is exactly the question worth being able to answer after the fact.
-            log(f"PROPOSED {name} by {actor_id or 'code-session'} "
-                f"(guild {gid}): {preview.get('summary', '?')}")
-            return None, preview
+
+    if act.destructive and not identity.destructive_allowed(gid):
+        gname = "a DM" if gid is None else f"guild {gid}"
+        raise ActionError(
+            f"`{name}` is destructive and {gname} is not on the destructive_guilds "
+            "allowlist in control.json. No confirmation can override this - the "
+            "allowlist is edited by hand, on purpose."
+        )
+
+    # Posting scope cap. Arithmetic rather than judgement: it does not matter who
+    # asked or why, Benham cannot put content into a channel outside this list. The
+    # case it covers is Benham being invited to a new server whose members can then
+    # post text engineered to look like instructions.
+    if act.posts and not identity.posting_allowed(gid, clean.get("channel_id")):
+        raise ActionError(
+            f"`{name}` would post into channel {clean.get('channel_id')} "
+            f"(guild {gid}), which is not on the posting allowlist in control.json. "
+            "This is a hard scope limit - it is not something a confirmation unlocks."
+        )
+
+    if act.needs_confirm and not force:
+        ctx.dry_run = True
+        preview = await act.handler(ctx, clean)
+        # Log the PROPOSAL, not just the execution. Without this the audit trail
+        # records only what was destroyed, so a preview that was declined, ignored,
+        # or left to expire leaves no trace at all - and "what did it try to do"
+        # is exactly the question worth being able to answer after the fact.
+        log(f"PROPOSED {name} by {actor_id or 'code-session'} "
+            f"(guild {gid}): {preview.get('summary', '?')}")
+        return None, preview
 
     try:
         result = await act.handler(ctx, clean)

@@ -120,6 +120,40 @@ def agent_allowed(guild_id, user_id, is_dm):
         return False
 
 
+def posting_allowed(guild_id, channel_id):
+    """Whether Benham may post content into this channel at all.
+
+    A hard scope cap, independent of who asked and of why. The case it exists for:
+    Benham gets invited to a server, someone there posts text engineered to look
+    like an instruction, and a later read pulls it into context. Every other defence
+    against that is a judgement call somewhere; this one is arithmetic.
+
+    `post_channels` wins when set (the tight configuration). Otherwise the channel's
+    guild must be on `post_guilds`. An empty/absent config allows everything, which
+    keeps existing behaviour for anyone who never sets it - the cap is opt-in, and a
+    silently-restrictive default would look like the bot being broken.
+
+    A channel with no guild is a DM. Those are allowed here and governed instead by
+    the taint rule, which is the relevant control for "Benham messaged a stranger".
+    """
+    cfg_channels = set(int(c) for c in (CONTROL.get("post_channels") or []))
+    if cfg_channels:
+        try:
+            return int(channel_id) in cfg_channels
+        except (TypeError, ValueError):
+            return False
+
+    cfg_guilds = CONTROL.get("post_guilds")
+    if not cfg_guilds:
+        return True
+    if guild_id is None:
+        return True  # DM; see docstring
+    try:
+        return int(guild_id) in set(int(g) for g in cfg_guilds)
+    except (TypeError, ValueError):
+        return False
+
+
 def refusal(user_id, what="that"):
     """The line Benham gives a non-owner who tries to direct it.
 
