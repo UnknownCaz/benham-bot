@@ -331,6 +331,66 @@ async def main():
     check("every capability refuses a stranger context",
           all(r.endswith("=refused") for r in refused), True)
 
+    print("\nThe other half of confirmation: Tyler's yes actually fires the action")
+    # Everything above proves a stranger's "yes" fires nothing. Until now no test
+    # proved the positive half - fire_confirmed was stubbed in every suite, so a
+    # broken execution path (wrong params, wrong context, missing force, double
+    # fire) would have passed the whole battery. This parks a REAL pending through
+    # the real confirm module and lets the real fire_confirmed run, watching only
+    # capabilities.run itself.
+    reset()
+    fired = []
+    real_run = capabilities.run
+
+    async def watched_run(client, log, name, params, actor_id=None, dry_run=False,
+                          force=False, call_ctx=None, **kw):
+        fired.append({"name": name, "params": dict(params), "force": force,
+                      "actor_id": actor_id, "call_ctx": call_ctx})
+        return {"status": "done"}, None
+
+    capabilities.run = watched_run
+    try:
+        ctx = policy.CallContext.owner_dm(TYLER, 555)
+        parked_params = {"channel_id": 1, "older_than_days": 30}
+        confirm.park("purge_messages", parked_params, {"summary": "delete 500"},
+                     TYLER, "dm", call_ctx=ctx)
+        await bot.on_message(_Message(TYLER, "yes"))
+        check("the parked action executed exactly once", len(fired), 1)
+        check("...the parked action, with the PARKED params",
+              (fired[0]["name"], fired[0]["params"]),
+              ("purge_messages", parked_params))
+        check("...with force=True (the one legitimate source of force)",
+              fired[0]["force"], True)
+        check("...as the actor who parked it", fired[0]["actor_id"], TYLER)
+        check("...replaying the ORIGINAL context, not a fresh one",
+              fired[0]["call_ctx"] is ctx, True)
+        check("Tyler was told it is done",
+              any("Done" in s for s in sent), True)
+        check("the pending slot is consumed", confirm.current(), None)
+
+        # Single fire: the same yes again must find nothing to redeem.
+        await bot.on_message(_Message(TYLER, "yes"))
+        check("a second 'yes' fires nothing (single-fire)", len(fired), 1)
+
+        # The token-addressed form works through the same live wiring.
+        reset(); fired.clear()
+        p2 = confirm.park("purge_messages", parked_params, {"summary": "delete 500"},
+                          TYLER, "dm", call_ctx=ctx)
+        await bot.on_message(_Message(TYLER, f"yes {p2.token}"))
+        check("'yes <token>' fires the matching pending", len(fired), 1)
+
+        # And "no" cancels without firing.
+        reset(); fired.clear()
+        confirm.park("purge_messages", parked_params, {"summary": "delete 500"},
+                     TYLER, "dm", call_ctx=ctx)
+        await bot.on_message(_Message(TYLER, "no"))
+        check("'no' fires nothing", len(fired), 0)
+        check("...and clears the pending", confirm.current(), None)
+        check("...and says so", any("Cancelled" in s for s in sent), True)
+    finally:
+        capabilities.run = real_run
+        confirm.cancel()
+
     print("\nWhat a stranger could reach IF the gate were bypassed")
     tiers = {}
     for name, act in capabilities.REGISTRY.items():

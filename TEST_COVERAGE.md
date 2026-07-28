@@ -36,6 +36,12 @@ Two housekeeping notes before the gaps:
 
 ## Priority 1 — security-critical code that exists in production but is never exercised
 
+> **Status: all five closed.** The gaps below were found by the audit and have
+> since been covered — items 1 and 4 in `test_guest.py`, item 2 in
+> `test_owner_gate.py`, item 3 in `test_injection.py`, item 5 by the new
+> `test_outbox.py`. The descriptions are kept as written because they explain
+> what those tests exist to hold.
+
 These are gaps *inside* areas that look covered, which is exactly why they rank
 highest: a regression here would be invisible to the current suite.
 
@@ -191,7 +197,8 @@ Keeping the script convention, two small additions would raise the floor:
   suites are already offline-by-design with stub clients, so they should run
   in CI as-is; the only environment needs are `BOT_KEY` set to a dummy value
   and an `exaroton_watch.json` (or making `bot.py` tolerate its absence).
-- **README:** add `test_guest.py` to the `## Testing` run list (line 460), and
+- **README:** ~~add `test_guest.py` to the `## Testing` run list~~ (done, along
+  with `test_outbox.py`), and
   consider writing down the suite's conventions for future test authors —
   drive the real handlers, include a positive control case, watch every
   invocation rather than the interesting flag, restore patched module

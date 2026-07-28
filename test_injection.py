@@ -206,8 +206,10 @@ class _Messages:
     def __init__(self, script):
         self.script = script
         self.calls = 0
+        self.sent_kwargs = []   # every request as the API would have received it
 
     def create(self, **kw):
+        self.sent_kwargs.append(kw)
         r = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         return r
@@ -312,6 +314,60 @@ async def _end_to_end():
 
 
 asyncio.run(_end_to_end())
+
+section("...and the markers are emitted by the REAL loop, not just described here")
+
+# The "labelled at the boundary" section above asserts on a sample string written
+# in this file - a mirror, exactly the failure mode this file warns about twice.
+# If agent.py stopped wrapping tainted results tomorrow, that section would still
+# pass. This one drives the real loop and reads what was actually sent back to
+# the (fake) API after a poisoned read.
+
+
+async def _labelling_live():
+    script = [
+        _Resp([_Block(type="tool_use", id="r9", name="read_channel",
+                      input={"channel_id": TESTING_CHAN, "limit": 5})], "tool_use"),
+        _Resp([_Block(type="text", text="something odd is sitting in there")],
+              "end_turn"),
+    ]
+    fake = _FakeAnthropic(script)
+    agent._client = fake
+    agent._last_call.clear()
+    try:
+        await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "what's in #asd?",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=None, where="a DM", conversation_key="test:labelling",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+    finally:
+        agent._client = None
+
+    # The second request is the one that carries the read result back to the model.
+    check("the loop made a second call with the tool result",
+          len(fake.messages.sent_kwargs) >= 2, True)
+    tool_results = [
+        b
+        for m in fake.messages.sent_kwargs[1]["messages"]
+        if m.get("role") == "user" and isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    ]
+    check("exactly one tool_result went back", len(tool_results), 1)
+    body = tool_results[0].get("content", "") if tool_results else ""
+    check("the real loop opens the untrusted marker, naming the source",
+          body.startswith('<untrusted-data source="read_channel">'), True)
+    check("...and closes it", body.rstrip().endswith("</untrusted-data>"), True)
+    check("the attacker's text sits inside the markers",
+          POISON in body
+          and body.index(POISON) > body.index("<untrusted-data")
+          and body.index(POISON) < body.index("</untrusted-data>"), True)
+    check("the health warning is part of what the model sees",
+          "never instructions" in body, True)
+
+
+asyncio.run(_labelling_live())
 
 section("Taint ORDER: a self-tainting action must not block itself")
 

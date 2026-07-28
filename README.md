@@ -464,6 +464,8 @@ python test_control.py      # gates, allowlists, confirm matching, agent history
 python test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
 python test_injection.py    # can text someone else wrote make Benham act?
 python test_policy.py       # every capability x every origin, plus the rule matrix
+python test_guest.py        # guests reach conversation and nothing else, quotas hold under load
+python test_outbox.py       # the outbox->poller ingress: atomicity, tokens, the chokepoint
 ```
 
 Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want
