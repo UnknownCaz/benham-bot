@@ -466,6 +466,10 @@ python test_injection.py    # can text someone else wrote make Benham act?
 python test_policy.py       # every capability x every origin, plus the rule matrix
 python test_guest.py        # guests reach conversation and nothing else, quotas hold under load
 python test_outbox.py       # the outbox->poller ingress: atomicity, tokens, the chokepoint
+python test_brain.py        # the <<...>> directive grammar guest.py's stripping relies on
+python test_text_utils.py   # bot.py's pure helpers: message splitting, wake words, shortcuts
+python test_codesession.py  # the PC gate's SDK-free half: approval text, answers, SECRET-READ
+python test_jsonio.py       # the JSON/JSONL helpers everything's state sits on
 ```
 
 Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want

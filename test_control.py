@@ -74,6 +74,72 @@ check("Chillbar refused", identity.destructive_allowed(CHILLBAR), False)
 check("DM (no guild) refused", identity.destructive_allowed(None), False)
 check("unknown guild refused", identity.destructive_allowed(1), False)
 
+# ------------------------------------------------------ control.json loading
+section("load_control — a missing config costs capability, never safety")
+_ctl_file = identity.CONTROL_FILE
+try:
+    identity.CONTROL_FILE = os.path.join(os.path.dirname(_ctl_file),
+                                         "_no_such_control.json")
+    cfg = identity.load_control()
+    check("no file still names an owner", cfg["owner_ids"],
+          [273967061619965952])
+    check("no file allows destruction nowhere", cfg["destructive_guilds"], [])
+    check("no file allows the agent in no guild", cfg["agent_guilds"], [])
+    check("no file whitelists no guests", cfg["guest"], {})
+
+    import jsonio  # noqa: E402
+    _tmp_ctl = identity.CONTROL_FILE + ".tmp-test"
+    jsonio.write_json(_tmp_ctl, {
+        "owner_ids": [1, 2],
+        "_owner_ids": "an annotation, not a setting",
+        "_comment": "also not a setting",
+    })
+    identity.CONTROL_FILE = _tmp_ctl
+    cfg = identity.load_control()
+    check("provided keys override the defaults", cfg["owner_ids"], [1, 2])
+    check("underscore annotation keys are skipped",
+          any(k.startswith("_") for k in cfg), False)
+    check("unprovided keys keep their restrictive defaults",
+          cfg["destructive_guilds"], [])
+    os.remove(_tmp_ctl)
+finally:
+    identity.CONTROL_FILE = _ctl_file
+
+# --------------------------------------------------------- posting precedence
+section("posting_allowed — channels beat guilds beat allow-all")
+_post_cfg = {k: identity.CONTROL.get(k) for k in ("post_channels", "post_guilds")}
+try:
+    # Tightest config: an explicit channel list wins outright.
+    identity.CONTROL["post_channels"] = [555]
+    identity.CONTROL["post_guilds"] = [TESTING]
+    check("a listed channel is allowed wherever it lives",
+          identity.posting_allowed(CHILLBAR, 555), True)
+    check("an unlisted channel is refused even in a listed guild",
+          identity.posting_allowed(TESTING, 556), False)
+    check("a garbage channel id fails closed",
+          identity.posting_allowed(TESTING, "nope"), False)
+
+    # Middle: no channel list, so the guild list governs.
+    identity.CONTROL["post_channels"] = []
+    check("a listed guild is allowed", identity.posting_allowed(TESTING, 1), True)
+    check("an unlisted guild is refused", identity.posting_allowed(CHILLBAR + 1, 1),
+          False)
+    check("a DM is allowed here — the taint rule governs DMs instead",
+          identity.posting_allowed(None, 1), True)
+    check("a garbage guild id fails closed",
+          identity.posting_allowed("nope", 1), False)
+
+    # Loosest: nothing configured means no cap (opt-in, documented as such).
+    identity.CONTROL["post_guilds"] = []
+    check("no config at all allows everything",
+          identity.posting_allowed(999, 999), True)
+finally:
+    for k, v in _post_cfg.items():
+        if v is None:
+            identity.CONTROL.pop(k, None)
+        else:
+            identity.CONTROL[k] = v
+
 
 class _StubChannel:
     """Minimum surface capabilities.run touches before the allowlist check."""
