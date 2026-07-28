@@ -1318,7 +1318,11 @@ async def handle_guest_dm(message):
                 guest.respond, message.author.id, text, log)
         await reply_in(message.channel, reply)
     except Exception as e:  # noqa: BLE001 - one guest's bad turn never takes the bot down
-        log(f"guest chat failed for {message.author.id}:\n{traceback.format_exc()}")
+        # check() charged this message before the call. It did not happen, so give it
+        # back - otherwise a run of transient errors silently eats someone's day.
+        guest.refund(message.author.id)
+        log(f"guest chat failed for {message.author.id} (message refunded):\n"
+            f"{traceback.format_exc()}")
         await reply_in(message.channel,
                        f"Something broke on my end there - {type(e).__name__}. Try again?")
 

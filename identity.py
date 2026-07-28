@@ -104,9 +104,16 @@ GUEST_MODES = frozenset({"chat"})
 def guest_enabled():
     """Whether the guest surface is switched on and set to a mode this build knows.
 
-    Both halves matter. `enabled` is the kill switch Tyler flips; the mode check is
-    what stops a control.json written for a later build from silently running guests
+    Both halves matter. `enabled` is the switch Tyler flips; the mode check is what
+    stops a control.json written for a later build from silently running guests
     through the only path this one happens to have.
+
+    NOT a live kill switch. CONTROL is read once at import, so `enabled: false` - or
+    striking someone from `ids` - takes effect on the next restart and not before.
+    Cutting a guest off right now means bouncing the bot. That is how every other
+    setting in this file behaves (owner_ids and destructive_guilds included), and
+    making this one reload on its own would put a second, different answer to "who
+    may talk to Benham" in the codebase, which is worse than the delay.
     """
     if not bool(GUEST.get("enabled", False)):
         return False
