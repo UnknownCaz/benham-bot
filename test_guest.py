@@ -383,6 +383,10 @@ class _Msg:
         self.guild = None          # a DM
         self.channel = _Channel()
         self.mentions = []
+        # Every real Message carries a reference (None when it isn't a reply); the
+        # pc.. branch reads it, and an owner message driven through deliver() can
+        # reach that branch.
+        self.reference = None
 
 
 class _Pending:

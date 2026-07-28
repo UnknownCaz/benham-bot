@@ -93,6 +93,10 @@ class _Message:
         # whether a file arrived, so a stub without it tests a message shape that
         # cannot exist.
         self.attachments = list(attachments)
+        # Same rule: every real Message carries a reference (None when it isn't a
+        # reply), and the pc.. branch reads it. test_pc_reply.py owns the non-None
+        # cases.
+        self.reference = None
 
 
 class _StubClient:
