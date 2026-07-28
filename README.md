@@ -324,10 +324,52 @@ Portal.
 | `agent_persona.md` | text-agent personality (editable) | yes |
 | `agent_memory.json` | per-conversation history | no (gitignored - private) |
 | `webhooks.json` | webhook URLs | no (gitignored) |
+| `guest_persona.md` | guest-facing prompt (separate from `persona.md`) | yes |
+| `guest_memory.json` / `guest_usage.json` | guest conversations + daily counters | no (gitignored - private) |
 | `logs/` | rotated-out `boot*.out/.err` and run logs | no (gitignored) |
 
 Friend-server reads and derived data (`read_full*`, `*.u8`, `*.tsv`) are gitignored so private chat
 is never committed.
+
+### Guests
+
+Benham takes direction from one person. Guests are the one exception, and a narrow one: a
+whitelisted non-owner can hold a **conversation** with Claude by DM, and can do nothing else.
+
+The property that makes this safe is not a rule, it is an absence. `guest.py` calls the Messages
+API with **no `tools` argument** - not an empty list, not a filtered one. So "can a guest reach
+capability X" has the same answer for all 47 of them, for `pc_task`, and for anything added
+later, without that code knowing what a capability is.
+
+Two independent denials back it up in `policy.py`, either of which would be sufficient:
+
+- `Origin.GUEST_DM` is in `Origin.HUMAN`, so `rule_owner` refuses it
+- `Origin.GUEST_DM` is **not** in `DEFAULT_ORIGINS`, so `rule_origin_allowed` refuses it too
+
+A capability written next year inherits both without anyone remembering guests exist.
+
+Other properties worth knowing:
+
+- **DM only.** A mention in a guild is not a guest route.
+- **Separate memory file.** `guest_memory.json`, not a prefixed key in `agent_memory.json`, so a
+  guest and Tyler cannot end up in one thread through a typo.
+- **Its own prompt.** `guest_persona.md`, because `persona.md` names Tyler, says the model has
+  real tools, and describes operating his machine - all wrong here, the last one dangerously so.
+- **Directives stripped, never applied.** A reply's `<<persona: ...>>` is removed rather than
+  written to `personality_overrides.txt`, which every other surface reads.
+- **The owner is never a guest**, even if his id is added to the list.
+- **Capped**, because every guest message bills Tyler: per-guest daily, global daily, and a
+  cooldown.
+
+Turn it on by editing `control.json` (see `_guest` in `control.json.example`) and restarting.
+`python guest.py status` shows the allowlist, caps and today's spend; `python guest.py forget
+<user_id>` drops one conversation.
+
+`test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
+codebase already had once was a gate that was written, tested and green while the live path went
+somewhere else. It asserts that a guest saying "yes" cannot fire a pending tier-3 confirmation or
+approve a suspended Claude Code permission request - and includes an owner case to prove those
+assertions are not passing merely because nothing ran.
 
 ### Logs
 

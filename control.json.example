@@ -33,6 +33,19 @@
   },
   "_pc": "Gives Benham a REAL Claude Code session on the machine (codesession.py), with Tyler's own skills loaded. Reading/searching is free; every write, command and subagent DMs him for approval and blocks until he answers - a timeout denies. enabled=false switches the whole thing off. use_api_key=true bills ANTHROPIC_API_KEY per task; set it false after running `claude` once interactively to bill a Claude subscription instead. NOTE: workdir is where it starts, NOT a sandbox - a session can reach the whole filesystem.",
 
+  "guest": {
+    "enabled": false,
+    "mode": "chat",
+    "ids": [],
+    "model": "claude-haiku-4-5",
+    "max_tokens": 500,
+    "history_turns": 10,
+    "cooldown_seconds": 3,
+    "daily_message_cap": 100,
+    "global_daily_cap": 400
+  },
+  "_guest": "Lets whitelisted NON-owners hold a plain conversation with Claude by DM. Conversation ONLY: the guest path passes no tools to the API at all, so no Discord action, no channel read and no PC access is reachable from it - a guest id buys a reply instead of a refusal, and nothing else. ids: Discord user ids; an owner id here is ignored. mode: only 'chat' exists today; an unrecognised mode disables guest chat rather than guessing. Guests are DM-only and cannot be reached by mention. Caps are per UTC-local calendar day and reset on first message after midnight; every message bills Tyler, which is what the caps are for. Separate memory file (guest_memory.json) - a guest never sees, and is never seen by, Tyler's own conversation.",
+
   "confirm": {
     "ttl_seconds": 3600,
     "conversation_ttl_seconds": 600

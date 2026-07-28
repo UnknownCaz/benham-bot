@@ -17,6 +17,10 @@ exaroton_watch.json
 control.json
 # Agent conversation history — private message content.
 agent_memory.json
+# Guest conversations and their daily counters. Other people's message content and
+# a record of who talked to Benham and how much; never commit either.
+guest_memory.json
+guest_usage.json
 
 # Friend-server reads / derived social data — private, never commit
 read_full*

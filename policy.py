@@ -52,16 +52,36 @@ class Origin:
     OWNER_VOICE = "owner_voice"  # spoken in a voice channel
     LOCAL_CLI = "local_cli"      # outbox/do.py - the caller already has the machine
     SYSTEM = "system"            # startup, watchdog, scheduled work; no human behind it
+    GUEST_DM = "guest_dm"        # DM from a whitelisted non-owner; conversation only
 
-    ALL = frozenset({OWNER_DM, OWNER_GUILD, OWNER_VOICE, LOCAL_CLI, SYSTEM})
+    ALL = frozenset({OWNER_DM, OWNER_GUILD, OWNER_VOICE, LOCAL_CLI, SYSTEM,
+                     GUEST_DM})
 
     # Origins that carry a human actor whose identity can be checked.
-    HUMAN = frozenset({OWNER_DM, OWNER_GUILD, OWNER_VOICE})
+    #
+    # GUEST_DM is deliberately in here even though a guest is never an owner, and
+    # that is the point: rule_owner checks exactly this set, so listing a guest
+    # origin as human makes every capability refuse it without a line being written
+    # about guests. The alternative - leaving guests out so they skip rule_owner -
+    # would be a set membership standing between a stranger and 47 actions.
+    HUMAN = frozenset({OWNER_DM, OWNER_GUILD, OWNER_VOICE, GUEST_DM})
+
+    # Origins belonging to someone who is not the owner. Nothing in this file grants
+    # them anything; it exists so callers can ask "is this a guest route" without
+    # re-listing the members and drifting from this file later.
+    GUEST = frozenset({GUEST_DM})
 
 
-# What a capability may be reached from when it does not say otherwise. Every human
-# route plus the local CLI; SYSTEM is deliberately absent so an automated caller
-# cannot reach a capability that was never meant for one.
+# What a capability may be reached from when it does not say otherwise. Every OWNER
+# route plus the local CLI. Two absences are deliberate and load-bearing:
+#
+#   SYSTEM, so an automated caller cannot reach a capability never meant for one.
+#   GUEST_DM, so every capability in the registry is unreachable by a guest without
+#   anyone having to remember to exclude them. A new capability added next year is
+#   guest-proof on the day it is written, because the default it inherits says so.
+#
+# This is the second of the two independent denials guests get; rule_owner is the
+# first. Either alone would be sufficient, which is the reason for having both.
 DEFAULT_ORIGINS = frozenset({
     Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE, Origin.LOCAL_CLI,
 })
@@ -102,6 +122,20 @@ class CallContext:
     def owner_voice(cls, actor_id, guild_id, channel_id=None):
         return cls(Origin.OWNER_VOICE, actor_id=actor_id, guild_id=guild_id,
                    channel_id=channel_id)
+
+    @classmethod
+    def guest_dm(cls, actor_id, channel_id=None):
+        """A DM from a whitelisted non-owner.
+
+        Always tainted. A guest's own message is text a person other than the owner
+        wrote, which is the exact thing `tainted` means - so the flag is set at
+        construction rather than left to a caller to remember. Guests reach no
+        capability, so today this changes nothing; it is here so that if a later
+        change ever does hand them one, it arrives already carrying the truth about
+        where its input came from instead of claiming to be clean.
+        """
+        return cls(Origin.GUEST_DM, actor_id=actor_id, channel_id=channel_id,
+                   tainted=True)
 
     @classmethod
     def local(cls, actor_id=None):
@@ -428,6 +462,14 @@ def may_engage_agent(ctx):
     """
     if ctx is None or ctx.origin not in Origin.ALL:
         return _deny("engage_context", "No call context; refusing to engage.")
+    # Guests never drive the tool-carrying agent. The owner check below would already
+    # refuse them - GUEST_DM is in HUMAN and a guest is not an owner - but stating it
+    # separately means the refusal names the actual reason, and means a future edit
+    # that loosens the owner check cannot silently hand guests the tool loop.
+    # Guest conversation is a different function entirely: may_chat_as_guest.
+    if ctx.origin in Origin.GUEST:
+        return _deny("engage_guest",
+                     f"user {ctx.actor_id} is a guest; the tool agent is owner-only")
     # Same reasoning as rule_owner: on_message already refused a non-owner before
     # reaching here, and this says it again anyway. Spending an API call is itself
     # the thing being protected, so the check that decides it should not depend on
@@ -444,6 +486,34 @@ def may_engage_agent(ctx):
                      f"guild {ctx.guild_id} is not on agent_guilds in control.json")
     return _deny("engage_origin",
                  f"the text agent is not reachable from {ctx.origin}")
+
+
+def may_chat_as_guest(ctx):
+    """Whether a plain conversation may happen with a non-owner on this route.
+
+    The counterpart to may_engage_agent, and deliberately a different function
+    rather than a flag on it. What it authorises is not a weaker version of the
+    agent - it is a different thing: text in, text out, no capability list handed to
+    the model at all. Sharing one entry point between "may use tools" and "may not"
+    is how the second quietly becomes the first.
+
+    Structural checks only. Whether this guest has burned their daily quota is
+    guest.py's business, because it is state rather than authority, and a decision
+    that changes with a counter does not belong in the file that says what the rules
+    are. Who counts as a guest lives in identity.py next to is_owner, for the same
+    reason owner_ids does: it is a question about people, not about calls.
+    """
+    if ctx is None or ctx.origin not in Origin.ALL:
+        return _deny("guest_context", "No call context; refusing to chat.")
+    if ctx.origin not in Origin.GUEST:
+        return _deny("guest_origin",
+                     f"guest chat is not reachable from {ctx.origin}")
+    if not identity.guest_enabled():
+        return _deny("guest_disabled", "guest chat is switched off in control.json")
+    if not identity.is_guest(ctx.actor_id):
+        return _deny("guest_allowlist",
+                     f"user {ctx.actor_id} is not on the guest allowlist")
+    return _ALLOW
 
 
 def authorize(action, ctx):
