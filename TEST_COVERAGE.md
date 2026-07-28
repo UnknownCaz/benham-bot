@@ -159,6 +159,17 @@ there to test.)
 
 ## Priority 3 — untested pure logic (cheap wins, in value order)
 
+> **Status: closed.** Four new suites — `test_brain.py` (the directive grammar,
+> including the prose-eating regression and the `:`/`=` persona drift),
+> `test_text_utils.py` (`split_for_discord`, `is_wake`, `looks_like_noise`,
+> `local_shortcut`, `apply_voice_settings` clamping, `allowed_servers` /
+> `is_operator`), `test_codesession.py` (`_describe` incl. the command-field
+> rule and truncation windows, `_progress_label`, `answer`/`pending_request`
+> late-answer semantics, `_SECRET_RE`, the read-allowlist shape), and
+> `test_jsonio.py` (defaults, atomic replace, rotation, torn-final-line
+> tolerance). `identity.load_control` defaults and `posting_allowed`'s
+> three-way precedence are covered directly in `test_control.py`.
+
 None of these need Discord stubs; most need no mocking at all.
 
 1. **`brain.py` directive grammar.** `strip_directive` is a security
