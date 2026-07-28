@@ -24,7 +24,11 @@ someone launched by hand is still running.
 
     powershell -NoProfile -ExecutionPolicy Bypass -File supervise_bot.ps1
 
-Normally launched by supervise_bot.bat from a logon Scheduled Task.
+Normally launched by the benham-bot logon Scheduled Task, whose action wraps this in
+"conhost.exe --headless" so it runs with no console window at all. Do not "simplify" that to
+powershell -WindowStyle Hidden: on Windows 11 the console gets handed off to Windows Terminal,
+which ignores the hidden style, and the supervisor reappears in Alt+Tab. Nothing is lost by
+running headless - every line below also goes to supervise.log.
 #>
 param(
     [int]$MaxLogMB = 5,           # rotate supervise.log past this

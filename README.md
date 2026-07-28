@@ -29,7 +29,7 @@ Benham is the body Claude wears in Discord. Tyler talks to it, Claude acts throu
 the channel between them when Tyler is away from the PC. Two paths lead to the same capabilities:
 
 ```
-  Tyler DMs Benham  ->  owner gate  ->  agent.py (Claude + 45 tools)  ->  capabilities.py
+  Tyler DMs Benham  ->  owner gate  ->  agent.py (Claude + 49 tools)  ->  capabilities.py
                                                                               |
   Claude Code       ->  do.py  ->  outbox/*.json  ->  bot.py poller  ->  capabilities.py
                                                                               |
@@ -50,9 +50,9 @@ Every capability declares one, and `capabilities.run()` enforces it.
 
 | tier | examples | gate |
 |---|---|---|
-| **read** (14) | `read_channel`, `search_messages`, `list_roles`, `guild_info` | none |
-| **speak** (6) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
-| **manage** (18) | `pin_message`, `add_role`, `create_channel`, `timeout_member`, `set_presence` | owner only |
+| **read** (16) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
+| **speak** (7) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
+| **manage** (19) | `pin_message`, `add_role`, `create_channel`, `timeout_member`, `set_presence` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 
 Run `python do.py list` for the full catalogue, `python do.py help <action>` for one action's
@@ -146,7 +146,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python do.py help <action>` | One action's parameters, which are required, and its tier. |
 | `python do.py <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
-`do.py` covers all 45 registered capabilities and replaces the need for a script per action. The
+`do.py` covers all 49 registered capabilities and replaces the need for a script per action. The
 older single-purpose CLIs below still work and route through their original code paths.
 
 ### CLI - write to Discord (via the outbox; bot must be running)
@@ -167,6 +167,8 @@ Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_ou
 | `python fetch.py <channel_id> [limit=20]` | Pull recent history into `outbox/sent/<name>_result.json` (via the running bot). |
 | `python catchup.py <channel_id> [limit=40]` | Invisible one-shot: print one channel's recent messages, post nothing, exit. |
 | `python read_history.py [limit=100]` | Invisible one-shot: same, across every non-Testing guild at once. |
+| `python do.py find_user query=<name>` | Turn a name, @mention or id into the `user_id` every other action wants. Searches every server unless given `guild_id=`. |
+| `python do.py read_attachments channel_id=<id> message_id=<id>` | Download that message's files into `downloads/<message_id>/`; text files come back with their contents. `save=false` to look without keeping. |
 | tail `inbox.jsonl` | Live feed of every message the running bot sees (one JSON per line). |
 
 ### CLI - voice (via the outbox)
@@ -186,7 +188,7 @@ the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
 | command | what it does |
 |---------|--------------|
 | `python status.py` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
-| `supervise_bot.bat` | Restart-on-crash wrapper for always-on running (launch from a logon Scheduled Task). Shim over `supervise_bot.ps1`. |
+| `supervise_bot.bat` | Restart-on-crash wrapper for always-on running, for running by hand. Shim over `supervise_bot.ps1`, which the `benham-bot` logon task launches directly and windowless. |
 | `tray_bot.ps1` | Tray icon showing supervisor/bot state. A monitor only - closing it does not stop anything. |
 
 ### In-Discord slash commands
@@ -306,8 +308,9 @@ python bot.py            # foreground; logs in, writes channels.json, starts the
 
 ### 24/7 supervision
 
-`supervise_bot.bat` (a shim over `supervise_bot.ps1`) keeps exactly one `bot.py` alive. It is
-registered as a **logon Scheduled Task named `benham-bot`**, so it comes back after a reboot.
+`supervise_bot.ps1` keeps exactly one `bot.py` alive. It is registered as a **logon Scheduled Task
+named `benham-bot`**, so it comes back after a reboot. (`supervise_bot.bat` is the hand-run entry
+point for the same script; the task invokes the `.ps1` directly.)
 
 ```powershell
 Get-ScheduledTask benham-bot        # Ready = armed, Running = supervising now
@@ -315,7 +318,17 @@ Start-ScheduledTask benham-bot      # start without waiting for a logon
 Stop-ScheduledTask  benham-bot      # stop supervising (does not stop a bot already up)
 ```
 
-Three behaviours worth knowing:
+Four behaviours worth knowing:
+
+**It runs windowless, and `-WindowStyle Hidden` is not what does it.** The task action is
+`conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File supervise_bot.ps1`.
+The obvious spelling - `powershell.exe -WindowStyle Hidden` - looks right and silently does not
+work on Windows 11: with the default terminal set to "Let Windows decide", the console is handed
+off to Windows Terminal, which ignores the hidden window style and puts a terminal in Alt+Tab for
+a process nobody needs to look at. `--headless` forces the legacy console host with no window and
+skips that handoff. Nothing is lost by it - every line already goes to `supervise.log`, and the
+tray icon is the thing meant to be looked at. Task Scheduler still reports `Running` correctly,
+because `conhost` stays alive for as long as the supervisor does, which is what the tray reads.
 
 **It gives up on a crash loop.** An exit after 60s of uptime is an event, so it restarts in 10s.
 Five exits in a row that each lasted under 60s is a bot that *cannot start* - bad token, import
@@ -441,6 +454,39 @@ the process, so the live pair stays there; older pairs get moved into `logs/`. B
 `status.py` search the root and `logs/`, so archiving a capture never hides it from a report -
 `usage.py --all` still sees the full history. Pruning `logs/` is what actually discards it.
 
+### Attachments
+
+**Sending.** `send_file` takes `path=` for one file or `paths=` for several (Discord's limits are
+10 files and 25MB per message, both checked locally so the failure names the file rather than
+arriving as a bare 413). `dm_user` takes the same parameters, and its `content` is optional when a
+file is attached. Both are tier 1 and `outward`, so once Benham has read anything a third party
+wrote, sending a file needs an explicit confirmation - and that preview **names the files**, which
+is the only reason it is a meaningful approval. `send_file` is also `posts`, so the posting
+allowlist caps which servers it can reach at all.
+
+**Reading.** `read_attachments channel_id= message_id=` downloads what one message carries into
+`downloads/<message_id>/` (gitignored) and returns each file's name, size and type; text files come
+back with their contents inline, capped at 20k characters. `save=false` reports without keeping
+anything, `index=` picks one file, `max_bytes=` raises the 8MB-per-file default.
+
+It is tier 0 because three properties make a mistaken call cost nothing, and the tier only holds
+while all three do:
+
+1. **No `url` parameter.** It fetches what a *named message* carries. A general "download this URL"
+   tool would be aimed by whatever text Benham last read, which is the exact shape of attack the
+   injection defences exist to refuse.
+2. **Bytes land only under `downloads/`, under a name this module rewrites.** The uploader controls
+   that filename and nothing else - `..\..\Windows\System32\evil.dll` is a legal thing to call a
+   Discord upload, and `CON.txt` is a device rather than a file. The rewrite is reported in the
+   result rather than done silently, and a final `realpath` check refuses anything that still
+   resolves outside the folder.
+3. **Nothing is ever run.** A Windows-runnable extension is flagged `executable: true` and written
+   anyway. Flagging rather than blocking is deliberate: a blocklist would refuse ordinary work
+   (`.jar` mod files) while preventing nothing, since the file is only ever bytes on disk.
+
+Everything it returns is `taints`-marked, so the agent wraps it in `<untrusted-data>` markers before
+the model sees it - a crash log someone uploaded is information to report, not instructions.
+
 ### Privileged intents
 
 `members` and `presences` default to **off** in `control.json`. discord.py refuses to log in at all
@@ -449,9 +495,16 @@ the bot on the next restart. Turning them on costs two clicks in **Dev Portal â†
 Gateway Intents** plus flipping the flag; leaving them off only disables `list_members` and
 `who_is_online`, which say so plainly rather than failing oddly.
 
+`find_user` is the one capability that degrades instead of failing. With `members` on it scans the
+member cache and matches anywhere in a username, display name or nickname. With it off it falls
+back to a gateway query, which Discord permits without the intent but only matches the **start** of
+a name - so `caz` finds `caz6666` but never `UnknownCaz`. Every result from that path carries a
+`note` saying so, because a prefix search that returns two of the three matching people looks
+exactly like one that returned all of them.
+
 ### Cost
 
-The agent sends 45 tool schemas plus the system prompt on every call - about 7.4k tokens of static
+The agent sends 49 tool schemas plus the system prompt on every call - about 7.4k tokens of static
 prefix. That prefix is marked with `cache_control`, so after the first call each turn reads it from
 cache at a tenth of the price (measured: 7341 written once, then 7341 read). Conversation history
 is stored as plain text pairs, not raw tool results, so a long phone conversation does not drag
