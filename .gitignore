@@ -34,6 +34,12 @@ stats.tsv
 # Rotated-out captures. The patterns above already match inside it; this is here so
 # the intent is obvious and nothing else in logs/ can sneak into a commit.
 logs/
+# Rotation writes `<name>.1`, which the extension patterns above do NOT match -
+# "supervise.log.1" is not *.log and "inbox.jsonl.1" is not *.jsonl. Without these
+# two lines the previous generation of every rotated file becomes committable, which
+# is how private message content would reach the repo by the back door.
+*.log.1
+*.jsonl.1
 # Throwaway diagnostic output from debugging sessions.
 diag*.txt
 d[0-9].txt
