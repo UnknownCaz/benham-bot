@@ -22,6 +22,7 @@ from policy import CallContext, Origin
 TYLER = 273967061619965952
 TESTING = 736988645562646619
 CHILLBAR = 1491485711076167711
+GUEST = 1097631170788851815   # doomassassin1 — listed or not, the answer must not change
 
 _fails = []
 
@@ -51,6 +52,8 @@ def ctx_for(origin, tainted=False, guild_id=TESTING):
         return c
     if origin == Origin.SYSTEM:
         return CallContext.system(guild_id)
+    if origin == Origin.GUEST_DM:
+        return CallContext.guest_dm(GUEST, 111)
     raise AssertionError(origin)
 
 
@@ -242,9 +245,63 @@ check("a refused post DENIES even when tainted",
       verdict("send_message", tainted=True, guild_id=4040404040404040404,
               channel_id=999).verdict, D.DENY)
 
+section("Every denial names its rule — the names are API, not decoration")
+# bot.py branches refusal wording on Decision.rule, and the audit log attributes
+# every denial by it. A denial that fires for the right reason under the wrong
+# name passes every behavioural check above while lying to both. Each rule that
+# can decide is pinned here by name; the ones already asserted elsewhere in this
+# file (context_present, owner, destructive_guild, posting_scope, outward_tainted)
+# are not repeated.
+R = capabilities.REGISTRY
+check("origin_allowed: pc_task from voice",
+      policy.authorize(R["pc_task"], ctx_for(Origin.OWNER_VOICE)).rule,
+      "origin_allowed")
+check("origin_allowed: send_message from SYSTEM",
+      policy.authorize(R["send_message"], ctx_for(Origin.SYSTEM)).rule,
+      "origin_allowed")
+check("agent_guild: a mention outside the agent list",
+      policy.authorize(R["send_message"],
+                       CallContext.owner_guild(TYLER, CHILLBAR, 111)).rule,
+      "agent_guild")
+check("blocked_when_tainted: pc_task in a tainted DM",
+      policy.authorize(R["pc_task"],
+                       CallContext.owner_dm(TYLER, 111, tainted=True)).rule,
+      "blocked_when_tainted")
+check("always_confirm: purge at an allowed target",
+      verdict("purge_messages").rule, "always_confirm")
+check("always_confirm: add_role too", verdict("add_role").rule, "always_confirm")
+check("target_context: target checks with no context",
+      policy.authorize_target(R["purge_messages"], None).rule, "target_context")
+check("engage_context: no context refuses engagement",
+      policy.may_engage_agent(None).rule, "engage_context")
+check("engage_owner: a stranger DM",
+      policy.may_engage_agent(CallContext.owner_dm(STRANGER)).rule, "engage_owner")
+check("engage_guild: an owner mention in Chillbar",
+      policy.may_engage_agent(CallContext.owner_guild(TYLER, CHILLBAR)).rule,
+      "engage_guild")
+check("engage_origin: voice does not drive the text agent",
+      policy.may_engage_agent(CallContext.owner_voice(TYLER, TESTING)).rule,
+      "engage_origin")
+check("guest_context: no context refuses guest chat",
+      policy.may_chat_as_guest(None).rule, "guest_context")
+
+section("A malformed guild id denies — an authorization rule must not crash")
+# int(ctx.guild_id) used to be unguarded in both places: a non-numeric guild id
+# raised ValueError out of the authorization path instead of refusing. Real
+# Discord ids are ints, so this is the fail-closed guarantee for the day some
+# future call site threads a string through.
+check("rule_agent_guild denies rather than raises",
+      policy.authorize(R["send_message"],
+                       CallContext.owner_guild(TYLER, "not-a-guild-id", 111)).rule,
+      "agent_guild")
+check("may_engage_agent denies rather than raises",
+      policy.may_engage_agent(
+          CallContext.owner_guild(TYLER, "not-a-guild-id")).rule,
+      "engage_guild")
+
 section("Full matrix — every action against every origin")
 ORIGINS = [Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
-           Origin.LOCAL_CLI, Origin.SYSTEM]
+           Origin.LOCAL_CLI, Origin.SYSTEM, Origin.GUEST_DM]
 matrix = {}
 for name in sorted(capabilities.REGISTRY):
     matrix[name] = {o: allowed(name, o) for o in ORIGINS}
@@ -266,8 +323,80 @@ system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
 
+# The sixth column. Guest denial was proved behaviourally in test_guest.py, but
+# a matrix that says "every origin" and covers five of six is exactly the kind
+# of gap that reads as coverage. Whether this id is on the allowlist must not
+# matter - neither denial a guest gets consults it for capabilities.
+guest_ok = {n for n, row in matrix.items() if row[Origin.GUEST_DM]}
+check("the GUEST_DM column is all No", guest_ok, set())
+
+section("Target matrix — every action at an allowed target, clean then tainted")
+# The origin matrix asks whether a route may reach an action at all. This is the
+# second-phase question for every action at a target where nothing is refused
+# outright: does it run free, or come back asking for Tyler? Spelled out by name
+# for the same reason as EXPECTED_RESTRICTED - an action whose flags drift into
+# or out of a confirmation must show up as a set diff, not as nothing.
+EXPECTED_CONFIRM_CLEAN = {
+    "add_role", "ban_member", "create_role", "delete_channel", "delete_emoji",
+    "delete_message", "delete_role", "kick_member", "purge_messages",
+    "remove_role",
+}
+# Once the turn is tainted, every outward action joins the confirm set.
+EXPECTED_CONFIRM_TAINTED = EXPECTED_CONFIRM_CLEAN | {
+    "create_invite", "create_webhook", "dm_user", "edit_message", "react",
+    "send_embed", "send_file", "send_message", "set_nickname", "speak_in_voice",
+    "timeout_member", "unban_member",
+}
+
+clean = {n: verdict(n) for n in capabilities.REGISTRY}
+tainted_v = {n: verdict(n, tainted=True) for n in capabilities.REGISTRY}
+
+check("nothing at an allowed target is denied outright",
+      {n for n, d in clean.items() if d.denied}, set())
+check("exactly the expected actions confirm in a clean turn",
+      {n for n, d in clean.items() if d.needs_confirm}, EXPECTED_CONFIRM_CLEAN)
+check("...each under the always_confirm rule",
+      {d.rule for d in clean.values() if d.needs_confirm}, {"always_confirm"})
+check("exactly the expected actions confirm once tainted",
+      {n for n, d in tainted_v.items() if d.needs_confirm},
+      EXPECTED_CONFIRM_TAINTED)
+check("every confirm taint ADDS is attributed to outward_tainted",
+      {n for n, d in tainted_v.items()
+       if d.needs_confirm and n not in EXPECTED_CONFIRM_CLEAN
+       and d.rule != "outward_tainted"}, set())
+check("everything else stays free even tainted",
+      {n for n, d in tainted_v.items() if d.allowed},
+      set(capabilities.REGISTRY) - EXPECTED_CONFIRM_TAINTED)
+
+section("Deny beats confirm — swept across the registry, not spot-checked")
+# An action refused outright must never come back asking to be approved,
+# whichever action it is. The two deny rules are swept over everything they
+# govern, at targets where they fire.
+destructive = {n for n, a in capabilities.REGISTRY.items() if a.destructive}
+denied_dest = {n: policy.authorize_target(capabilities.REGISTRY[n],
+                                          target(CHILLBAR))
+               for n in destructive}
+check("every destructive action DENIES outside the destructive allowlist",
+      {n for n, d in denied_dest.items() if not d.denied}, set())
+check("...all attributed to destructive_guild",
+      {d.rule for d in denied_dest.values()}, {"destructive_guild"})
+
+posters = {n for n, a in capabilities.REGISTRY.items() if a.posts}
+check("the posting cap covers exactly the content-bearing sends",
+      posters, {"send_embed", "send_file", "send_message"})
+denied_posts = {n: policy.authorize_target(
+                    capabilities.REGISTRY[n],
+                    CallContext.owner_dm(TYLER, 111, tainted=True)
+                    .for_target(OUTSIDE_GUILD, 999))
+                for n in posters}
+check("every posting action DENIES outside the posting allowlist, even tainted",
+      {n for n, d in denied_posts.items() if not d.denied}, set())
+check("...all attributed to posting_scope",
+      {d.rule for d in denied_posts.values()}, {"posting_scope"})
+
 print(f"\n  matrix covers {len(matrix)} actions x {len(ORIGINS)} origins "
-      f"= {len(matrix) * len(ORIGINS)} combinations")
+      f"= {len(matrix) * len(ORIGINS)} combinations, plus "
+      f"{len(clean) + len(tainted_v)} target-phase verdicts")
 
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
 sys.exit(1 if _fails else 0)

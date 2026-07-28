@@ -79,7 +79,11 @@ gctx = CallContext.guest_dm(DOOM, 111)
 reachable = [name for name, act in capabilities.REGISTRY.items()
              if policy.authorize(act, gctx).allowed]
 check("every registered capability denies a guest", reachable, [])
-check("...and that is all 47 of them", len(capabilities.REGISTRY), 47)
+# Deliberately NOT a hard-coded count: the sweep's job is "all of them, whatever
+# they are". A count here made every new capability fail this suite for no
+# security reason; the non-emptiness check is what keeps the sweep from passing
+# vacuously against an accidentally empty registry.
+check("...and the sweep was not vacuous", len(capabilities.REGISTRY) > 0, True)
 
 # Both denials are asserted separately: either alone would secure this, and the
 # point of having two is that a future edit to one is survivable.

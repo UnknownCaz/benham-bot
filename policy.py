@@ -297,8 +297,14 @@ def rule_agent_guild(action, ctx):
     """
     if ctx.origin != Origin.OWNER_GUILD:
         return None
-    if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
-        return None
+    # A malformed guild id is not on any list. Guarded the same way
+    # identity.destructive_allowed is, because a rule in the authorization path
+    # must fail closed - raising here would crash the caller instead of refusing.
+    try:
+        if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
+            return None
+    except (TypeError, ValueError):
+        pass
     return _deny("agent_guild",
                  f"`{action.name}` was requested by mention in guild {ctx.guild_id}, "
                  "which is not on the agent_guilds list in control.json. DM me instead.")
@@ -480,8 +486,13 @@ def may_engage_agent(ctx):
     if ctx.origin == Origin.OWNER_DM:
         return _ALLOW
     if ctx.origin == Origin.OWNER_GUILD:
-        if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
-            return _ALLOW
+        # Same guard as rule_agent_guild: a malformed guild id denies, it does
+        # not crash the gate that decides whether to spend an API call.
+        try:
+            if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
+                return _ALLOW
+        except (TypeError, ValueError):
+            pass
         return _deny("engage_guild",
                      f"guild {ctx.guild_id} is not on agent_guilds in control.json")
     return _deny("engage_origin",
