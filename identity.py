@@ -47,6 +47,7 @@ _DEFAULTS = {
     "agent": {},
     "confirm": {},
     "presence": {},
+    "guest": {},  # absent => disabled, nobody whitelisted. See guest_enabled().
 }
 
 
@@ -80,6 +81,59 @@ def is_owner(user_id):
         return int(user_id) in OWNER_IDS
     except (TypeError, ValueError):
         return False
+
+
+# --------------------------------------------------------------------------
+# Guests. A second, much smaller category of person: someone Benham will hold a
+# conversation with, and nothing else. They are not a weaker owner - there is no
+# tier of capability they sit at. The distinction this file draws is between the
+# one person who directs Benham and everyone who does not, and a guest is firmly
+# on the second side of it. All a guest id buys is a reply instead of a refusal.
+# --------------------------------------------------------------------------
+
+GUEST = CONTROL.get("guest") or {}
+GUEST_IDS = set(int(u) for u in (GUEST.get("ids") or []))
+
+# Modes this build knows how to run. An unrecognised mode disables guest chat
+# rather than falling back to one, because the failure being guarded against is a
+# config written for a newer build than the code - where guessing which mode was
+# meant is exactly the wrong instinct. Phase 2 adds "workspace" here.
+GUEST_MODES = frozenset({"chat"})
+
+
+def guest_enabled():
+    """Whether the guest surface is switched on and set to a mode this build knows.
+
+    Both halves matter. `enabled` is the kill switch Tyler flips; the mode check is
+    what stops a control.json written for a later build from silently running guests
+    through the only path this one happens to have.
+    """
+    if not bool(GUEST.get("enabled", False)):
+        return False
+    return str(GUEST.get("mode", "chat")) in GUEST_MODES
+
+
+def is_guest(user_id):
+    """True for a user on the guest allowlist, and never for an owner.
+
+    The owner exclusion is not tidiness. Tyler reaching the guest path would silently
+    downgrade him into a no-tools conversation with a separate memory, and the
+    symptom - Benham suddenly unable to do anything and not remembering the thread -
+    reads like a broken bot rather than a misfiled id. Refusing the overlap here
+    means it cannot happen however the allowlist is edited.
+    """
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    if uid in OWNER_IDS:
+        return False
+    return uid in GUEST_IDS
+
+
+def guest_config():
+    """The raw guest block, for the runtime knobs guest.py owns (caps, model)."""
+    return dict(GUEST)
 
 
 def destructive_allowed(guild_id):

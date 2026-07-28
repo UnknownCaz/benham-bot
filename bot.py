@@ -51,6 +51,7 @@ import capabilities
 import codesession
 import confirm
 import exaroton_ops as exa
+import guest
 import identity
 import jsonio
 import policy
@@ -1076,6 +1077,12 @@ async def on_ready():
     log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
         f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)")
     log(f"Destructive actions allowed in guilds: {sorted(identity.DESTRUCTIVE_GUILDS) or 'NONE'}")
+    if identity.guest_enabled():
+        log(f"Guest chat: ON ({guest.MODEL}, DM only, no tools) — "
+            f"{sorted(identity.GUEST_IDS) or 'nobody whitelisted'}, "
+            f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
+    else:
+        log("Guest chat: OFF — only owners get a reply")
     log(f"Capabilities registered: {len(capabilities.REGISTRY)} "
         f"({', '.join(f'{identity.TIER_NAMES[t]}={sum(1 for a in capabilities.REGISTRY.values() if a.tier == t)}' for t in (0, 1, 2, 3))})")
     if not intents.members:
@@ -1276,6 +1283,46 @@ def strip_mention(message):
     return text.strip()
 
 
+async def handle_guest_dm(message):
+    """One conversational turn with a whitelisted non-owner. Text in, text out.
+
+    Everything this function is allowed to do is in its own body: read the message,
+    ask guest.py for a reply, post it back into the same DM. It never resolves a
+    channel, never calls capabilities.run, and cannot address anyone but the person
+    who wrote to it - the reply target is `message.channel` and there is no code path
+    that changes it.
+
+    The refusal wording splits on the rule for a reason. Being over quota is worth
+    saying out loud, because the guest can act on it by waiting. Not being on the
+    list is not: telling a stranger that an allowlist exists and they are not on it
+    invites them to go find out who can add them.
+    """
+    text = strip_mention(message)
+    if not text:
+        return
+
+    decision = guest.check(message.author.id, message.channel.id)
+    if not decision.allowed:
+        log(f"guest refused {message.author} ({message.author.id}) "
+            f"[rule={decision.rule}]")
+        if decision.rule in ("guest_quota", "guest_global_quota", "guest_cooldown"):
+            await reply_in(message.channel, decision.reason)
+        else:
+            await reply_in(message.channel, identity.refusal(message.author.id))
+        return
+
+    log(f"guest chat from {message.author} ({message.author.id}): {text[:200]!r}")
+    try:
+        async with message.channel.typing():
+            reply = await asyncio.to_thread(
+                guest.respond, message.author.id, text, log)
+        await reply_in(message.channel, reply)
+    except Exception as e:  # noqa: BLE001 - one guest's bad turn never takes the bot down
+        log(f"guest chat failed for {message.author.id}:\n{traceback.format_exc()}")
+        await reply_in(message.channel,
+                       f"Something broke on my end there - {type(e).__name__}. Try again?")
+
+
 @client.event
 async def on_message(message):
     rec = record_message(message)
@@ -1289,7 +1336,22 @@ async def on_message(message):
         return  # Benham reads everything, but only engages when addressed.
 
     # The owner gate. Everyone else can talk TO Benham; nobody else directs it.
+    #
+    # Guests are handled HERE, inside the gate, and every branch returns. That
+    # placement is the whole design and not an accident of where it was convenient:
+    # three blocks below this one are owner-only in a way no later check restores.
+    # A pending codesession request treats "yes" as approval for a shell command on
+    # the real machine; a pending confirmation treats "yes" as firing a tier-3
+    # action; the pc.. prefix goes straight to a Claude Code session. None of those
+    # ask who is speaking, because until now nobody but Tyler could reach them.
+    #
+    # So a guest must never fall through this block. Not "is filtered out later" -
+    # never reaches it. Every path below returns, and test_guest.py drives the real
+    # on_message to prove it rather than trusting this comment.
     if not identity.is_owner(message.author.id):
+        if is_dm and guest.is_known_guest(message.author.id):
+            await handle_guest_dm(message)
+            return
         log(f"ignoring direction from non-owner {message.author} ({message.author.id})")
         if is_dm:
             await reply_in(message.channel, identity.refusal(message.author.id))
