@@ -187,6 +187,7 @@ the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
 |---------|--------------|
 | `python status.py` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
 | `supervise_bot.bat` | Restart-on-crash wrapper for always-on running (launch from a logon Scheduled Task). Shim over `supervise_bot.ps1`. |
+| `tray_bot.ps1` | Tray icon showing supervisor/bot state. A monitor only - closing it does not stop anything. |
 
 ### In-Discord slash commands
 
@@ -335,6 +336,31 @@ The limit it cannot cover: if the machine sleeps, the supervisor sleeps with it.
 
 To run the bot in the foreground instead, stop the task first - otherwise the supervisor restarts
 the one you just stopped, or refuses to start alongside yours.
+
+### Tray icon
+
+`tray_bot.ps1` puts Benham's state in the notification area, registered as a second logon task
+`benham-bot-tray`. It is a **monitor, not the supervisor** - it polls every 5s and owns no state,
+so closing it changes nothing about whether the bot runs. Supervision staying headless is
+deliberate: the process that restarts the bot should be the least interesting one on the machine,
+not the one drawing pictures.
+
+| icon | meaning |
+|------|---------|
+| grey | supervisor not running - nothing will restart the bot |
+| green | supervisor running, bot up (tooltip shows pid + uptime) |
+| red | supervisor running, bot down - a restart is presumably in flight |
+
+Menu: restart bot (via the supervisor, so there is one restart path rather than two), start/stop
+supervisor, open `supervise.log`, full status, and hide the icon.
+
+**Guest chat is deliberately one-way.** The menu can turn it OFF and cannot turn it ON. Off is the
+fail-safe direction and worth a panic button; on widens who may talk to Benham, and that stays a
+deliberate edit to `control.json` rather than something a right-click can do.
+
+**Windows 11 hides new tray icons.** It lands in the overflow behind the taskbar's `^` chevron -
+drag it onto the taskbar to pin it. A balloon on startup says so, since otherwise a working app
+looks like a broken one.
 
 Requires Python 3.12, `discord.py` 2.7+, and (for voice) `PyNaCl`, `davey`, FFmpeg on PATH.
 Reading message text needs the privileged Message Content intent enabled in the Discord Developer
