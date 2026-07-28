@@ -460,10 +460,21 @@ whole channel dumps along with it.
 ## Testing
 
 ```
-python test_control.py      # gates, allowlists, confirm matching, agent history shape
+python run_tests.py
+```
+
+That runs every suite as its own subprocess and reports one exit code. GitHub Actions
+(`.github/workflows/tests.yml`) runs the same command on every push and pull request. The runner
+needs `control.json` and `exaroton_watch.json` to exist (copy the `.example` files - it will tell
+you exactly this rather than creating config on its own), supplies a dummy `BOT_KEY`, and falls
+back to the offline stub in `test_stubs/` when the exaroton skill is not installed. The suites
+still run individually:
+
+```
+python test_control.py      # gates, allowlists, confirm matching + TTLs, agent history shape
 python test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
 python test_injection.py    # can text someone else wrote make Benham act?
-python test_policy.py       # every capability x every origin, plus the rule matrix
+python test_policy.py       # every capability x every origin AND every target verdict
 python test_guest.py        # guests reach conversation and nothing else, quotas hold under load
 python test_outbox.py       # the outbox->poller ingress: atomicity, tokens, the chokepoint
 python test_brain.py        # the <<...>> directive grammar guest.py's stripping relies on
@@ -475,11 +486,20 @@ python test_jsonio.py       # the JSON/JSONL helpers everything's state sits on
 Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want
 to verify by trying it in Chillbar.
 
-Two of these exist because of mistakes worth not repeating. `test_owner_gate` drives the real
-handlers rather than the helper functions, because the original bug was a helper that passed while
-nothing called it. And `test_injection`'s watcher records **every** invocation, not just forced
-ones - an earlier version watched the wrong flag and reported a pass while the action it was
-guarding actually executed.
+Conventions for new tests, distilled from the mistakes that shaped the existing ones:
+
+- **Standalone scripts, not pytest.** Every suite uses the shared `check()`/`section()` shape,
+  asserts at import, and ends in `sys.exit()`. Pointing pytest at this directory would execute the
+  suites during collection and die on the first `SystemExit` - the runner exists instead.
+- **Drive the real handlers, not helpers.** The founding bug was `identity.agent_allowed()`: a rule
+  that was written, tested, green, and called by nothing. `test_owner_gate` and `test_guest` run
+  the actual `bot.on_message` for this reason.
+- **Include a positive control case.** Every "the stranger fired nothing" assertion also passes
+  when the handler is simply broken; one case proving the owner DOES fire keeps the negatives honest.
+- **Watch every invocation, not the interesting flag.** `test_injection`'s watcher once recorded
+  only `force=True` calls and reported a pass while the guarded send executed with `force=False`.
+- **Restore what you patch** (`try/finally`), and **redirect state files to a temp dir** before
+  anything writes - a test run must never touch real memory, quota, or outbox state.
 
 ## Outside the chokepoint
 
