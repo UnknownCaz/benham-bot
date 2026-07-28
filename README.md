@@ -186,7 +186,7 @@ the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
 | command | what it does |
 |---------|--------------|
 | `python status.py` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
-| `supervise_bot.bat` | Restart-on-crash wrapper for always-on running (launch from a logon Scheduled Task). |
+| `supervise_bot.bat` | Restart-on-crash wrapper for always-on running (launch from a logon Scheduled Task). Shim over `supervise_bot.ps1`. |
 
 ### In-Discord slash commands
 
@@ -303,9 +303,38 @@ all once the turn has read what other people wrote.
 python bot.py            # foreground; logs in, writes channels.json, starts the outbox poller
 ```
 
-For always-on use, run it under `supervise_bot.bat` (restarts on crash) from a logon Scheduled
-Task. Only ever run one instance - two processes sharing the token cause a double gateway and
-duplicate actions.
+### 24/7 supervision
+
+`supervise_bot.bat` (a shim over `supervise_bot.ps1`) keeps exactly one `bot.py` alive. It is
+registered as a **logon Scheduled Task named `benham-bot`**, so it comes back after a reboot.
+
+```powershell
+Get-ScheduledTask benham-bot        # Ready = armed, Running = supervising now
+Start-ScheduledTask benham-bot      # start without waiting for a logon
+Stop-ScheduledTask  benham-bot      # stop supervising (does not stop a bot already up)
+```
+
+Three behaviours worth knowing:
+
+**It gives up on a crash loop.** An exit after 60s of uptime is an event, so it restarts in 10s.
+Five exits in a row that each lasted under 60s is a bot that *cannot start* - bad token, import
+error, missing dependency - and restarting that forever just produces thousands of failed logins
+and an unreadable log. It backs off 10s, 20s, 40s... to 5 minutes, then stops and says why.
+Restarting the task (or logging back in) resets it.
+
+**It refuses to be the second instance.** One token with two gateways means duplicate replies and
+duplicate outbox actions. Guarded by a named mutex against another supervisor, and by a process
+check against a `bot.py` someone started by hand - in either case it logs the conflict and exits
+1 rather than connecting.
+
+**Its log rotates.** `supervise.log` holds the supervisor's own lines plus all bot output, and
+moves aside to `supervise.log.1` past 5MB - one generation, the same convention
+`jsonio.rotate_if_large` uses for transcripts.
+
+The limit it cannot cover: if the machine sleeps, the supervisor sleeps with it.
+
+To run the bot in the foreground instead, stop the task first - otherwise the supervisor restarts
+the one you just stopped, or refuses to start alongside yours.
 
 Requires Python 3.12, `discord.py` 2.7+, and (for voice) `PyNaCl`, `davey`, FFmpeg on PATH.
 Reading message text needs the privileged Message Content intent enabled in the Discord Developer
