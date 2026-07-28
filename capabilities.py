@@ -20,8 +20,10 @@ twice - once with ctx.dry_run True, where it must gather real facts and change
 nothing, and once for real after confirmation.
 """
 
+import asyncio
 import io
 import os
+import re
 from datetime import datetime, timezone, timedelta
 
 import discord
@@ -177,11 +179,23 @@ def msg_dict(m):
         "author_id": m.author.id,
         "content": m.content,
         "channel_id": m.channel.id,
-        "attachments": [a.url for a in m.attachments],
+        "attachments": [att_dict(a) for a in m.attachments],
         "reactions": [{"emoji": str(r.emoji), "count": r.count} for r in m.reactions],
         "pinned": m.pinned,
         "reply_to": m.reference.message_id if m.reference else None,
     }
+
+
+def att_dict(a):
+    """One attachment as metadata - not its bytes.
+
+    A bare CDN url used to be all a read reported, which told the reader that a file
+    exists and nothing about whether it is a screenshot, a crash log or a 400MB
+    video. Deciding whether something is worth downloading needs the name, the size
+    and the type; `read_attachments` is what then fetches it.
+    """
+    return {"attachment_id": a.id, "filename": a.filename, "bytes": a.size,
+            "content_type": a.content_type, "url": a.url}
 
 
 def member_dict(m):
@@ -269,6 +283,167 @@ async def _get_message(ctx, p):
     return msg_dict(await ctx.message(p["channel_id"], p["message_id"]))
 
 
+# --- attachment download -------------------------------------------------
+#
+# Downloading is the one read that leaves something behind on the machine, which is
+# why it is fenced rather than trusted. Three properties do the work, and the tier
+# depends on all three holding:
+#
+#   1. It fetches what a NAMED MESSAGE carries. There is deliberately no url
+#      parameter - that would be a general "download anything from anywhere" tool
+#      aimed by whatever text Benham last read, which is the exact shape of attack
+#      the rest of this file is built to refuse.
+#   2. Bytes land only under downloads/, with a filename this module rewrites. The
+#      uploader chooses that name and nothing else about where it goes.
+#   3. Nothing is ever run. Files are written and described; a runnable extension is
+#      flagged in the result and otherwise treated as inert bytes.
+
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024      # per file, unless the caller raises it
+HARD_ATTACHMENT_BYTES = 100 * 1024 * 1024   # ceiling the caller cannot raise past
+MAX_TEXT_CHARS = 20000                      # of a text file, returned inline
+
+# Types worth returning as text. Judged by extension as well as content_type,
+# because Discord reports plenty of real text files as application/octet-stream.
+_TEXTUAL_TYPES = ("text/", "application/json", "application/xml", "application/csv",
+                  "application/javascript", "application/x-yaml")
+_TEXTUAL_SUFFIXES = {".txt", ".log", ".md", ".json", ".yml", ".yaml", ".toml", ".ini",
+                     ".cfg", ".conf", ".csv", ".tsv", ".xml", ".html", ".css", ".py",
+                     ".js", ".ts", ".ps1", ".sh", ".bat", ".java", ".c", ".h", ".cpp",
+                     ".rs", ".go", ".sql", ".properties", ".env", ".gitignore", ".mcmeta"}
+# Extensions Windows will execute on a double click. Flagged, never blocked: a
+# blocklist here would refuse `.jar`-shaped legitimate work (mod files are a normal
+# thing for Tyler to be handed) while stopping nothing, since the file is only ever
+# written and never launched.
+_RUNNABLE_SUFFIXES = {".exe", ".bat", ".cmd", ".com", ".scr", ".ps1", ".msi", ".vbs",
+                      ".jse", ".wsf", ".lnk", ".reg"}
+
+_UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
+_RESERVED_STEMS = ({"con", "prn", "aux", "nul"}
+                   | {f"com{i}" for i in range(1, 10)}
+                   | {f"lpt{i}" for i in range(1, 10)})
+
+
+def _safe_filename(raw, fallback):
+    """Rewrite an uploader's filename into something safe to create.
+
+    This is the single field of an attachment an attacker fully controls, and
+    `..\\..\\Windows\\System32\\evil.dll` is a legal thing to name a Discord upload.
+    basename() alone is not enough on Windows: `CON` and `NUL` are devices rather
+    than files, a trailing dot or space silently renames what you opened, and both
+    slash directions separate paths.
+    """
+    name = str(raw or "").replace("\\", "/").split("/")[-1]
+    name = _UNSAFE_NAME_RE.sub("_", name).strip(" .")
+    if not name:
+        return fallback
+    root, ext = os.path.splitext(name)
+    if root.lower() in _RESERVED_STEMS:
+        root = "_" + root
+    # Long names are truncated from the stem so the extension survives - the
+    # extension is what says whether this is a log or a video.
+    if len(root) + len(ext) > 120:
+        root = root[:max(1, 120 - len(ext))]
+    return (root + ext) or fallback
+
+
+def _confined_path(root, filename):
+    """Join, then verify the result is really inside root.
+
+    The sanitiser above should make this impossible, which is the point: a path
+    check that only fires when the sanitiser has a bug is exactly the check worth
+    having, and it costs one realpath.
+    """
+    dest = os.path.realpath(os.path.join(root, filename))
+    if os.path.commonpath([dest, os.path.realpath(root)]) != os.path.realpath(root):
+        raise ActionError(f"refusing to write outside downloads/: {filename!r}")
+    return dest
+
+
+def _is_textual(content_type, filename):
+    ct = (content_type or "").lower()
+    if any(ct.startswith(t) for t in _TEXTUAL_TYPES):
+        return True
+    return os.path.splitext(filename.lower())[1] in _TEXTUAL_SUFFIXES
+
+
+@action("read_attachments", identity.READ,
+        "Download the files attached to one message and return what they are; text "
+        "files come back with their contents. Saves under downloads/<message_id>/.",
+        {"channel_id": {"type": "int", "required": True},
+         "message_id": {"type": "int", "required": True},
+         "index": {"type": "int", "desc": "Only this attachment, 0-based (default all)"},
+         "save": {"type": "bool", "desc": "Write to disk (default true; false = look, "
+                                          "report, keep nothing)"},
+         "max_bytes": {"type": "int",
+                       "desc": f"Per-file ceiling (default {MAX_ATTACHMENT_BYTES // 1048576}MB)"}},
+        taints=True)
+async def _read_attachments(ctx, p):
+    m = await ctx.message(p["channel_id"], p["message_id"])
+    atts = list(m.attachments)
+    base = 0
+    if p.get("index") is not None:
+        i = int(p["index"])
+        if not 0 <= i < len(atts):
+            raise ActionError(f"index {i} is out of range - that message has "
+                              f"{len(atts)} attachment(s)")
+        atts, base = [atts[i]], i
+
+    cap = min(int(p.get("max_bytes") or MAX_ATTACHMENT_BYTES), HARD_ATTACHMENT_BYTES)
+    save = p.get("save") is not False
+    target = os.path.join(DOWNLOAD_DIR, str(m.id))
+    out = []
+
+    for offset, a in enumerate(atts):
+        rec = {"index": base + offset, "filename": a.filename, "bytes": a.size,
+               "content_type": a.content_type}
+        safe = _safe_filename(a.filename, f"attachment_{base + offset}")
+        if safe != a.filename:
+            # Say so rather than quietly writing a different name. A rewritten name
+            # is usually harmless (a colon in a screenshot title) and occasionally
+            # the most interesting fact about the file.
+            rec["sanitised_to"] = safe
+        if os.path.splitext(safe.lower())[1] in _RUNNABLE_SUFFIXES:
+            rec["executable"] = True
+        # Size comes from the message metadata, so an oversized file is refused
+        # before spending the bandwidth rather than after.
+        if a.size > cap:
+            rec["skipped"] = (f"{a.size / 1048576:.1f}MB is over the "
+                              f"{cap / 1048576:.1f}MB ceiling - raise max_bytes to fetch it")
+            out.append(rec)
+            continue
+        try:
+            data = await a.read()
+        except (discord.HTTPException, discord.NotFound) as e:
+            # One unreachable attachment should not lose the others: Discord's CDN
+            # links expire, and a message can outlive its own files.
+            rec["skipped"] = f"download failed: {getattr(e, 'text', None) or e}"
+            out.append(rec)
+            continue
+        rec["bytes_downloaded"] = len(data)
+        if save:
+            os.makedirs(target, exist_ok=True)
+            dest = _confined_path(target, safe)
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            rec["saved_to"] = dest
+        if _is_textual(a.content_type, safe):
+            # replace, not strict: a log that is mostly UTF-8 with one bad byte is
+            # still worth reading, and a decode error here would lose the whole file.
+            text = data.decode("utf-8", errors="replace")
+            rec["text"] = text[:MAX_TEXT_CHARS]
+            rec["text_truncated"] = len(text) > MAX_TEXT_CHARS
+        out.append(rec)
+
+    res = {"message_id": m.id, "channel": str(m.channel), "author": str(m.author),
+           "count": len(out), "attachments": out}
+    if save and any("saved_to" in r for r in out):
+        res["saved_in"] = target
+    if not atts:
+        res["note"] = "that message has no attachments"
+    return res
+
+
 @action("list_guilds", identity.READ, "List every server Benham is in.", {},
         taints=True)
 async def _list_guilds(ctx, p):
@@ -337,6 +512,169 @@ async def _member_info(ctx, p):
     d["timed_out_until"] = m.timed_out_until.isoformat() if m.timed_out_until else None
     d["top_role"] = m.top_role.name
     return d
+
+
+# --- find_user helpers ---------------------------------------------------
+#
+# Every other action in this file wants a numeric user_id, which is the one thing
+# a human never has to hand. This closes that gap, and it has to do it twice over
+# because there are two different ways to look a member up and neither covers the
+# other: the member cache can match mid-string but only exists when a privileged
+# intent is on, and the gateway query needs no intent but only matches prefixes.
+
+_MENTION_RE = re.compile(r"<@!?(\d{15,25})>")
+
+
+def _as_user_id(text):
+    """Return an id if the query is already one, else None.
+
+    A pasted @mention arrives as `<@123...>` and a copied id arrives bare; both are
+    the answer rather than something to search for. The length floor matters: `123`
+    is a legal Discord name and a nonsense snowflake, so short digit strings stay on
+    the name path instead of turning into a doomed user fetch.
+    """
+    m = _MENTION_RE.fullmatch(text)
+    if m:
+        return int(m.group(1))
+    return int(text) if text.isdigit() and len(text) >= 15 else None
+
+
+def _matched_field(m, low):
+    """Which of a member's names contains `low`, or None.
+
+    Reported back so a match on a server nickname is distinguishable from a match on
+    the account name - "which Alex is this" is usually answered by knowing which of
+    the two hit. Checks the raw fields rather than display_name, which is itself just
+    whichever of nick/global_name/name happens to be set.
+    """
+    for label, value in (("username", m.name),
+                         ("display_name", getattr(m, "global_name", None)),
+                         ("nickname", getattr(m, "nick", None))):
+        if value and low in value.lower():
+            return label
+    return None
+
+
+def _found(m, matched_on):
+    """A lookup result. Deliberately thinner than member_dict().
+
+    Roles, join date and status are left out: this action exists to turn a name into
+    an id, and once you have the id `member_info` answers everything else about one
+    person. Carrying all of it here would also raise the question of which guild's
+    roles a cross-guild match is showing.
+    """
+    return {"user_id": m.id, "name": str(m), "display_name": m.display_name,
+            "bot": m.bot, "matched_on": matched_on}
+
+
+def _record(hits, m, g, field):
+    """Fold one hit into the results, keyed by user so a shared member is one row."""
+    rec = hits.get(m.id)
+    if rec is None:
+        rec = hits[m.id] = _found(m, field)
+        rec["guilds"] = []
+    if not any(e["guild_id"] == g.id for e in rec["guilds"]):
+        rec["guilds"].append({"guild_id": g.id, "name": g.name, "nick": m.nick})
+
+
+def _rank(rec, low):
+    """Exact name first, then prefixes, then mid-string hits."""
+    names = [rec["name"].lower(), (rec["display_name"] or "").lower()]
+    if low in names:
+        return 0
+    return 1 if any(n.startswith(low) for n in names) else 2
+
+
+@action("find_user", identity.READ,
+        "Look a user up by name and get their user_id. Matches username, display "
+        "name and server nickname; also accepts an @mention or a raw id.",
+        {"query": {"type": "str", "required": True,
+                   "desc": "A name or part of one, an @mention, or a user id"},
+         "guild_id": {"type": "int",
+                      "desc": "Search one server (default: every server Benham is in)"},
+         "limit": {"type": "int", "desc": "Max matches to return (default 25)"}},
+        taints=True)
+async def _find_user(ctx, p):
+    needle = str(p["query"]).strip()
+    if not needle:
+        raise ActionError("query is empty - give a name, an @mention or a user id")
+    limit = max(1, min(int(p.get("limit") or 25), 100))
+
+    uid = _as_user_id(needle)
+    if uid is not None:
+        # A guild was named, so fetch the member there: that is an API call, so it
+        # answers "is this person actually in that server" authoritatively, which
+        # scanning a possibly-empty cache would not.
+        if p.get("guild_id"):
+            g = ctx.guild(p["guild_id"])
+            m = await ctx.member(g.id, uid)
+            rec = _found(m, "id")
+            rec["guilds"] = [{"guild_id": g.id, "name": g.name, "nick": m.nick}]
+        else:
+            u = await ctx.user(uid)
+            rec = {"user_id": u.id, "name": str(u),
+                   "display_name": getattr(u, "global_name", None) or u.name,
+                   "bot": u.bot, "matched_on": "id", "guilds": []}
+        return {"query": needle, "method": "id", "count": 1, "matches": [rec]}
+
+    guilds = [ctx.guild(p["guild_id"])] if p.get("guild_id") else list(ctx.client.guilds)
+    if not guilds:
+        raise ActionError("Benham is not in any server")
+
+    low = needle.lower()
+    full_cache = ctx.client.intents.members
+    hits, problems = {}, []
+
+    for g in guilds:
+        for m in g.members:
+            field = _matched_field(m, low)
+            if field:
+                _record(hits, m, g, field)
+        # With the members intent on, discord.py chunks the whole member list at
+        # startup and keeps it current, so the cache above IS the answer and a
+        # round trip per guild would buy nothing. With it off the cache holds only
+        # stragglers - whoever Benham saw in voice, or looked up earlier - so the
+        # gateway query below is the real search.
+        if full_cache:
+            continue
+        try:
+            # Discord only demands the privileged intent for the UNFILTERED member
+            # list; a query with a name in it is allowed without it. That is the
+            # whole reason this action works on Tyler's current config. The limit
+            # is a protocol constraint, not ours: it must land in 5..100.
+            found = await g.query_members(query=needle, limit=max(5, min(limit, 100)))
+        except asyncio.TimeoutError:
+            problems.append(f"{g.name}: member query timed out")
+            continue
+        except (discord.HTTPException, discord.ClientException) as e:
+            problems.append(f"{g.name}: {getattr(e, 'text', None) or e}")
+            continue
+        for m in found:
+            # query_members matched a prefix of some name; _matched_field says which
+            # one, and falls back when the hit came from a field it does not read.
+            _record(hits, m, g, _matched_field(m, low) or "name_prefix")
+
+    matches = sorted(hits.values(), key=lambda r: (_rank(r, low), r["name"].lower()))
+    out = {
+        "query": needle,
+        "method": "member_cache" if full_cache else "gateway_prefix",
+        "searched_guilds": [g.name for g in guilds],
+        "count": len(matches),
+        "matches": matches[:limit],
+        "truncated": len(matches) > limit,
+    }
+    if not full_cache:
+        # Said on every call, not just the empty ones. A prefix search that finds
+        # two Alexes looks complete, and the third one it could never have matched
+        # is exactly what someone would go on to act on.
+        out["note"] = (
+            "Server Members intent is off, so this was a prefix search: names that "
+            "merely CONTAIN the query were not searched. Set intents.members true in "
+            "control.json (and enable it in the Dev Portal) for full substring search."
+        )
+    if problems:
+        out["problems"] = problems
+    return out
 
 
 @action("list_roles", identity.READ, "List a server's roles, highest first.",
@@ -487,44 +825,95 @@ async def _send_embed(ctx, p):
             "jump_url": sent.jump_url}
 
 
-@action("send_file", identity.SPEAK, "Upload a local file to a channel.",
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024   # Discord's per-message payload limit
+MAX_UPLOAD_FILES = 10                 # Discord's per-message file count
+
+
+def _outgoing_paths(p):
+    """The local files a send was asked to attach, in order.
+
+    `path` and `paths` both exist because `path` is the older parameter and the
+    common case is still one file; accepting only a list would have broken every
+    existing caller to spare one pair of brackets.
+    """
+    if p.get("paths"):
+        return [str(x) for x in p["paths"]]
+    return [str(p["path"])] if p.get("path") else []
+
+
+def _load_files(p):
+    """Read the outgoing files into discord.File objects. Returns (files, names, bytes).
+
+    Every limit is Discord's, checked locally because the server-side failure is a
+    bare 413 that names neither the file nor the size - and with several attachments
+    "one of these was too big" is not a useful thing to be told.
+    """
+    paths = _outgoing_paths(p)
+    if len(paths) > MAX_UPLOAD_FILES:
+        raise ActionError(f"Discord takes at most {MAX_UPLOAD_FILES} files per message, "
+                          f"got {len(paths)}")
+    files, names, total = [], [], 0
+    for path in paths:
+        if not os.path.isfile(path):
+            raise ActionError(f"no file at {path}")
+        size = os.path.getsize(path)
+        if size > MAX_UPLOAD_BYTES:
+            raise ActionError(f"{path} is {size / 1048576:.1f}MB; Discord's limit is 25MB here")
+        total += size
+        if total > MAX_UPLOAD_BYTES:
+            raise ActionError(f"those {len(paths)} files total {total / 1048576:.1f}MB; "
+                              f"Discord's limit is 25MB per message")
+        with open(path, "rb") as fh:
+            files.append(discord.File(io.BytesIO(fh.read()),
+                                      filename=os.path.basename(path),
+                                      spoiler=bool(p.get("spoiler"))))
+        names.append(os.path.basename(path))
+    return files, names, total
+
+
+@action("send_file", identity.SPEAK, "Upload one or more local files to a channel.",
         {"channel_id": {"type": "int", "required": True},
-         "path": {"type": "str", "required": True, "desc": "Local path on Tyler's PC"},
-         "content": {"type": "str", "desc": "Message text alongside the file"},
+         "path": {"type": "str", "desc": "Local path on Tyler's PC"},
+         "paths": {"type": "list", "desc": "Several local paths at once (max 10, 25MB total)"},
+         "content": {"type": "str", "desc": "Message text alongside the files"},
          "spoiler": {"type": "bool"}},
         outward=True, posts=True)
 async def _send_file(ctx, p):
     ch = await ctx.channel(p["channel_id"])
-    path = str(p["path"])
-    if not os.path.isfile(path):
-        raise ActionError(f"no file at {path}")
-    size = os.path.getsize(path)
-    # Discord rejects oversized uploads with an unhelpful 413; check first so the
-    # failure names the actual problem.
-    if size > 25 * 1024 * 1024:
-        raise ActionError(f"{path} is {size/1048576:.1f}MB; Discord's limit is 25MB here")
-    with open(path, "rb") as fh:
-        f = discord.File(io.BytesIO(fh.read()), filename=os.path.basename(path),
-                         spoiler=bool(p.get("spoiler")))
-    sent = await ch.send(content=p.get("content") or None, file=f)
+    files, names, total = _load_files(p)
+    if not files:
+        raise ActionError("send_file needs `path` (one file) or `paths` (several)")
+    sent = await ch.send(content=p.get("content") or None, files=files)
     return {"status": "sent", "message_id": sent.id, "channel": str(ch),
-            "filename": os.path.basename(path), "bytes": size}
+            "filenames": names, "bytes": total, "jump_url": sent.jump_url}
 
 
-@action("dm_user", identity.SPEAK, "Send a direct message to a user.",
+@action("dm_user", identity.SPEAK, "Send a direct message to a user, with files if wanted.",
         {"user_id": {"type": "int", "required": True},
-         "content": {"type": "str", "required": True}},
+         "content": {"type": "str", "desc": "Message text (optional when sending a file)"},
+         "path": {"type": "str", "desc": "Local file to attach"},
+         "paths": {"type": "list", "desc": "Several local files (max 10, 25MB total)"},
+         "spoiler": {"type": "bool"}},
         outward=True)
 async def _dm_user(ctx, p):
     u = await ctx.user(p["user_id"])
     ch = u.dm_channel or await u.create_dm()
+    files, names, total = _load_files(p)
+    content = str(p["content"]) if p.get("content") else None
+    # Discord rejects a message with neither text nor a file, with an error about
+    # the message being empty rather than about the call being wrong.
+    if not content and not files:
+        raise ActionError("dm_user needs `content`, a file, or both")
     try:
-        sent = await ch.send(str(p["content"]))
+        sent = await ch.send(content=content, files=files or None)
     except discord.Forbidden:
         raise ActionError(
             f"{u} has DMs closed to server members, or shares no server with Benham"
         )
-    return {"status": "sent", "message_id": sent.id, "to": str(u), "user_id": u.id}
+    out = {"status": "sent", "message_id": sent.id, "to": str(u), "user_id": u.id}
+    if names:
+        out["filenames"], out["bytes"] = names, total
+    return out
 
 
 @action("react", identity.SPEAK, "Add a reaction to a message.",
@@ -1107,7 +1496,10 @@ def _coerce(name, spec, value):
                 return value.strip().lower() in ("1", "true", "yes", "y", "on")
             return bool(value)
         if t == "list":
-            return list(value)
+            # A bare string is ONE item, not a list of characters. Without this,
+            # paths="C:/x.png" becomes ['C', ':', '/', ...] and the failure reads
+            # "no file at C", which describes nothing that happened.
+            return [value] if isinstance(value, str) else list(value)
         return str(value)
     except (TypeError, ValueError):
         raise ActionError(f"{name} must be {t}, got {value!r}")
@@ -1257,6 +1649,12 @@ def describe_call(name, params):
     for key in ("channel_id", "user_id", "guild_id", "message_id", "role_id"):
         if params.get(key):
             bits.append(f"{key}={params[key]}")
+    # Name the files. This preview is what Tyler reads before approving a send he
+    # cannot take back, and `send_file (channel_id=...)` does not tell him whether
+    # what is about to leave the machine is a screenshot or environ.env.
+    paths = _outgoing_paths(params)
+    if paths:
+        bits.append("files=" + ", ".join(os.path.basename(x) for x in paths))
     body = params.get("content") or params.get("task") or params.get("nickname") or ""
     detail = f"> {str(body)[:400]}" if body else ""
     return {

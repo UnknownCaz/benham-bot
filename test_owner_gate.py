@@ -81,7 +81,7 @@ class _Guild:
 
 
 class _Message:
-    def __init__(self, author_id, content, guild=None, mentions=()):
+    def __init__(self, author_id, content, guild=None, mentions=(), attachments=()):
         self.author = _User(author_id, f"user{author_id}")
         self.content = content
         self.guild = guild
@@ -89,6 +89,10 @@ class _Message:
         self.mentions = list(mentions)
         self.created_at = datetime.now(timezone.utc)
         self.id = 42
+        # Every real Message has this, empty or not. on_message checks it to decide
+        # whether a file arrived, so a stub without it tests a message shape that
+        # cannot exist.
+        self.attachments = list(attachments)
 
 
 class _StubClient:

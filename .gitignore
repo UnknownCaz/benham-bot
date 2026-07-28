@@ -40,6 +40,9 @@ logs/
 # is how private message content would reach the repo by the back door.
 *.log.1
 *.jsonl.1
+# Attachments pulled off Discord by read_attachments. Other people's files, and
+# bytes whoever uploaded them chose - neither belongs in the repo.
+downloads/
 # Throwaway diagnostic output from debugging sessions.
 diag*.txt
 d[0-9].txt

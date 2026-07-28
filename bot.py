@@ -1087,7 +1087,8 @@ async def on_ready():
         f"({', '.join(f'{identity.TIER_NAMES[t]}={sum(1 for a in capabilities.REGISTRY.values() if a.tier == t)}' for t in (0, 1, 2, 3))})")
     if not intents.members:
         log("Note: Server Members intent OFF — list_members/who_is_online will report "
-            "that it needs enabling (Dev Portal → Bot → Privileged Gateway Intents)")
+            "that it needs enabling (Dev Portal → Bot → Privileged Gateway Intents); "
+            "find_user still works but matches name prefixes only")
 
     # Wire the PC session's permission gate to a DM. A Claude Code tool call that
     # needs approval suspends until this round-trips, so it has to reach Tyler
@@ -1283,6 +1284,27 @@ def strip_mention(message):
     return text.strip()
 
 
+def attachment_note(message):
+    """Tell the agent what is attached and how to reach it.
+
+    The agent is handed text, not a Message, so without this an attachment is
+    invisible to it twice over: it cannot tell that a file is there at all, and it
+    could not name the message_id `read_attachments` needs even if it guessed. Both
+    ids go in the line, so "what's in this?" is answerable in one tool call instead
+    of a hunt back through the channel.
+
+    Only the owner path calls this. Filenames are chosen by whoever made the file,
+    so this line names them and claims nothing about them; the contents stay behind
+    read_attachments, whose results the agent already wraps as untrusted data.
+    """
+    bits = ", ".join(
+        f"{a.filename} ({a.size} bytes, {a.content_type or 'unknown type'})"
+        for a in message.attachments)
+    return (f"[Attached to this message: {bits}. "
+            f"Read it with read_attachments channel_id={message.channel.id} "
+            f"message_id={message.id}]")
+
+
 async def handle_guest_dm(message):
     """One conversational turn with a whitelisted non-owner. Text in, text out.
 
@@ -1362,7 +1384,10 @@ async def on_message(message):
         return
 
     text = strip_mention(message)
-    if not text:
+    # A file with no caption is still a message. This used to return, so dropping a
+    # screenshot into the DM and waiting produced silence - the exact gesture most
+    # likely to be someone's first test of "can you see my attachment?".
+    if not text and not message.attachments:
         return
 
     # A blocked PC permission request outranks everything: a Claude Code session is
@@ -1458,6 +1483,13 @@ async def on_message(message):
         # Deliberately silent in a guild. Replying would mean posting into a server
         # that is specifically not on the list, which is the thing being limited.
         return
+
+    # Describe the attachments only now, on the way into the agent. Deliberately
+    # below the confirmation and PC-permission checks above: those match a narrow
+    # affirmative against the whole message, so appending a line up there would mean
+    # a "yes" sent with a file attached no longer reads as a yes.
+    if message.attachments:
+        text = (text + "\n\n" + attachment_note(message)).strip()
 
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
