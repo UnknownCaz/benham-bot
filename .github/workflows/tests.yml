@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Both are gitignored, hand-edited config on a real machine; the examples
+      # carry the public ids the suites are written against.
+      - name: Create test config from the examples
+        run: |
+          cp control.json.example control.json
+          cp exaroton_watch.json.example exaroton_watch.json
+
+      # run_tests.py supplies BOT_KEY and points EXAROTON_SKILL_DIR at
+      # test_stubs/ when the real skill is absent, which on CI it always is.
+      - name: Run the suites
+        run: python run_tests.py

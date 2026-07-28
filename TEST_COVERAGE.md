@@ -209,6 +209,14 @@ arg parsing.
 
 ## Infrastructure
 
+> **Status: closed.** `run_tests.py` runs every suite as a subprocess with one
+> exit code, refuses loudly (with fix commands) when the gitignored config is
+> missing, and falls back to the committed `test_stubs/exaroton.py` when the
+> exaroton skill is absent - so the suites run on any machine, including CI.
+> `.github/workflows/tests.yml` runs the same command on every push and pull
+> request. The README's Testing section now leads with the runner and documents
+> the suite's conventions for future test authors.
+
 Keeping the script convention, two small additions would raise the floor:
 
 - **`run_tests.py`:** run each `test_*.py` as a subprocess (subprocess because
