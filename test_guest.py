@@ -140,33 +140,122 @@ check("a stranger on the guest origin is refused by the allowlist",
 # --------------------------------------------------------------------------
 section("Quota — Tyler pays for every one of these")
 
-guest._last_call.clear()
+import threading  # noqa: E402
+import time  # noqa: E402
+
+import jsonio  # noqa: E402
+
+
+def reset_usage():
+    jsonio.write_json(guest.USAGE_FILE, {})
+    guest._last_call.clear()
+
+
+reset_usage()
 guest.COOLDOWN = 0
 check("a fresh guest may chat", guest.check(DOOM).allowed, True)
+check("an allowed check CONSUMES the message it allowed — it is a gate, not a "
+      "question", guest.spent_today(DOOM)[0], 1)
 
+reset_usage()
 for _ in range(guest.DAILY_CAP):
-    guest._spend(DOOM)
+    guest._reserve(DOOM)
 check("the message after the daily cap is refused",
       guest.check(DOOM).rule, "guest_quota")
 check("...and a different guest is unaffected by it",
       (enable_guests(ids=(DOOM, STRANGER)) or guest.check(STRANGER).allowed), True)
+enable_guests()
 
-import jsonio  # noqa: E402
+reset_usage()
+guest._reserve(DOOM)
+guest.refund(DOOM)
+check("refund gives a message back when the turn never happened",
+      guest.spent_today(DOOM)[0], 0)
+guest.refund(DOOM)
+check("refund floors at zero rather than minting quota",
+      guest.spent_today(DOOM)[0], 0)
 
+reset_usage()
+for _ in range(guest.DAILY_CAP):
+    guest._reserve(DOOM)
 u = jsonio.read_json(guest.USAGE_FILE, default={})
 u["date"] = "1999-01-01"
 jsonio.write_json(guest.USAGE_FILE, u)
 check("counters reset on a date change", guest.check(DOOM).allowed, True)
 
-jsonio.write_json(guest.USAGE_FILE, {})
-enable_guests()
-guest._last_call.clear()
+reset_usage()
 guest.COOLDOWN = 30
-guest._last_call[DOOM] = __import__("time").monotonic()
+guest._last_call[DOOM] = time.monotonic()
 check("the cooldown refuses a rapid second message",
       guest.check(DOOM).rule, "guest_cooldown")
+check("...and does NOT charge for the message it refused",
+      guest.spent_today(DOOM)[0], 0)
 guest.COOLDOWN = 0
 guest._last_call.clear()
+
+
+# --------------------------------------------------------------------------
+section("The race the audit found — a cap that leaks under load is not a cap")
+
+# Before the fix, check() read the counter and respond() incremented it, so N turns
+# in flight each saw room and each took it. Guest turns really do run concurrently:
+# bot.py hands respond() to asyncio.to_thread. This drives _reserve directly from
+# many threads, which is the same contention with the timing made reliable.
+_caps = (guest.DAILY_CAP, guest.GLOBAL_CAP)
+reset_usage()
+guest.DAILY_CAP = 50
+guest.GLOBAL_CAP = 10 ** 6
+
+granted = []
+_glock = threading.Lock()
+
+
+def _claim():
+    if guest._reserve(DOOM).allowed:
+        with _glock:
+            granted.append(1)
+
+
+_threads = [threading.Thread(target=_claim) for _ in range(200)]
+for _t in _threads:
+    _t.start()
+for _t in _threads:
+    _t.join()
+
+check("200 concurrent claims against a cap of 50 grant exactly 50", len(granted), 50)
+check("...and the stored counter agrees with what was granted",
+      guest.spent_today(DOOM)[0], 50)
+
+reset_usage()
+guest.DAILY_CAP, guest.GLOBAL_CAP = _caps
+
+check("there is no may_chat() predicate that would silently spend",
+      hasattr(guest, "may_chat"), False)
+
+# The same collision reaches the memory file. jsonio.write_json stages through one
+# shared `path + ".tmp"`, so concurrent writers race on os.replace and the loser gets
+# PermissionError on Windows - a crashed guest turn rather than a lost update.
+guest.forget()
+_errs = []
+
+
+def _write_turn(i):
+    try:
+        guest._remember(f"guest:{i}", "q", "a")
+    except Exception as e:  # noqa: BLE001
+        with _glock:
+            _errs.append(repr(e))
+
+
+_threads = [threading.Thread(target=_write_turn, args=(i,)) for i in range(60)]
+for _t in _threads:
+    _t.start()
+for _t in _threads:
+    _t.join()
+check("60 concurrent memory writes raise nothing", _errs, [])
+check("...and every conversation survives the contention",
+      len(jsonio.read_json(guest.MEMORY_FILE, default={})), 60)
+guest.forget()
 
 
 # --------------------------------------------------------------------------

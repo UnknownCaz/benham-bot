@@ -36,6 +36,7 @@ Two smaller things worth knowing:
 """
 
 import os
+import threading
 import time
 from datetime import date
 
@@ -96,14 +97,61 @@ def _usage():
     return u
 
 
-def _spend(user_id):
-    """Count one message against this guest and against the global ceiling."""
-    u = _usage()
-    uid = str(int(user_id))
-    u["users"][uid] = int(u["users"].get(uid, 0)) + 1
-    u["global"] = int(u.get("global", 0)) + 1
-    jsonio.write_json(USAGE_FILE, u)
-    return u["users"][uid], u["global"]
+# Held across the read-decide-write of a reservation. Guest turns run in worker
+# threads (bot.py hands respond() to asyncio.to_thread), so two DMs really can be in
+# here at once.
+_quota_lock = threading.Lock()
+
+
+def _reserve(user_id):
+    """Claim one message against both caps, atomically. Returns a Decision.
+
+    Checking the cap and spending against it have to be one operation. When they
+    were two, both halves were individually correct and the pair was not: two
+    messages arriving together each read a count below the cap, and each then
+    incremented it, so the cap was passed by however many turns were in flight.
+    That is only a cost bug rather than an access one - no capability sits behind
+    this - but the caps exist because Tyler is billed per message, so a cap that
+    leaks under exactly the condition that costs the most is not much of a cap.
+
+    Reserving here rather than after the API call means a turn that then fails has
+    still spent its message. That is the direction to err: a failed call may well
+    have been billed anyway, and refund() exists for the case where it certainly
+    was not.
+    """
+    with _quota_lock:
+        u = _usage()
+        uid = str(int(user_id))
+        mine = int(u["users"].get(uid, 0))
+        everyone = int(u.get("global", 0))
+        if mine >= DAILY_CAP:
+            return policy.Decision(
+                policy.Decision.DENY,
+                f"That's your {DAILY_CAP} messages for today - back tomorrow.",
+                "guest_quota")
+        if everyone >= GLOBAL_CAP:
+            return policy.Decision(
+                policy.Decision.DENY,
+                "I've hit my message budget for today across everyone. Try tomorrow.",
+                "guest_global_quota")
+        u["users"][uid] = mine + 1
+        u["global"] = everyone + 1
+        jsonio.write_json(USAGE_FILE, u)
+        return policy.Decision(policy.Decision.ALLOW)
+
+
+def refund(user_id):
+    """Hand back a reserved message when the turn never happened.
+
+    For the case where the API call raised before it could have been billed. Floors
+    at zero rather than trusting the counter, so a double refund cannot mint quota.
+    """
+    with _quota_lock:
+        u = _usage()
+        uid = str(int(user_id))
+        u["users"][uid] = max(0, int(u["users"].get(uid, 0)) - 1)
+        u["global"] = max(0, int(u.get("global", 0)) - 1)
+        jsonio.write_json(USAGE_FILE, u)
 
 
 def spent_today(user_id):
@@ -117,53 +165,57 @@ def spent_today(user_id):
 # --------------------------------------------------------------------------
 
 def check(user_id, channel_id=None):
-    """Authority first, then budget. Returns a policy.Decision.
+    """Authority, then rate, then budget. Returns a policy.Decision.
 
-    Authority comes from policy.may_chat_as_guest so that "who may talk to Benham" has
-    one answer in one file, whichever surface is asking. Only once that says yes does
-    this look at counters, because a stranger should not be able to learn the state of
-    Tyler's quota by watching which refusal they get.
+    CONSUMES A MESSAGE when it returns ALLOW. This is a gate, not a question: the
+    caller may ask once per inbound message and must then either send the turn or
+    call refund(). Making it advisory is what the race came from - anything that
+    answers "is there room" without also taking the room is true only until the next
+    thread reads it.
 
-    The `.rule` on the returned Decision is load-bearing for the caller: a refusal for
-    not being a guest must look like the ordinary non-owner refusal, while a refusal
-    for spending the day's messages should say so - the first must not reveal that a
-    guest list exists.
+    Authority comes from policy.may_chat_as_guest so that "who may talk to Benham"
+    has one answer in one file, whichever surface is asking. Only once that says yes
+    does this look at rate or budget, so a stranger cannot learn the state of Tyler's
+    quota by watching which refusal they get.
+
+    Cooldown is evaluated before the reservation, so a guest typing too fast is told
+    to wait rather than being charged for the message that was refused.
+
+    The `.rule` on the returned Decision is load-bearing for the caller: a refusal
+    for not being a guest must look like the ordinary non-owner refusal, while a
+    refusal for spending the day's messages should say so - the first must not reveal
+    that a guest list exists.
     """
     ctx = policy.CallContext.guest_dm(user_id, channel_id)
     decision = policy.may_chat_as_guest(ctx)
     if not decision.allowed:
         return decision
 
-    mine, everyone = spent_today(user_id)
-    if mine >= DAILY_CAP:
-        return policy.Decision(
-            policy.Decision.DENY,
-            f"That's your {DAILY_CAP} messages for today - back tomorrow.",
-            "guest_quota")
-    if everyone >= GLOBAL_CAP:
-        return policy.Decision(
-            policy.Decision.DENY,
-            "I've hit my message budget for today across everyone. Try tomorrow.",
-            "guest_global_quota")
-
     last = _last_call.get(int(user_id), 0)
     if time.monotonic() - last < COOLDOWN:
         return policy.Decision(
             policy.Decision.DENY, "One sec - still catching up.", "guest_cooldown")
+
+    reserved = _reserve(user_id)
+    if not reserved.allowed:
+        return reserved
+
+    _last_call[int(user_id)] = time.monotonic()
     return policy.Decision(policy.Decision.ALLOW)
 
 
-def may_chat(user_id, channel_id=None):
-    """Bare boolean for a call site that only needs to branch."""
-    return check(user_id, channel_id).allowed
-
-
 def is_known_guest(user_id):
-    """On the allowlist and switched on, regardless of quota.
+    """On the allowlist and switched on, regardless of quota. Consumes nothing.
 
-    Distinct from may_chat on purpose: it answers "is this person meant to be talking
-    to me" rather than "may they right now", which is what a caller needs to decide
-    between an over-quota reply and a flat non-owner refusal.
+    The question a caller needs before check(): "is this person meant to be talking
+    to me at all", which decides between an over-quota reply and a flat non-owner
+    refusal. Kept deliberately free of any counter, because it runs on every inbound
+    non-owner message including from strangers, and check() is the one that spends.
+
+    There is deliberately no `may_chat()` convenience wrapper. It existed, returned
+    check().allowed, and became a hazard the moment check() started reserving - a
+    predicate-shaped name that quietly bills Tyler is exactly the kind of thing that
+    gets called twice in a future edit.
     """
     return identity.guest_enabled() and identity.is_guest(user_id)
 
@@ -172,27 +224,39 @@ def is_known_guest(user_id):
 # Conversation
 # --------------------------------------------------------------------------
 
+# Guards every write to MEMORY_FILE, for the same reason _quota_lock guards the
+# usage file - and it is not only about losing an update. jsonio.write_json stages
+# through a single `path + ".tmp"` and then os.replace()s it, so two threads writing
+# the same file at once collide on that one temp path: on Windows the loser gets
+# PermissionError [WinError 32] rather than a merge conflict. Guest turns run in
+# worker threads (asyncio.to_thread), so this is reachable whenever two guests are
+# mid-conversation - the failure would be a crashed turn, not a wrong count.
+_memory_lock = threading.Lock()
+
+
 def _history(key):
     return jsonio.read_json(MEMORY_FILE, default={}).get(key, [])
 
 
 def _remember(key, user_text, assistant_text):
-    mem = jsonio.read_json(MEMORY_FILE, default={})
-    turns = list(mem.get(key, []))
-    turns.append({"role": "user", "content": user_text})
-    turns.append({"role": "assistant", "content": assistant_text})
-    mem[key] = turns[-HISTORY_TURNS * 2:]
-    jsonio.write_json(MEMORY_FILE, mem)
+    with _memory_lock:
+        mem = jsonio.read_json(MEMORY_FILE, default={})
+        turns = list(mem.get(key, []))
+        turns.append({"role": "user", "content": user_text})
+        turns.append({"role": "assistant", "content": assistant_text})
+        mem[key] = turns[-HISTORY_TURNS * 2:]
+        jsonio.write_json(MEMORY_FILE, mem)
 
 
 def forget(user_id=None):
     """Drop one guest's conversation, or every guest's."""
-    if user_id is None:
-        jsonio.write_json(MEMORY_FILE, {})
-        return
-    mem = jsonio.read_json(MEMORY_FILE, default={})
-    mem.pop(_key(user_id), None)
-    jsonio.write_json(MEMORY_FILE, mem)
+    with _memory_lock:
+        if user_id is None:
+            jsonio.write_json(MEMORY_FILE, {})
+            return
+        mem = jsonio.read_json(MEMORY_FILE, default={})
+        mem.pop(_key(user_id), None)
+        jsonio.write_json(MEMORY_FILE, mem)
 
 
 def _system_prompt():
@@ -233,10 +297,12 @@ def _get_client():
 def respond(user_id, text, log=None):
     """One guest turn: their message in, Benham's reply out.
 
-    Assumes check() already said yes - the caller has to know WHY a refusal happened
-    to word it, so re-deciding here would either duplicate that or throw the reason
-    away. The quota is spent here rather than in check() so that a call that never
-    happened is never billed.
+    Requires that check() already returned ALLOW, which is also where the message was
+    charged. Re-deciding here would either duplicate the reason the caller needs to
+    word its refusal or throw it away, and re-charging here would double-bill.
+
+    If this raises, the caller should call refund() - the reservation was made on the
+    assumption of a turn that then did not happen.
     """
     def _log(msg):
         if log:
@@ -246,8 +312,9 @@ def respond(user_id, text, log=None):
     turns = list(_history(key))
     turns.append({"role": "user", "content": text})
 
-    _last_call[int(user_id)] = time.monotonic()
-
+    # The cooldown clock is started by check(), not here: it has to advance for a
+    # message that was accepted even if this call then fails, or a guest whose turns
+    # error out is free to retry with no rate limit at all.
     resp = _get_client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
@@ -265,7 +332,7 @@ def respond(user_id, text, log=None):
         reply = "...I've got nothing for that one, sorry."
 
     _remember(key, text, reply)
-    mine, everyone = _spend(user_id)
+    mine, everyone = spent_today(user_id)   # already charged by check()
 
     u = getattr(resp, "usage", None)
     if u is not None:

@@ -359,11 +359,19 @@ Other properties worth knowing:
   written to `personality_overrides.txt`, which every other surface reads.
 - **The owner is never a guest**, even if his id is added to the list.
 - **Capped**, because every guest message bills Tyler: per-guest daily, global daily, and a
-  cooldown.
+  cooldown. `check()` reserves the message under a lock rather than reading the counter and
+  spending it later, so concurrent turns cannot both pass the same cap; a turn that then fails
+  is refunded.
 
 Turn it on by editing `control.json` (see `_guest` in `control.json.example`) and restarting.
 `python guest.py status` shows the allowlist, caps and today's spend; `python guest.py forget
 <user_id>` drops one conversation.
+
+**Turning it off needs a restart too.** `control.json` is read once at import, so `enabled:
+false` - or removing an id - does nothing to a running bot. To cut a guest off immediately,
+bounce the process. Every other control-plane setting behaves this way (`owner_ids`,
+`destructive_guilds`); giving this one live reload would mean two different answers in the
+codebase to "who may talk to Benham", which is a worse problem than the delay.
 
 `test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
 codebase already had once was a gate that was written, tested and green while the live path went
