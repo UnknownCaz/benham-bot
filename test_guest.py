@@ -138,6 +138,23 @@ check("a stranger on the guest origin is refused by the allowlist",
 
 
 # --------------------------------------------------------------------------
+section("is_known_guest — the predicate the live gate actually calls")
+
+# bot.on_message decides guest-vs-stranger with this exact function, on every
+# inbound non-owner DM. Until now it was only exercised through the live-path
+# section below; these pin its answers directly, including the property its
+# docstring stakes out: asking must never spend.
+check("a listed guest is known", guest.is_known_guest(DOOM), True)
+check("a stranger is not", guest.is_known_guest(STRANGER), False)
+check("the owner is never routed as a guest", guest.is_known_guest(TYLER), False)
+check("a garbage id is not known", guest.is_known_guest("not-an-id"), False)
+enable_guests(enabled=False)
+check("with guest chat off, nobody is known", guest.is_known_guest(DOOM), False)
+enable_guests()
+check("asking costs nothing — no counter moved", guest.spent_today(DOOM), (0, 0))
+
+
+# --------------------------------------------------------------------------
 section("Quota — Tyler pays for every one of these")
 
 import threading  # noqa: E402
@@ -192,6 +209,43 @@ check("...and does NOT charge for the message it refused",
       guest.spent_today(DOOM)[0], 0)
 guest.COOLDOWN = 0
 guest._last_call.clear()
+
+
+# --------------------------------------------------------------------------
+section("The GLOBAL cap — the other budget branch, previously never exercised")
+
+# _reserve has two refusals: per-guest and across-everyone. Every test above
+# drives the first; the concurrency section below deliberately sets GLOBAL_CAP
+# out of the way. So until here the global branch had zero coverage - a broken
+# comparison would have let guests spend past Tyler's total budget silently.
+_gcaps = (guest.DAILY_CAP, guest.GLOBAL_CAP)
+reset_usage()
+guest.DAILY_CAP = 10 ** 6          # keep the per-guest rule out of the way
+guest.GLOBAL_CAP = 3
+enable_guests(ids=(DOOM, STRANGER))
+
+guest._reserve(DOOM)
+guest._reserve(DOOM)
+guest._reserve(STRANGER)
+check("the message after the global cap is refused",
+      guest.check(DOOM).rule, "guest_global_quota")
+check("...for every guest, not just the one who spent it",
+      guest.check(STRANGER).rule, "guest_global_quota")
+check("...and the refusal did not charge anyone",
+      guest.spent_today(DOOM)[0] + guest.spent_today(STRANGER)[0], 3)
+
+guest.refund(DOOM)
+check("a refund reopens the global budget too", guest.check(STRANGER).allowed, True)
+
+u = jsonio.read_json(guest.USAGE_FILE, default={})
+u["date"] = "1999-01-01"
+jsonio.write_json(guest.USAGE_FILE, u)
+check("the global counter resets on a date change too",
+      guest.check(DOOM).allowed, True)
+
+reset_usage()
+guest.DAILY_CAP, guest.GLOBAL_CAP = _gcaps
+enable_guests()
 
 
 # --------------------------------------------------------------------------
@@ -390,8 +444,11 @@ class _Pending:
     token = "tok"
 
 
-def deliver(uid, content):
-    """Run one message through the real on_message, recording what it touched."""
+def deliver(uid, content, respond=None):
+    """Run one message through the real on_message, recording what it touched.
+
+    `respond` swaps the stubbed guest.respond - the refund test hands in one
+    that raises, because the refund path only exists for a turn that died."""
     touched = {"confirm_consume": 0, "codesession_answer": 0, "capabilities_run": 0,
                "guest_respond": 0, "fired": 0}
 
@@ -434,7 +491,7 @@ def deliver(uid, content):
     def _respond(user_id, text, log=None):
         touched["guest_respond"] += 1
         return "guest reply"
-    guest.respond = _respond
+    guest.respond = respond or _respond
 
     asyncio.run(bot.on_message(msg))
     return touched, msg.channel.sent
@@ -479,6 +536,54 @@ t, sent = deliver(TYLER, "yes")
 check("CONTROL: the owner saying 'yes' DOES answer the PC request "
       "(so the path above is genuinely live)",
       t["codesession_answer"], 1)
+
+
+# --------------------------------------------------------------------------
+section("Over the global budget, the live refusal explains itself")
+
+# bot.py routes the quota rules to decision.reason and everything else to the
+# stranger refusal. Being over budget is actionable (wait until tomorrow), so
+# it must say so - and must NOT read like the brush-off a stranger gets.
+_gcaps = (guest.DAILY_CAP, guest.GLOBAL_CAP)
+guest.DAILY_CAP = 10 ** 6
+guest.GLOBAL_CAP = 0
+jsonio.write_json(guest.USAGE_FILE, {})
+guest._last_call.clear()
+
+t, sent = deliver(DOOM, "hello again")
+check("no turn is spent past the global budget", t["guest_respond"], 0)
+check("the refusal says it is a budget, not a brush-off",
+      any("budget" in (s or "") for s in sent), True)
+check("...and does not use the stranger wording",
+      any("only take direction" in (s or "") for s in sent), False)
+guest.DAILY_CAP, guest.GLOBAL_CAP = _gcaps
+
+
+# --------------------------------------------------------------------------
+section("A turn that dies is refunded — the path refund() exists for")
+
+# handle_guest_dm charges via check() before calling the API. When the call
+# raises, the except path must hand the message back, or a run of transient
+# errors silently eats someone's whole day. Driven through the real on_message
+# so it is the actual except clause under test, not refund() in isolation.
+jsonio.write_json(guest.USAGE_FILE, {})
+guest._last_call.clear()
+
+
+def _broken_respond(user_id, text, log=None):
+    raise RuntimeError("api fell over")
+
+
+t, sent = deliver(DOOM, "hello?", respond=_broken_respond)
+check("the failed turn's message came back", guest.spent_today(DOOM)[0], 0)
+check("the guest is told something broke",
+      any("broke" in (s or "").lower() for s in sent), True)
+
+# Control: a turn that succeeds keeps its charge, or the refund is minting.
+jsonio.write_json(guest.USAGE_FILE, {})
+guest._last_call.clear()
+t, sent = deliver(DOOM, "hi")
+check("CONTROL: a successful turn stays charged", guest.spent_today(DOOM)[0], 1)
 
 
 print(f"\n  {len(capabilities.REGISTRY)} capabilities checked against a guest context; "
