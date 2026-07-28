@@ -123,6 +123,17 @@ there to test.)
 
 ## Priority 2 — hardening what's already tested
 
+> **Status: closed.** `test_policy.py` now carries the six-origin matrix
+> (GUEST_DM column asserted all-No), a full `authorize_target` matrix in clean
+> and tainted turns with hard-coded expected confirm sets, a registry-wide
+> deny-beats-confirm sweep, and by-name assertions for every previously
+> unasserted rule string. The `int(ctx.guild_id)` edge was **fixed** in
+> `policy.py` (malformed guild ids now deny under `agent_guild` /
+> `engage_guild`) and pinned by test. The confirm timing surface (`_ttl_for`,
+> `seconds_left`, `cancel(token)`, config-driven expiry) is covered in
+> `test_control.py`, and the hard-coded registry count in `test_guest.py` was
+> replaced with a non-vacuousness check.
+
 - **Add `GUEST_DM` to the policy matrix.** `test_policy.py`'s "every action x
   every origin" is really x5 of 6 origins; guest denial lives only in
   `test_guest.py`. Adding the sixth column with expected-empty reachability

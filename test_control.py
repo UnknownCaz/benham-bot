@@ -205,6 +205,55 @@ check("expired is not pending", confirm.current(), None)
 
 confirm.cancel()
 
+section("Confirmations — TTLs, the countdown, and targeted cancel")
+# Expiry above was forced by reaching into expires_at. These exercise the real
+# clock plumbing instead: the per-origin TTL choice, the countdown Tyler is
+# shown in the prompt, and cancelling one token by name.
+_confirm_cfg = identity.CONTROL.get("confirm")
+identity.CONTROL["confirm"] = {"ttl_seconds": 3600, "conversation_ttl_seconds": 600}
+try:
+    check("a DM confirmation uses the conversation TTL",
+          confirm._ttl_for("dm"), 600)
+    for _origin in ("outbox", "channel", "self"):
+        check(f"a {_origin!r} confirmation uses the long TTL",
+              confirm._ttl_for(_origin), 3600)
+
+    p4 = confirm.park("kick_member", {"user_id": 3}, {"summary": "x"}, TYLER, "dm")
+    check("seconds_left counts down from the DM TTL",
+          0 < p4.seconds_left <= 600, True)
+    p5 = confirm.park("kick_member", {"user_id": 3}, {"summary": "x"}, TYLER,
+                      "outbox")
+    check("...and an outbox park gets the long one",
+          600 < p5.seconds_left <= 3600, True)
+
+    # Real expiry through the config rather than the object's internals: a TTL
+    # of zero is dead on arrival, and expiry means cancelled everywhere it is
+    # read - never a slower yes.
+    identity.CONTROL["confirm"] = {"ttl_seconds": 3600,
+                                   "conversation_ttl_seconds": 0}
+    p6 = confirm.park("kick_member", {"user_id": 3}, {"summary": "x"}, TYLER, "dm")
+    check("a zero-TTL park is already expired", p6.expired, True)
+    check("...its countdown floors at zero", p6.seconds_left, 0)
+    check("...get() treats it as gone", confirm.get(p6.token), None)
+    check("...and so does current()", confirm.current(), None)
+
+    identity.CONTROL["confirm"] = {"ttl_seconds": 3600,
+                                   "conversation_ttl_seconds": 600}
+    p7 = confirm.park("kick_member", {"user_id": 3}, {"summary": "x"}, TYLER, "dm")
+    check("cancel with an unknown token drops nothing",
+          confirm.cancel("abcdef"), [])
+    check("...and leaves the live pending alone", confirm.current().token, p7.token)
+    dropped = confirm.cancel(p7.token)
+    check("cancel by token returns what it dropped",
+          [d.token for d in dropped], [p7.token])
+    check("...and nothing is pending after", confirm.current(), None)
+finally:
+    if _confirm_cfg is None:
+        identity.CONTROL.pop("confirm", None)
+    else:
+        identity.CONTROL["confirm"] = _confirm_cfg
+    confirm.cancel()
+
 section("Agent history — must always alternate user/assistant")
 import agent  # noqa: E402 — imported here so a missing API key can't break earlier checks
 
