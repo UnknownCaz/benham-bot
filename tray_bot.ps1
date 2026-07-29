@@ -179,6 +179,12 @@ Add-Item "Disable guest chat + restart" {
     }
 } | Out-Null
 
+Add-Item "Open guest search log" {
+    $sl = Join-Path $Dir 'guest_searches.jsonl'
+    if (Test-Path $sl) { Start-Process notepad.exe $sl }
+    else { $notify.ShowBalloonTip(3000, "Benham", "No guest searches logged yet.", 'Info') }
+} | Out-Null
+
 Add-Item "Open supervise.log" {
     if (Test-Path $Log) { Start-Process notepad.exe $Log }
     else { $notify.ShowBalloonTip(3000, "Benham", "No supervise.log yet.", 'Info') }
