@@ -349,6 +349,35 @@ try:
     check("and the type", d["content_type"], "application/pdf")
     check("and still the url", d["url"], "https://cdn.example/report.pdf")
 
+    section("Embeds carry their media URLs - a GIF is invisible without them")
+    # Discord's GIF picker posts a bare Tenor/Klipy URL whose embed has no
+    # title, description or fields; the picture is only reachable through the
+    # embed's media slots. Built with the real discord.Embed so the proxy
+    # attribute shapes are the installed library's, not a stub's guess.
+    tenor = discord.Embed.from_dict({
+        "type": "gifv", "url": "https://tenor.com/view/dance-gif-123",
+        "video": {"url": "https://media.tenor.com/x/dance.mp4"},
+        "thumbnail": {"url": "https://media.tenor.com/x/raw.png",
+                      "proxy_url": "https://media.discordapp.net/x/dance.png"}})
+    d = capabilities.embed_dict(tenor)
+    check("the video URL is reported", d["video"], "https://media.tenor.com/x/dance.mp4")
+    check("the thumbnail prefers proxy_url", d["thumbnail"],
+          "https://media.discordapp.net/x/dance.png")
+    check("the source link rides along", d["url"], "https://tenor.com/view/dance-gif-123")
+    check("no empty keys pad the record", "title" in d or "image" in d, False)
+
+    rich = discord.Embed.from_dict({
+        "title": "Server down", "description": "crashed",
+        "fields": [{"name": "Exit code", "value": "137"}],
+        "image": {"url": "https://cdn.example/graph.png"}})
+    d = capabilities.embed_dict(rich)
+    check("title and description still read", (d["title"], d["description"]),
+          ("Server down", "crashed"))
+    check("fields still read", d["fields"], [{"name": "Exit code", "value": "137"}])
+    check("an image URL is reported", d["image"], "https://cdn.example/graph.png")
+    check("a truly empty embed serialises to nothing",
+          capabilities.embed_dict(discord.Embed()), {})
+
     section("Images are handed to the model as pictures, not as descriptions")
     # The bug this covers: read_attachments downloaded a JPEG perfectly, reported
     # its name/size/type, and Benham still answered "I can't see the image" -

@@ -180,6 +180,7 @@ def msg_dict(m):
         "content": m.content,
         "channel_id": m.channel.id,
         "attachments": [att_dict(a) for a in m.attachments],
+        "embeds": [e for e in (embed_dict(em) for em in m.embeds) if e],
         "reactions": [{"emoji": str(r.emoji), "count": r.count} for r in m.reactions],
         "pinned": m.pinned,
         "reply_to": m.reference.message_id if m.reference else None,
@@ -196,6 +197,33 @@ def att_dict(a):
     """
     return {"attachment_id": a.id, "filename": a.filename, "bytes": a.size,
             "content_type": a.content_type, "url": a.url}
+
+
+def embed_dict(em):
+    """One embed's readable surface, media URLs included - omit-empty.
+
+    A GIF sent through Discord's picker is a bare Tenor/Klipy URL plus an embed
+    with no title, description or fields; the picture lives only in the embed's
+    media slots. Without those URLs a read reports the message as a naked link
+    and the reader can never fetch the actual GIF. proxy_url first: Discord's
+    proxy serves the media directly, where url may be the source page.
+    """
+    d = {}
+    if em.title:
+        d["title"] = em.title
+    if em.description:
+        d["description"] = em.description
+    for f in em.fields:
+        if f.name or f.value:
+            d.setdefault("fields", []).append({"name": f.name, "value": f.value})
+    for label, proxy in (("image", em.image), ("video", em.video),
+                         ("thumbnail", em.thumbnail)):
+        u = proxy.proxy_url or proxy.url
+        if u:
+            d[label] = u
+    if em.url:
+        d["url"] = em.url
+    return d
 
 
 def member_dict(m):

@@ -114,11 +114,25 @@ class _Field:
         self.value = value
 
 
+class _Media:
+    """EmbedMediaProxy shape: url/proxy_url, absent slots read as None
+    (discord 2.7.1 embeds.py:52-53 __getattr__)."""
+
+    def __init__(self, url=None, proxy_url=None):
+        self.url = url
+        self.proxy_url = proxy_url
+
+
 class _Embed:
-    def __init__(self, title=None, description=None, fields=()):
+    def __init__(self, title=None, description=None, fields=(),
+                 image=None, video=None, thumbnail=None, url=None):
         self.title = title
         self.description = description
         self.fields = list(fields)
+        self.image = image or _Media()
+        self.video = video or _Media()
+        self.thumbnail = thumbnail or _Media()
+        self.url = url
 
 
 class _Sticker:
@@ -405,6 +419,35 @@ async def main():
                 _Snapshot(embeds=[_Embed(title="Forwarded alert")])]))))
         check("...and inside a forward too",
               "Forwarded alert" in (ran[0] if ran else ""), True)
+
+        print("\nGIF-picker messages: the media lives in the embed's URL slots")
+        # Discord's GIF picker posts a bare Tenor/Klipy URL whose embed has NO
+        # title, description or fields - just video/thumbnail media and the
+        # source url. Before media URLs were read, this embed vanished entirely
+        # and a session could never fetch the actual GIF.
+        reset()
+        gif = _Embed(video=_Media(url="https://media.tenor.com/x/dance.mp4"),
+                     thumbnail=_Media(url="https://media.tenor.com/x/raw.png",
+                                      proxy_url="https://media.discordapp.net/x/dance.png"),
+                     url="https://tenor.com/view/dance-gif-123")
+        await bot.on_message(_Message(
+            TYLER, "pc.. what's happening in this gif",
+            reference=_Ref(resolved=_Replied(
+                content="https://tenor.com/view/dance-gif-123", embeds=[gif]))))
+        task = ran[0] if ran else ""
+        check("the task ran", len(ran), 1)
+        check("video URL read", "video: https://media.tenor.com/x/dance.mp4" in task, True)
+        check("thumbnail prefers proxy_url",
+              "thumbnail: https://media.discordapp.net/x/dance.png" in task, True)
+        check("source link read", "source: https://tenor.com/view/dance-gif-123" in task, True)
+
+        reset()
+        await bot.on_message(_Message(
+            TYLER, "pc.. what's this gif",
+            reference=_Ref(resolved=_Replied(content="", embeds=[
+                _Embed(image=_Media(url="https://cdn.example/only.gif"))]))))
+        check("a media-only embed is no longer an empty quote",
+              "image: https://cdn.example/only.gif" in (ran[0] if ran else ""), True)
 
         reset()
         await bot.on_message(_Message(
