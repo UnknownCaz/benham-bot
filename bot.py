@@ -1344,7 +1344,8 @@ def _quoted_lines(obj):
     Both shapes carry content/attachments/embeds/stickers, so one reader serves
     both. Embeds matter more than they look: an announcement posted by a webhook
     or bot - exactly the sort of thing worth forwarding to Benham - has empty
-    content and all of its words inside the embed.
+    content and all of its words inside the embed. Media URLs ride along too,
+    so a session can download the actual GIF or image and look at it.
 
     Attachment URLs are signed CDN links that expire after about a day: fine for
     a session that downloads promptly, a mysterious 404 for anything replayed
@@ -1359,6 +1360,18 @@ def _quoted_lines(obj):
     for em in obj.embeds:
         parts = [p for p in (em.title, em.description) if p]
         parts += [f"{f.name}: {f.value}" for f in em.fields if f.name or f.value]
+        # A GIF sent through Discord's picker is a bare Tenor/Klipy URL whose
+        # embed has no title or fields at all - the picture is only reachable
+        # through these media URLs, so without them the session can name the
+        # GIF but never look at it. proxy_url first: Discord's proxy serves
+        # the media directly, where url may be the source page.
+        for label, proxy in (("image", em.image), ("video", em.video),
+                             ("thumbnail", em.thumbnail)):
+            u = proxy.proxy_url or proxy.url
+            if u:
+                parts.append(f"{label}: {u}")
+        if em.url:
+            parts.append(f"source: {em.url}")
         if parts:
             lines.append("[embed] " + " | ".join(parts))
     lines += [f"[sticker: {s.name}]" for s in obj.stickers]
