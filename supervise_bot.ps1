@@ -45,7 +45,13 @@ $Log = Join-Path $Dir 'supervise.log'
 function Write-Log($msg) {
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ssZ')
     $line = "[$stamp] [supervisor] $msg"
-    try { Add-Content -Path $Log -Value $line -Encoding utf8 } catch {}
+    try { Add-Content -Path $Log -Value $line -Encoding utf8 } catch {
+        # A hand-started bot.py holds supervise.log exclusively (its stdout is
+        # redirected there), which is exactly the situation where the refusal
+        # below most needs to be readable somewhere. Fall back to a side file
+        # rather than letting the explanation vanish.
+        try { Add-Content -Path "$Log.locked-out" -Value $line -Encoding utf8 } catch {}
+    }
     Write-Host $line
 }
 

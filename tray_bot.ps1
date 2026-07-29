@@ -120,31 +120,33 @@ $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 Add-Item "Restart bot" {
     # Kill it and let the supervisor bring it back - that is the supervisor's whole
     # job, and going through it means one code path for restarts instead of two.
+    # No supervisor running is not a reason to refuse: stop the bot first (so the
+    # supervisor's already-running check cannot trip), then start the supervisor,
+    # which starts the bot itself. Same end state either way - bot up, supervised.
     $p = Get-BotPid
-    if (-not (Get-SupervisorUp)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "The supervisor is not running, so nothing would restart the bot. Start supervisor first.",
-            "Benham", 'OK', 'Warning') | Out-Null
+    if (Get-SupervisorUp) {
+        if ($p) {
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            $notify.ShowBalloonTip(4000, "Benham", "Bot stopped - supervisor restarts it in ~10s.", 'Info')
+        } else {
+            $notify.ShowBalloonTip(4000, "Benham", "Bot was not running; supervisor should be starting it.", 'Info')
+        }
         return
     }
-    if ($p) {
-        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-        $notify.ShowBalloonTip(4000, "Benham", "Bot stopped - supervisor restarts it in ~10s.", 'Info')
-    } else {
-        $notify.ShowBalloonTip(4000, "Benham", "Bot was not running; supervisor should be starting it.", 'Info')
+    try {
+        if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }
+        Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        Start-Sleep -Seconds 4
+        if (Get-SupervisorUp) {
+            $notify.ShowBalloonTip(4000, "Benham",
+                "Supervisor started - it brings the bot up in a few seconds.", 'Info')
+        } else {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Stopped the bot but the supervisor did not stay up - check supervise.log " +
+                "(and supervise.log.locked-out) for why. The bot is currently DOWN.",
+                "Benham - restart incomplete", 'OK', 'Warning') | Out-Null
+        }
     }
-} | Out-Null
-
-Add-Item "Start supervisor" {
-    try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-          $notify.ShowBalloonTip(4000, "Benham", "Supervisor started.", 'Info') }
-    catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Benham", 'OK', 'Error') | Out-Null }
-} | Out-Null
-
-Add-Item "Stop supervisor (leaves bot running)" {
-    try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-          $notify.ShowBalloonTip(4000, "Benham",
-            "Supervisor stopped. A running bot stays up but will not be restarted.", 'Info') }
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Benham", 'OK', 'Error') | Out-Null }
 } | Out-Null
 
