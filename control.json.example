@@ -26,7 +26,7 @@
 
   "pc": {
     "enabled": false,
-    "workdir": "C:\\Users\\Tyler\\Claude\\Discord-Claude",
+    "workdir": "C:\\Users\\Tyler\\Claude\\Benhams-inbox",
     "permission_timeout_seconds": 300,
     "max_turns": 30,
     "use_api_key": true
