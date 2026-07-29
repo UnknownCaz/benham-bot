@@ -1166,10 +1166,21 @@ def split_for_discord(text, limit=DISCORD_MSG_LIMIT):
     return chunks
 
 
-async def reply_in(channel, text):
-    """Send a possibly-long reply, in order."""
+async def reply_in(channel, text, reference=None):
+    """Send a possibly-long reply, in order.
+
+    reference threads the reply to the message it answers - the quote-line above
+    the reply that says what this is FOR. Only the first chunk carries it (one
+    pointer reads as an answer, a pointer per chunk reads as spam), and
+    mention_author stays off: the thread line is the point, not a ping.
+    """
+    first = True
     for chunk in split_for_discord(text):
-        await channel.send(chunk)
+        if first and reference is not None:
+            await channel.send(chunk, reference=reference, mention_author=False)
+        else:
+            await channel.send(chunk)
+        first = False
 
 
 class LiveProgress:
@@ -1336,14 +1347,22 @@ async def retire_view(key, note):
         await view.deaden(note)
 
 
-async def send_with_view(channel, text, view):
+async def send_with_view(channel, text, view, reference=None):
     """Post text (chunked if needed) with the buttons on the LAST chunk, and tell
-    the view which message it lives on so it can edit itself later."""
+    the view which message it lives on so it can edit itself later. reference
+    threads the first chunk to the message this prompt answers."""
     msg = None
     chunks = split_for_discord(text)
-    for chunk in chunks[:-1]:
-        await channel.send(chunk)
-    msg = await channel.send(chunks[-1], view=view)
+    for i, chunk in enumerate(chunks[:-1]):
+        if i == 0 and reference is not None:
+            await channel.send(chunk, reference=reference, mention_author=False)
+        else:
+            await channel.send(chunk)
+    if len(chunks) == 1 and reference is not None:
+        msg = await channel.send(chunks[-1], view=view,
+                                 reference=reference, mention_author=False)
+    else:
+        msg = await channel.send(chunks[-1], view=view)
     view.message = msg
     return msg
 
@@ -1701,13 +1720,15 @@ async def on_message(message):
         replied, ref_error = await resolve_reply(message)
         if ref_error is not None:
             await reply_in(message.channel,
-                           f"Couldn't read the message you replied to — {ref_error}.")
+                           f"Couldn't read the message you replied to — {ref_error}.",
+                           reference=message)
             return
 
         if not typed and replied is None:
             await reply_in(message.channel,
                            f"`{PC_PREFIX}` needs something after it - "
-                           f"e.g. `{PC_PREFIX} what's in my Downloads folder`")
+                           f"e.g. `{PC_PREFIX} what's in my Downloads folder`",
+                           reference=message)
             return
 
         # Tyler's instruction always sits ABOVE the quote, and the quote is
@@ -1722,7 +1743,8 @@ async def on_message(message):
             # a deleted reference: better to say so than to run on an empty quote.
             await reply_in(message.channel,
                            "Couldn't read the message you replied to — it has no "
-                           "text, files or embeds I can read.")
+                           "text, files or embeds I can read.",
+                           reference=message)
             return
 
         if block is None:
@@ -1757,20 +1779,26 @@ async def on_message(message):
             # session can outlive several other messages), footer says what it
             # cost in wall-clock. Past embed limits, plain chunked text - the
             # answer matters more than the frame.
+            # Threaded to the message that asked. A pc.. answer routinely lands
+            # after the conversation has moved on; the quote-line says what it
+            # is FOR without Tyler having to reconstruct it.
             if len(answer) <= 4096:
                 emb = discord.Embed(title=label[:256], description=answer)
                 emb.set_footer(text=f"done in {time.monotonic() - started:.0f}s")
-                await message.channel.send(embed=emb)
+                await message.channel.send(embed=emb, reference=message,
+                                           mention_author=False)
             else:
-                await reply_in(message.channel, answer)
+                await reply_in(message.channel, answer, reference=message)
             await react(message, "✅")
         except capabilities.ActionError as e:
             await react(message, "⚠️")
-            await reply_in(message.channel, f"Couldn't run that: {e}")
+            await reply_in(message.channel, f"Couldn't run that: {e}",
+                           reference=message)
         except Exception as e:  # noqa: BLE001 — never take the bot down over one task
             log(f"pc-prefix failed:\n{traceback.format_exc()}")
             await react(message, "⚠️")
-            await reply_in(message.channel, f"That failed: {type(e).__name__}: {e}")
+            await reply_in(message.channel, f"That failed: {type(e).__name__}: {e}",
+                           reference=message)
         return
 
     if not agent.ENABLED:
@@ -1841,7 +1869,8 @@ async def on_message(message):
 
         view = ApprovalView(decide, timeout=max(parked.seconds_left, 1))
         _views[("confirm", parked.token)] = view
-        await send_with_view(channel, confirm.describe(parked), view)
+        await send_with_view(channel, confirm.describe(parked), view,
+                             reference=message)
     await react(message, "✅")
 
 

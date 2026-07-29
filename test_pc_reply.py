@@ -33,6 +33,7 @@ TESTING = 736988645562646619
 _fails = []
 agent_calls = []
 sent = []
+refs = []
 ran = []
 
 
@@ -80,10 +81,12 @@ class _Channel:
                 return False
         return _T()
 
-    async def send(self, content=None, embed=None, view=None):
+    async def send(self, content=None, embed=None, view=None, **kw):
         # Record what a human would read: embed answers land as their description.
+        # References are recorded in parallel so threading is assertable.
         sent.append(content if content is not None
                     else (embed.description if embed is not None else ""))
+        refs.append(kw.get("reference"))
         return type("M", (), {"id": 1, "jump_url": ""})()
 
     async def fetch_message(self, mid):
@@ -229,6 +232,7 @@ def _install_stubs():
 def reset():
     agent_calls.clear()
     sent.clear()
+    refs.clear()
     ran.clear()
     confirm.cancel()
 
@@ -261,6 +265,8 @@ async def main():
         await bot.on_message(m)
         check("exactly one task ran", len(ran), 1)
         check("status reactions: seen then done", m.reactions_added, ["👀", "✅"])
+        check("the answer is threaded to the pc.. message", refs[-1] is m, True)
+        check("...but the progress header is not", refs[0], None)
         task = ran[0] if ran else ""
         check("typed instruction is the very top of the prompt",
               task.startswith("do what this message asks"), True)

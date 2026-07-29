@@ -66,7 +66,7 @@ class _Channel:
                 return False
         return _T()
 
-    async def send(self, content=None, embed=None, view=None):
+    async def send(self, content=None, embed=None, view=None, **kw):
         # Record what a human would read: embed answers land as their description.
         sent.append(content if content is not None
                     else (embed.description if embed is not None else ""))
