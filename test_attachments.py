@@ -423,6 +423,45 @@ try:
     check("no more than 4 images per call", len(b), 4)
     check("and the rest are accounted for", len(sk), 2)
 
+    section("A claimed save that never happened is corrected, not relayed")
+    # The bug this covers: Tyler DM'd two PDFs, and Benham replied "Got both saved:
+    # downloads/<message_id>/May_2026.pdf..." without ever calling read_attachments -
+    # the paths were invented from the message id, and the folder never existed.
+    # The guard checks every downloads/ path in an outgoing reply against the disk.
+    logged = []
+    V = lambda text: agent._verify_saved_claims(text, log=logged.append)
+
+    real_dir = os.path.join(capabilities.DOWNLOAD_DIR, "12345")
+    os.makedirs(real_dir, exist_ok=True)
+    open(os.path.join(real_dir, "May_2026.pdf"), "wb").write(b"%PDF")
+
+    out = V("Got both saved: downloads/99999/May_2026.pdf and downloads/99999/June_2026.pdf")
+    check("a phantom path triggers a correction", "Correction" in out, True)
+    check("both phantom paths are named",
+          "downloads/99999/May_2026.pdf" in out.split("Correction")[1]
+          and "downloads/99999/June_2026.pdf" in out.split("Correction")[1], True)
+    check("and the lie is logged", len(logged), 1)
+
+    out = V("Saved to downloads/12345/May_2026.pdf.")
+    check("a real save passes untouched (trailing dot ignored)", "Correction" in out, False)
+    check("backslashes verify against the same file",
+          "Correction" in V(r"Saved to downloads\12345\May_2026.pdf"), False)
+
+    open(os.path.join(real_dir, "May report 2026.pdf"), "wb").write(b"%PDF")
+    check("a filename with spaces is not falsely branded a phantom",
+          "Correction" in V("Saved to downloads/12345/May report 2026.pdf"), False)
+
+    check("a reply with no paths is left alone", V("all good"), "all good")
+    check("mentioning the folder generically is fine",
+          "Correction" in V("check the downloads folder"), False)
+    mixed = V("Saved downloads/12345/May_2026.pdf and downloads/12345/ghost.pdf")
+    check("one real + one phantom flags only the phantom",
+          "ghost.pdf" in mixed.split("Correction")[1]
+          and "May_2026.pdf" not in mixed.split("Correction")[1], True)
+
+    check("the hard rule about invented paths is in the system prompt",
+          "read_attachments result" in agent._system_prompt("a DM", "caz6666"), True)
+
     section("The DM path can see an attachment at all")
     # bot.py hands the agent TEXT, so an attachment is invisible unless it is
     # described. These two facts are what make "what's in this?" answerable.
