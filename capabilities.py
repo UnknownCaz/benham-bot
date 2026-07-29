@@ -816,7 +816,12 @@ async def _send_message(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     kw = {"silent": bool(p.get("silent"))}
     if p.get("reply_to"):
-        kw["reference"] = discord.Object(id=int(p["reply_to"]))
+        # discord.py wants a real MessageReference here, not a bare Object.
+        # fail_if_not_exists=False: if the referenced message was deleted, send
+        # as a normal message rather than erroring the whole action.
+        kw["reference"] = discord.MessageReference(
+            message_id=int(p["reply_to"]), channel_id=ch.id,
+            fail_if_not_exists=False)
     sent = await ch.send(str(p["content"]), **kw)
     return {"status": "sent", "message_id": sent.id, "channel": str(ch),
             "jump_url": sent.jump_url}
