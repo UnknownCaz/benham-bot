@@ -179,7 +179,11 @@ function Render-Inbox([System.Windows.Forms.RichTextBox]$rtb) {
         # Where: DMs stand out in orange, guild channels in teal.
         if ($null -eq $m.guild) {
             $rtb.SelectionColor = [System.Drawing.Color]::DarkOrange
-            $rtb.AppendText("[DM] ")
+            # The channel field is "Direct Message with <user>", which names the
+            # counterpart - exactly what a DM line needs, since author alone is
+            # ambiguous when it's Benham doing the sending.
+            $who = "$($m.channel)" -replace '^Direct Message with ', ''
+            $rtb.AppendText("[DM w/ $who] ")
         } else {
             $rtb.SelectionColor = [System.Drawing.Color]::Teal
             $rtb.AppendText("[$($m.guild) #$($m.channel)] ")
