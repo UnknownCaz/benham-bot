@@ -387,6 +387,10 @@ class _Msg:
         # pc.. branch reads it, and an owner message driven through deliver() can
         # reach that branch.
         self.reference = None
+        self.reactions_added = []
+
+    async def add_reaction(self, emoji):
+        self.reactions_added.append(emoji)
 
 
 class _Pending:

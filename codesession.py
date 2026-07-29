@@ -184,10 +184,14 @@ async def _can_use_tool(tool_name, tool_input, context):
     what = _describe(tool_name, tool_input)
     log(f"PC-PERMISSION-ASK [{rid}] {tool_name}: {str(tool_input)[:300]}")
     try:
+        # The request id rides along so the prompt can carry Approve/Deny buttons
+        # that resolve THIS request. The buttons and the typed reply both land in
+        # answer(), which is idempotent - first decision wins, the rest no-op.
         await _ask_owner(
             f"**Benham wants to {what}**\n\n"
-            f"Reply **yes** to allow or **no** to refuse. "
-            f"(expires in {PERMISSION_TIMEOUT // 60}m)"
+            f"Tap a button, or reply **yes** / **no**. "
+            f"(expires in {PERMISSION_TIMEOUT // 60}m)",
+            rid,
         )
     except Exception as e:  # noqa: BLE001 — if we cannot ask, we must not proceed
         _pending.pop(rid, None)
