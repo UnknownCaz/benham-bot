@@ -29,7 +29,7 @@ import time
 
 # Claude Code encodes the working directory into the project folder name by
 # replacing separators and colons with dashes.
-WORKDIR = os.path.join(os.path.expanduser("~"), "Claude", "Discord-Claude")
+WORKDIR = os.path.join(os.path.expanduser("~"), "Claude", "Benhams-inbox")
 PROJECT_DIR = os.path.join(
     os.path.expanduser("~"), ".claude", "projects",
     WORKDIR.replace(":", "-").replace("\\", "-").replace("/", "-"),

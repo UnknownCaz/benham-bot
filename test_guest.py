@@ -79,7 +79,7 @@ gctx = CallContext.guest_dm(DOOM, 111)
 reachable = [name for name, act in capabilities.REGISTRY.items()
              if policy.authorize(act, gctx).allowed]
 check("every registered capability denies a guest", reachable, [])
-check("...and that is all 49 of them", len(capabilities.REGISTRY), 49)
+check("...and that is all 50 of them", len(capabilities.REGISTRY), 50)
 
 # Both denials are asserted separately: either alone would secure this, and the
 # point of having two is that a future edit to one is survivable.

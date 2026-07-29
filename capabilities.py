@@ -397,7 +397,10 @@ def _is_textual(content_type, filename):
 
 @action("read_attachments", identity.READ,
         "Download the files attached to one message and return what they are; text "
-        "files come back with their contents. Saves under downloads/<message_id>/.",
+        "files come back with their contents. Files are saved to the bot's safety "
+        "quarantine folder (downloads/<message_id>/ inside the benham-bot repo), NOT "
+        "the Windows user Downloads folder - say so when telling Tyler where a file "
+        "went, and give the full saved_to path from the result.",
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
          "index": {"type": "int", "desc": "Only this attachment, 0-based (default all)"},
@@ -1221,6 +1224,150 @@ async def _edit_channel(ctx, p):
             "before": before, "after": channel_dict(await ctx.channel(ch.id))}
 
 
+# --- channel permission overwrites ---------------------------------------
+#
+# The permission names belong to Discord, there are 59 of them, and several are
+# aliases for one bit: `view_channel` and `read_messages` are the same flag, so
+# are `manage_roles` and `manage_permissions`. Both facts decide how this is
+# built. The names are checked against discord.py's own table rather than a list
+# kept here, because a hand-copied list goes stale the next time Discord ships a
+# permission - and a misspelled flag set on a PermissionOverwrite raises nothing
+# at all, it just quietly does not apply.
+
+_PERM_NAMES = frozenset(discord.Permissions.VALID_FLAGS)
+
+
+def _perm_name(raw, field):
+    """One permission name, validated, with suggestions when it is wrong."""
+    n = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if n in _PERM_NAMES:
+        return n
+    near = sorted(x for x in _PERM_NAMES if n and (n in x or x in n))[:6]
+    raise ActionError(
+        f"{field}: {raw!r} is not a Discord permission."
+        + (f" Did you mean: {', '.join(near)}?" if near else
+           " Names look like: view_channel, send_messages, read_message_history, "
+           "connect, speak.")
+    )
+
+
+def _perm_key(name):
+    """The single flag `name` refers to, so an alias cannot land on both sides.
+
+    allow=['view_channel'] with deny=['read_messages'] names one bit twice, and
+    setattr would simply let the second write win - leaving the caller told that
+    their allow succeeded while the channel says the opposite.
+    """
+    probe = discord.PermissionOverwrite(**{name: True})
+    return next(k for k, v in probe if v is True)
+
+
+def _perm_list(raw, field):
+    """Validate one allow/deny list. Returns (names as written, {flag: as written})."""
+    names, keys = [], {}
+    for item in (raw or []):
+        if not str(item).strip():
+            continue
+        n = _perm_name(item, field)
+        key = _perm_key(n)
+        if key in keys:      # the same bit twice, possibly under two spellings
+            continue
+        keys[key] = n
+        names.append(n)
+    return names, keys
+
+
+def _overwrite_state(ow):
+    """The half of an overwrite that is actually set, ignoring inherited flags."""
+    return {"allow": sorted(k for k, v in ow if v is True),
+            "deny": sorted(k for k, v in ow if v is False)}
+
+
+@action("set_channel_permissions", identity.MANAGE,
+        "Allow or deny specific permissions for one role in one channel (a channel "
+        "overwrite). Merges onto whatever overwrite the role already has, so naming "
+        "one permission leaves the others alone; `reset` drops the overwrite entirely "
+        "and the channel falls back to the role's server-wide permissions.",
+        {"channel_id": {"type": "int", "required": True},
+         "role_id": {"type": "int", "required": True,
+                     "desc": "Role to set the overwrite for (list_roles has the ids)"},
+         "allow": {"type": "list",
+                   "desc": "Permission names to allow, e.g. ['view_channel', 'send_messages']"},
+         "deny": {"type": "list", "desc": "Permission names to deny, same spelling"},
+         "reset": {"type": "bool",
+                   "desc": "Remove this role's overwrite here, back to the server "
+                           "default. Ignores allow/deny."},
+         "reason": {"type": "str"}},
+        outward=True, taints=True)
+async def _set_channel_permissions(ctx, p):
+    ch = await ctx.channel(p["channel_id"])
+    g = getattr(ch, "guild", None)
+    if g is None or not hasattr(ch, "set_permissions"):
+        raise ActionError(
+            f"{ch} cannot carry permission overwrites - only server channels and "
+            "categories can. A thread inherits its parent channel's, so set them "
+            "on the parent instead."
+        )
+    role = g.get_role(int(p["role_id"]))
+    if role is None:
+        raise ActionError(f"no role {p['role_id']} in {g.name} - list_roles has the ids")
+    # Discord answers a missing Manage Permissions with a bare 403 that names
+    # neither the channel nor the permission. Same reasoning as add_role's
+    # hierarchy check: saying it here is the difference between a fixable error
+    # and a mystery.
+    if not ch.permissions_for(g.me).manage_permissions:
+        raise ActionError(
+            f"Benham lacks Manage Permissions in #{ch.name}, so it cannot change "
+            "overwrites there. Note Discord also refuses to let a bot grant a "
+            "permission it does not hold itself."
+        )
+
+    reason = p.get("reason") or "via Benham"
+    before = _overwrite_state(ch.overwrites_for(role))
+
+    if p.get("reset"):
+        had = before["allow"] or before["deny"]
+        await ch.set_permissions(role, overwrite=None, reason=reason)
+        return {"status": "reset", "channel": ch.name, "channel_id": ch.id,
+                "role": role.name, "role_id": role.id,
+                "before": before, "after": {"allow": [], "deny": []},
+                "message": (f"Cleared **{role.name}**'s overwrite in **#{ch.name}** "
+                            f"({g.name}) - it now inherits its server-wide permissions."
+                            if had else
+                            f"**{role.name}** already had no overwrite in "
+                            f"**#{ch.name}** ({g.name}) - nothing to clear.")}
+
+    allow, allow_keys = _perm_list(p.get("allow"), "allow")
+    deny, deny_keys = _perm_list(p.get("deny"), "deny")
+    if not allow and not deny:
+        raise ActionError("nothing to change - pass `allow`, `deny`, or reset=true")
+    clash = sorted(set(allow_keys) & set(deny_keys))
+    if clash:
+        pairs = ", ".join(
+            allow_keys[k] if allow_keys[k] == deny_keys[k]
+            else f"{allow_keys[k]}/{deny_keys[k]} (the same permission)" for k in clash)
+        raise ActionError(f"cannot allow and deny the same permission: {pairs}")
+
+    ow = ch.overwrites_for(role)      # merge onto what is there, do not clobber it
+    for n in allow:
+        setattr(ow, n, True)
+    for n in deny:
+        setattr(ow, n, False)
+    await ch.set_permissions(role, overwrite=ow, reason=reason)
+
+    bits = []
+    if allow:
+        bits.append("allowed " + ", ".join(f"`{n}`" for n in allow))
+    if deny:
+        bits.append("denied " + ", ".join(f"`{n}`" for n in deny))
+    return {"status": "permissions_set", "channel": ch.name, "channel_id": ch.id,
+            "role": role.name, "role_id": role.id,
+            "allowed": allow, "denied": deny,
+            "before": before, "after": _overwrite_state(ow),
+            "message": (f"**{role.name}** in **#{ch.name}** ({g.name}): "
+                        + " and ".join(bits) + ".")}
+
+
 @action("create_invite", identity.MANAGE, "Create an invite link to a channel.",
         {"channel_id": {"type": "int", "required": True},
          "max_age_seconds": {"type": "int", "desc": "0 = never expires (default 86400)"},
@@ -1299,7 +1446,7 @@ async def _create_webhook(ctx, p):
 
 @action("pc_task", identity.MANAGE,
         "Do something on Tyler's actual PC by running a real Claude Code session "
-        "in the Discord-Claude folder - read/edit files, run commands, use his "
+        "in the Benhams-inbox folder - read/edit files, run commands, use his "
         "skills (exaroton, drive-api, double, desktop-automation). Give it the task "
         "in plain language, as you would type it into a terminal session. Reading "
         "is free; every write or command asks Tyler for approval first, so expect "

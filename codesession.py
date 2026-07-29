@@ -41,10 +41,10 @@ import identity
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "environ.env"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKDIR = os.path.join(os.path.dirname(BASE_DIR), "..", "Discord-Claude")
+WORKDIR = os.path.join(os.path.dirname(BASE_DIR), "..", "Benhams-inbox")
 WORKDIR = os.path.abspath(
     identity.CONTROL.get("pc", {}).get("workdir")
-    or os.path.join(os.path.expanduser("~"), "Claude", "Discord-Claude")
+    or os.path.join(os.path.expanduser("~"), "Claude", "Benhams-inbox")
 )
 
 _pc_cfg = identity.CONTROL.get("pc", {}) or {}
@@ -300,7 +300,7 @@ on his phone, away from the PC, and is reading your output as chat messages.
 - Every write, command, and subagent needs his approval, delivered by DM. Expect
   a pause; that is normal. If he denies something, do not look for another route
   to the same effect - tell him and stop.
-- Your working directory is Discord-Claude. Put scratch files there rather than
+- Your working directory is Benhams-inbox. Put scratch files there rather than
   scattering them across his workspace.
 """
 

@@ -52,7 +52,7 @@ Every capability declares one, and `capabilities.run()` enforces it.
 |---|---|---|
 | **read** (16) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
 | **speak** (7) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
-| **manage** (19) | `pin_message`, `add_role`, `create_channel`, `timeout_member`, `set_presence` | owner only |
+| **manage** (20) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 
 Run `python do.py list` for the full catalogue, `python do.py help <action>` for one action's
@@ -113,7 +113,7 @@ The approval DM shows the **full command**, up to 1200 characters. An early vers
 
 ### Two things this does NOT do
 
-**The working directory is not a sandbox.** `Discord-Claude/` is where the session starts. It can
+**The working directory is not a sandbox.** `Benhams-inbox/` is where the session starts. It can
 `cd` anywhere or use absolute paths. It keeps scratch files tidy; it contains nothing.
 
 **Secrets are readable.** Tyler chose full file access deliberately. Reads are free, so anyone who
