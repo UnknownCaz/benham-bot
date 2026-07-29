@@ -262,6 +262,85 @@ function Show-InboxWindow {
     $form.Show()
 }
 
+# --- supervise.log viewer -------------------------------------------------
+# Same idea as the inbox viewer: read-only window, tail of the file, a little
+# color so the eye finds trouble - red for errors, green for starts, grey
+# timestamps. Refresh re-reads; raw notepad stays one click away.
+
+$script:LogForm = $null
+
+function Render-Log([System.Windows.Forms.RichTextBox]$rtb) {
+    $rtb.Clear()
+    if (-not (Test-Path $Log)) {
+        $rtb.AppendText("No supervise.log yet.")
+        return
+    }
+    $lines = Get-Content $Log -Encoding UTF8 -Tail 500
+    $reTs = '^\[([^\]]+)\]\s*(.*)$'
+    foreach ($line in $lines) {
+        $body = $line
+        if ($line -match $reTs) {
+            $rtb.SelectionColor = [System.Drawing.Color]::Gray
+            $rtb.SelectionFont = New-Object System.Drawing.Font('Consolas', 9)
+            $rtb.AppendText("[$($Matches[1])] ")
+            $body = $Matches[2]
+        }
+        if ($body -match 'error|fail|exception|traceback|died|locked') {
+            $rtb.SelectionColor = [System.Drawing.Color]::Firebrick
+        } elseif ($body -match 'start|restart|logged in|launch') {
+            $rtb.SelectionColor = [System.Drawing.Color]::SeaGreen
+        } else {
+            $rtb.SelectionColor = [System.Drawing.Color]::Black
+        }
+        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5)
+        $rtb.AppendText("$body`n")
+    }
+    if ($rtb.TextLength -eq 0) { $rtb.AppendText('supervise.log is empty.') }
+    $rtb.SelectionStart = $rtb.TextLength
+    $rtb.ScrollToCaret()
+}
+
+function Show-LogWindow {
+    if ($script:LogForm -and -not $script:LogForm.IsDisposed) {
+        Render-Log $script:LogForm.Controls['rtb']
+        $script:LogForm.Activate()
+        return
+    }
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Benham supervise.log (last 500 lines)'
+    $form.Size = New-Object System.Drawing.Size(820, 560)
+    $form.StartPosition = 'CenterScreen'
+
+    $rtb = New-Object System.Windows.Forms.RichTextBox
+    $rtb.Name = 'rtb'
+    $rtb.ReadOnly = $true
+    $rtb.DetectUrls = $false
+    $rtb.BackColor = [System.Drawing.Color]::White
+    $rtb.BorderStyle = 'None'
+    $rtb.Dock = 'Fill'
+
+    $bar = New-Object System.Windows.Forms.FlowLayoutPanel
+    $bar.Dock = 'Bottom'
+    $bar.Height = 34
+    $bar.FlowDirection = 'RightToLeft'
+
+    $btnRefresh = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text = 'Refresh'
+    $btnRefresh.add_Click({ Render-Log $script:LogForm.Controls['rtb'] })
+    $bar.Controls.Add($btnRefresh)
+
+    $btnRaw = New-Object System.Windows.Forms.Button
+    $btnRaw.Text = 'Open raw file'
+    $btnRaw.add_Click({ Start-Process notepad.exe $Log })
+    $bar.Controls.Add($btnRaw)
+
+    $form.Controls.Add($rtb)
+    $form.Controls.Add($bar)
+    $script:LogForm = $form
+    Render-Log $rtb
+    $form.Show()
+}
+
 # --- tray -----------------------------------------------------------------
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
@@ -365,9 +444,8 @@ Add-Item "Open Benhams-inbox folder" {
     else { $notify.ShowBalloonTip(3000, "Benham", "Workdir not found: $wd", 'Warning') }
 } | Out-Null
 
-Add-Item "Open supervise.log" {
-    if (Test-Path $Log) { Start-Process notepad.exe $Log }
-    else { $notify.ShowBalloonTip(3000, "Benham", "No supervise.log yet.", 'Info') }
+Add-Item "View supervise.log" {
+    Show-LogWindow
 } | Out-Null
 
 Add-Item "Full status (status.py)" {
