@@ -1444,7 +1444,9 @@ def attachment_note(message):
         for a in message.attachments)
     return (f"[Attached to this message: {bits}. "
             f"Read it with read_attachments channel_id={message.channel.id} "
-            f"message_id={message.id}]")
+            f"message_id={message.id}. Nothing has been downloaded yet - these "
+            f"files do not exist on disk and have no saved path until that call "
+            f"returns, so do not claim they are saved without it.]")
 
 
 async def resolve_reply(message):

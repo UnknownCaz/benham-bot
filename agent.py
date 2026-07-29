@@ -27,6 +27,7 @@ and "sorry, who are you" after a crash defeats that.
 
 import base64
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -224,6 +225,11 @@ def _system_blocks(where, actor_name):
   outright, and that is not something you can work around.
 - You cannot see message content you were not given. If you need context, read the
   channel with a tool rather than guessing.
+- A file exists only if a tool result says so. Never claim an attachment was saved,
+  and never quote a downloads/ path, unless it is the saved_to value from a
+  read_attachments result in this conversation. Message ids let you PREDICT what a
+  path would be - that is not the same as the file existing. If you have not called
+  read_attachments for a message, its files are not on disk, full stop.
 
 ## This surface
 Discord text. Tone and identity come from the persona above; this is only the
@@ -406,8 +412,63 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             "tell me to keep going if that wasn't the whole job.)")
 
     reply = "\n\n".join(p.strip() for p in reply_parts if p and p.strip())
+    reply = _verify_saved_claims(reply, log)
     _remember(conversation_key, text, reply)
     return (reply or None), pending
+
+
+# A downloads/ path as it would appear in a reply: "downloads/<message_id>/name.ext",
+# either slash direction, possibly as the tail of an absolute path. Filenames with
+# spaces match only up to the space; the prefix check in the verifier covers the rest.
+_DOWNLOAD_CLAIM_RE = re.compile(r"downloads[/\\][\w.\-]+[/\\][^\s`'\"\)\]\},;|]+")
+
+
+def _verify_saved_claims(reply, log=None):
+    """Refuse to relay a save that never happened.
+
+    The model once told Tyler two PDFs were "saved" to downloads/<message_id>/
+    without ever calling read_attachments - the paths were pure prediction, the
+    folder was never created, and it doubled down when asked. Prompt rules reduce
+    that; this makes the claim itself checkable. Any downloads/ path in the outgoing
+    reply must exist on disk (paths are only ever created by read_attachments, so
+    existence IS proof the tool ran). A phantom path gets an appended correction
+    naming it, and a log line, rather than reaching Tyler as fact.
+
+    The check is deliberately forgiving about false alarms: a claim whose match was
+    truncated at a space still passes if a file in the right folder starts with the
+    matched fragment. Wrongly branding a true save a hallucination would be its own
+    trust bug.
+    """
+    if not reply or "downloads" not in reply:
+        return reply
+    # Resolve claims relative to wherever downloads/ actually lives - tests point
+    # capabilities.DOWNLOAD_DIR at a temp dir, and the guard must follow it.
+    root_parent = os.path.dirname(os.path.realpath(capabilities.DOWNLOAD_DIR))
+    phantoms = []
+    for claim in sorted(set(_DOWNLOAD_CLAIM_RE.findall(reply))):
+        cleaned = claim.rstrip(".,:!?").replace("\\", "/")
+        candidate = os.path.realpath(os.path.join(root_parent, *cleaned.split("/")))
+        if os.path.isfile(candidate):
+            continue
+        folder, frag = os.path.split(candidate)
+        try:
+            if frag and os.path.isdir(folder) and any(
+                    f.startswith(frag) for f in os.listdir(folder)):
+                continue
+        except OSError:
+            pass
+        phantoms.append(cleaned)
+    if not phantoms:
+        return reply
+    if log:
+        log("agent: reply claimed nonexistent download path(s): " + ", ".join(phantoms))
+    return (reply + "\n\n⚠️ Correction (automatic check): "
+            + ", ".join(phantoms) +
+            (" does not exist on disk" if len(phantoms) == 1
+             else " do not exist on disk") +
+            " - no such file was actually saved. Disregard any claim above that "
+            "those files were downloaded; ask me to read the attachments and I "
+            "will do it for real.")
 
 
 def _log_usage(log, resp, label):
