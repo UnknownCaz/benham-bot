@@ -294,11 +294,22 @@ def dump_channels():
 
 def record_message(message):
     """Append one message to inbox.jsonl."""
+    # A DMChannel's str() is "Direct Message with Unknown User" whenever the
+    # recipient is not in the user cache (always true just after a restart), and
+    # that placeholder would be baked into the log forever. Resolve the human
+    # ourselves: the recipient if cached, else the author on incoming messages.
+    ch = message.channel
+    chan_name = getattr(ch, "name", None)
+    if chan_name is None:
+        other = getattr(ch, "recipient", None)
+        if other is None and client.user and message.author.id != client.user.id:
+            other = message.author
+        chan_name = f"Direct Message with {other}" if other else str(ch)
     rec = {
         "ts": message.created_at.isoformat(),
         "guild": message.guild.name if message.guild else None,
         "guild_id": message.guild.id if message.guild else None,
-        "channel": getattr(message.channel, "name", str(message.channel)),
+        "channel": chan_name,
         "channel_id": message.channel.id,
         "author": str(message.author),
         "author_id": message.author.id,
