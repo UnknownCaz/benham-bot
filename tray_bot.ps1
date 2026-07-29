@@ -63,6 +63,34 @@ function Get-GuestState {
     } catch { return @{ On = $false; Count = 0 } }
 }
 
+function Get-GuestUsage {
+    # Today's spend from guest_usage.json, plus the caps from control.json so the
+    # line reads as "how close to the wall", not a bare number. A stale date means
+    # nobody has messaged today - that is 0, not an error.
+    try {
+        $u = Get-Content (Join-Path $Dir 'guest_usage.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        $caps = (Get-Content $ControlFile -Raw -ErrorAction Stop | ConvertFrom-Json).guest
+        $today = (Get-Date).ToString('yyyy-MM-dd')
+        $total = 0
+        if ($u.date -eq $today -and $u.users) {
+            foreach ($p in $u.users.PSObject.Properties) { $total += [int]$p.Value }
+        }
+        return "Guest usage today: $total msgs (caps $($caps.daily_message_cap)/guest, $($caps.global_daily_cap) global)"
+    } catch { return "Guest usage today: ?" }
+}
+
+function Get-DmCount {
+    # How many human DM lines inbox.jsonl holds. Compared against what the inbox
+    # viewer has shown to decide whether the tray badge lights up. Full-file scan,
+    # but the file is small and this runs every 5s on a machine that won't notice.
+    try {
+        $inbox = Join-Path $Dir 'inbox.jsonl'
+        if (-not (Test-Path $inbox)) { return 0 }
+        @(Select-String -Path $inbox -Pattern '"guild": null' -Encoding UTF8 |
+            Where-Object { $_.Line -notmatch '"is_self": true' }).Count
+    } catch { 0 }
+}
+
 function Get-BotUptime($botPid) {
     try {
         $p = Get-Process -Id $botPid -ErrorAction Stop
@@ -78,7 +106,7 @@ function Get-BotUptime($botPid) {
 # seconds, which on a process meant to run for weeks eventually stops drawing
 # anything at all.
 
-function New-DotIcon([System.Drawing.Color]$color) {
+function New-DotIcon([System.Drawing.Color]$color, [bool]$badge = $false) {
     $bmp = New-Object System.Drawing.Bitmap 16, 16
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = 'AntiAlias'
@@ -87,6 +115,13 @@ function New-DotIcon([System.Drawing.Color]$color) {
     $g.FillEllipse($brush, 1, 1, 14, 14)
     $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(90, 0, 0, 0)), 1
     $g.DrawEllipse($pen, 1, 1, 14, 14)
+    if ($badge) {
+        # Unread-DM marker: a small orange dot bottom-right, same idea as every
+        # messenger's notification badge.
+        $bb = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 150, 20))
+        $g.FillEllipse($bb, 9, 9, 7, 7)
+        $bb.Dispose()
+    }
     $brush.Dispose(); $pen.Dispose(); $g.Dispose()
     $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
     $bmp.Dispose()
@@ -96,6 +131,132 @@ function New-DotIcon([System.Drawing.Color]$color) {
 $IconGreen = New-DotIcon ([System.Drawing.Color]::FromArgb(60, 190, 90))
 $IconRed = New-DotIcon ([System.Drawing.Color]::FromArgb(215, 70, 70))
 $IconGrey = New-DotIcon ([System.Drawing.Color]::FromArgb(140, 140, 140))
+$IconGreenDm = New-DotIcon ([System.Drawing.Color]::FromArgb(60, 190, 90)) $true
+$IconRedDm = New-DotIcon ([System.Drawing.Color]::FromArgb(215, 70, 70)) $true
+$IconGreyDm = New-DotIcon ([System.Drawing.Color]::FromArgb(140, 140, 140)) $true
+
+# The viewer marks DMs read; start with everything current so a fresh tray does
+# not badge history you have long since seen.
+$script:DmSeen = Get-DmCount
+
+# --- inbox viewer ---------------------------------------------------------
+# A read-only window over inbox.jsonl: one line of JSON per message, rendered as
+# a conversation instead of raw JSON. Reads the file fresh on open and on
+# Refresh; it never writes anything, and closing it changes nothing.
+
+$script:InboxForm = $null
+$script:InboxDmOnly = $false
+
+function Render-Inbox([System.Windows.Forms.RichTextBox]$rtb) {
+    $inbox = Join-Path $Dir 'inbox.jsonl'
+    $rtb.Clear()
+    if (-not (Test-Path $inbox)) {
+        $rtb.AppendText("No inbox.jsonl yet - the bot logs incoming messages there once it sees one.")
+        return
+    }
+    # Tail, not the whole file: it grows forever and the window is for catching up,
+    # not archaeology. UTF8 matters - the bot writes UTF-8 and 5.1's default read
+    # would turn every dash and emoji into mojibake.
+    $lines = Get-Content $inbox -Encoding UTF8 -Tail 300
+    $lastDay = ''
+    foreach ($line in $lines) {
+        try { $m = $line | ConvertFrom-Json } catch { continue }
+        if ($script:InboxDmOnly -and $null -ne $m.guild) { continue }
+        try { $ts = [DateTimeOffset]::Parse($m.ts).ToLocalTime() } catch { $ts = $null }
+
+        if ($ts -and $ts.ToString('yyyy-MM-dd') -ne $lastDay) {
+            $lastDay = $ts.ToString('yyyy-MM-dd')
+            $rtb.SelectionColor = [System.Drawing.Color]::Gray
+            $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+            $rtb.AppendText("--- $($ts.ToString('ddd yyyy-MM-dd')) ---`n")
+        }
+
+        $rtb.SelectionColor = [System.Drawing.Color]::Gray
+        $rtb.SelectionFont = New-Object System.Drawing.Font('Consolas', 9)
+        $when = if ($ts) { $ts.ToString('HH:mm') } else { '??:??' }
+        $rtb.AppendText("$when  ")
+
+        # Where: DMs stand out in orange, guild channels in teal.
+        if ($null -eq $m.guild) {
+            $rtb.SelectionColor = [System.Drawing.Color]::DarkOrange
+            $rtb.AppendText("[DM] ")
+        } else {
+            $rtb.SelectionColor = [System.Drawing.Color]::Teal
+            $rtb.AppendText("[$($m.guild) #$($m.channel)] ")
+        }
+
+        # Who: Benham's own messages dim so the humans pop.
+        if ($m.is_self) {
+            $rtb.SelectionColor = [System.Drawing.Color]::DarkGray
+        } else {
+            $rtb.SelectionColor = [System.Drawing.Color]::Black
+        }
+        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
+        $rtb.AppendText("$($m.author): ")
+
+        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5)
+        $content = if ([string]::IsNullOrEmpty($m.content)) { '(no text - attachment/embed only)' } else { $m.content }
+        if ([string]::IsNullOrEmpty($m.content)) { $rtb.SelectionColor = [System.Drawing.Color]::Gray }
+        $rtb.AppendText("$content`n")
+    }
+    if ($rtb.TextLength -eq 0) { $rtb.AppendText('inbox.jsonl is empty.') }
+    $rtb.SelectionStart = $rtb.TextLength
+    $rtb.ScrollToCaret()
+    # Opening (or refreshing) the viewer is what "read" means here - clear the badge.
+    $script:DmSeen = Get-DmCount
+}
+
+function Show-InboxWindow {
+    # One window, re-fronted on repeat clicks - ten stacked copies of the same
+    # inbox helps nobody.
+    if ($script:InboxForm -and -not $script:InboxForm.IsDisposed) {
+        Render-Inbox $script:InboxForm.Controls['rtb']
+        $script:InboxForm.Activate()
+        return
+    }
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Benham inbox (last 300 messages)'
+    $form.Size = New-Object System.Drawing.Size(820, 560)
+    $form.StartPosition = 'CenterScreen'
+
+    $rtb = New-Object System.Windows.Forms.RichTextBox
+    $rtb.Name = 'rtb'
+    $rtb.ReadOnly = $true
+    $rtb.DetectUrls = $false
+    $rtb.BackColor = [System.Drawing.Color]::White
+    $rtb.BorderStyle = 'None'
+    $rtb.Dock = 'Fill'
+
+    $bar = New-Object System.Windows.Forms.FlowLayoutPanel
+    $bar.Dock = 'Bottom'
+    $bar.Height = 34
+    $bar.FlowDirection = 'RightToLeft'
+
+    $chkDm = New-Object System.Windows.Forms.CheckBox
+    $chkDm.Text = 'DMs only'
+    $chkDm.Checked = [bool]$script:InboxDmOnly
+    $chkDm.add_CheckedChanged({
+        $script:InboxDmOnly = $this.Checked
+        Render-Inbox $script:InboxForm.Controls['rtb']
+    })
+
+    $btnRefresh = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text = 'Refresh'
+    $btnRefresh.add_Click({ Render-Inbox $script:InboxForm.Controls['rtb'] })
+    $bar.Controls.Add($btnRefresh)
+
+    $btnRaw = New-Object System.Windows.Forms.Button
+    $btnRaw.Text = 'Open raw file'
+    $btnRaw.add_Click({ Start-Process notepad.exe (Join-Path $Dir 'inbox.jsonl') })
+    $bar.Controls.Add($btnRaw)
+    $bar.Controls.Add($chkDm)
+
+    $form.Controls.Add($rtb)
+    $form.Controls.Add($bar)
+    $script:InboxForm = $form
+    Render-Inbox $rtb
+    $form.Show()
+}
 
 # --- tray -----------------------------------------------------------------
 
@@ -115,6 +276,7 @@ function Add-Item($text, $action) {
 
 $miStatus = Add-Item "Benham: checking..." $null
 $miGuest = Add-Item "Guest chat: ?" $null
+$miUsage = Add-Item "Guest usage today: ?" $null
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 Add-Item "Restart bot" {
@@ -179,10 +341,24 @@ Add-Item "Disable guest chat + restart" {
     }
 } | Out-Null
 
+Add-Item "View inbox" {
+    Show-InboxWindow
+} | Out-Null
+
 Add-Item "Open guest search log" {
     $sl = Join-Path $Dir 'guest_searches.jsonl'
     if (Test-Path $sl) { Start-Process notepad.exe $sl }
     else { $notify.ShowBalloonTip(3000, "Benham", "No guest searches logged yet.", 'Info') }
+} | Out-Null
+
+Add-Item "Open Benhams-inbox folder" {
+    # The pc.. workdir, where task artifacts land. Read from control.json each
+    # click so a moved workdir does not leave the tray pointing at the old one.
+    $wd = $null
+    try { $wd = (Get-Content $ControlFile -Raw -ErrorAction Stop | ConvertFrom-Json).pc.workdir } catch {}
+    if (-not $wd) { $wd = 'C:\Users\Tyler\Claude\Benhams-inbox' }
+    if (Test-Path $wd) { Start-Process explorer.exe $wd }
+    else { $notify.ShowBalloonTip(3000, "Benham", "Workdir not found: $wd", 'Warning') }
 } | Out-Null
 
 Add-Item "Open supervise.log" {
@@ -212,22 +388,26 @@ function Update-Tray {
     $supUp = Get-SupervisorUp
     $g = Get-GuestState
 
+    $dmNew = [Math]::Max(0, (Get-DmCount) - $script:DmSeen)
+
     if (-not $supUp) {
-        $notify.Icon = $IconGrey
+        $notify.Icon = if ($dmNew) { $IconGreyDm } else { $IconGrey }
         $state = "supervisor OFF"
     } elseif ($botPid) {
-        $notify.Icon = $IconGreen
+        $notify.Icon = if ($dmNew) { $IconGreenDm } else { $IconGreen }
         $state = "up (pid $botPid, $(Get-BotUptime $botPid))"
     } else {
-        $notify.Icon = $IconRed
+        $notify.Icon = if ($dmNew) { $IconRedDm } else { $IconRed }
         $state = "DOWN - restart in flight"
     }
 
     if ($g.On) { $guestText = "Guest chat: ON ($($g.Count) whitelisted)" }
     else { $guestText = "Guest chat: off" }
+    if ($dmNew) { $guestText += " - $dmNew new DM" + $(if ($dmNew -gt 1) { 's' }) }
 
     $miStatus.Text = "Benham: $state"
     $miGuest.Text = $guestText
+    $miUsage.Text = Get-GuestUsage
     # NotifyIcon.Text throws over 63 chars, which would kill the timer thread.
     $tip = "Benham: $state`n$guestText"
     if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 60) + "..." }
