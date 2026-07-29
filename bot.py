@@ -1241,16 +1241,138 @@ class LiveProgress:
         await self._redraw()            # unthrottled: never leave the trail stale
 
 
-async def ask_owner_dm(text):
+async def react(message, emoji):
+    """Best-effort reaction. Status decoration, never load-bearing - a reaction
+    that fails to land must not fail the work it was decorating."""
+    try:
+        await message.add_reaction(emoji)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class ApprovalView(discord.ui.View):
+    """Approve/Deny buttons on a consent prompt.
+
+    Convenience, not authority. The decision still travels the exact same code
+    path a typed "yes" does - the on_decide callback is the same resolver - and
+    the owner check inside the click handler is the same identity.is_owner gate
+    the message handler applies. The typed reply keeps working alongside these;
+    whichever arrives first wins and the loser finds the request already gone.
+
+    Single-use and visibly mortal: the first click disables both buttons, and a
+    prompt that times out edits itself to say so - a dead confirmation sitting
+    in the DM looking pressable is how stale approvals happen.
+    """
+
+    def __init__(self, on_decide, timeout):
+        super().__init__(timeout=timeout)
+        self.on_decide = on_decide   # async fn(approved: bool)
+        self.message = None          # the prompt message; set after sending
+        self.decided = False
+
+    def _disable(self):
+        self.decided = True
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+
+    async def deaden(self, note):
+        """Retire the buttons because the decision arrived some other way."""
+        if self.decided:
+            return
+        self._disable()
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    content=f"{self.message.content}\n\n_{note}_", view=self)
+            except Exception:  # noqa: BLE001 — cosmetics only
+                pass
+
+    async def _click(self, interaction, approved):
+        if not identity.is_owner(interaction.user.id):
+            # Unreachable in a DM, load-bearing anywhere else a view might one
+            # day be posted. Same rule as everywhere: nobody else directs Benham.
+            try:
+                await interaction.response.send_message(
+                    identity.refusal(interaction.user.id), ephemeral=True)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        if self.decided:
+            try:
+                await interaction.response.defer()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self._disable()
+        note = "✅ approved" if approved else "❌ denied"
+        try:
+            await interaction.response.edit_message(
+                content=f"{interaction.message.content}\n\n_{note}_", view=self)
+        except Exception:  # noqa: BLE001 — the decision matters, the edit doesn't
+            pass
+        await self.on_decide(approved)
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success)
+    async def approve(self, interaction, button):
+        await self._click(interaction, True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
+    async def deny(self, interaction, button):
+        await self._click(interaction, False)
+
+    async def on_timeout(self):
+        await self.deaden("expired — treated as no")
+
+
+# Live button views, so the typed-reply paths can retire them when they win the
+# race. Keys: ("pc", rid) and ("confirm", token).
+_views = {}
+
+
+async def retire_view(key, note):
+    view = _views.pop(key, None)
+    if view is not None:
+        await view.deaden(note)
+
+
+async def send_with_view(channel, text, view):
+    """Post text (chunked if needed) with the buttons on the LAST chunk, and tell
+    the view which message it lives on so it can edit itself later."""
+    msg = None
+    chunks = split_for_discord(text)
+    for chunk in chunks[:-1]:
+        await channel.send(chunk)
+    msg = await channel.send(chunks[-1], view=view)
+    view.message = msg
+    return msg
+
+
+async def ask_owner_dm(text, rid=None):
     """DM the owner. Used by the PC session's permission gate.
 
     Raises rather than swallowing a failure: codesession treats an unreachable
     owner as a denial, and it can only do that if it finds out.
+
+    When a request id is given, the prompt carries Approve/Deny buttons that
+    resolve that exact request - the same codesession.answer() call the typed
+    reply path makes, so a late or duplicate answer is ignored there, not here.
     """
     owner_id = sorted(identity.OWNER_IDS)[0]
     user = client.get_user(owner_id) or await client.fetch_user(owner_id)
     channel = user.dm_channel or await user.create_dm()
-    await reply_in(channel, text)
+    if rid is None:
+        await reply_in(channel, text)
+        return
+
+    async def decide(approved):
+        matched = codesession.answer(rid, approved)
+        log(f"PC-PERMISSION [{rid}] button {'APPROVED' if approved else 'DENIED'}"
+            + ("" if matched else " (too late - already resolved)"))
+
+    view = ApprovalView(decide, timeout=codesession.PERMISSION_TIMEOUT)
+    _views[("pc", str(rid))] = view
+    await send_with_view(channel, text, view)
 
 
 async def fire_confirmed(pending, channel):
@@ -1536,6 +1658,7 @@ async def on_message(message):
         verdict, _ = confirm.read_reply(text)
         if verdict in ("yes", "no"):
             codesession.answer(rid, verdict == "yes")
+            await retire_view(("pc", str(rid)), f"answered '{verdict}' in chat")
             await reply_in(message.channel,
                            "Running it now." if verdict == "yes" else "Skipping that.")
             return
@@ -1549,11 +1672,13 @@ async def on_message(message):
         target = confirm.get(token) if token else pending
         if verdict == "yes" and target is not None:
             confirm.consume(target.token)
+            await retire_view(("confirm", target.token), "answered 'yes' in chat")
             await fire_confirmed(target, message.channel)
             return
         if verdict == "no":
             log(f"DECLINED {pending.action} (token {pending.token}) by {message.author.id}")
             confirm.cancel()
+            await retire_view(("confirm", pending.token), "answered 'no' in chat")
             await reply_in(message.channel, "Cancelled — nothing was touched.")
             return
 
@@ -1614,6 +1739,7 @@ async def on_message(message):
         label = pc_label(typed, replied)
         log(f"pc-prefix (0 API calls): {label!r}"
             + (" (with reply context)" if replied is not None else ""))
+        await react(message, "👀")
         live = LiveProgress(message.channel, f"**on it** — `{label}`")
         started = time.monotonic()
         try:
@@ -1626,12 +1752,24 @@ async def on_message(message):
                     call_ctx=policy.CallContext.owner_dm(
                         message.author.id, message.channel.id))
             await live.finish(f"_done in {time.monotonic() - started:.0f}s_")
-            await reply_in(message.channel,
-                           (result or {}).get("result") or "(the session returned nothing)")
+            answer = (result or {}).get("result") or "(the session returned nothing)"
+            # An embed when it fits: title says which task this answers (a long
+            # session can outlive several other messages), footer says what it
+            # cost in wall-clock. Past embed limits, plain chunked text - the
+            # answer matters more than the frame.
+            if len(answer) <= 4096:
+                emb = discord.Embed(title=label[:256], description=answer)
+                emb.set_footer(text=f"done in {time.monotonic() - started:.0f}s")
+                await message.channel.send(embed=emb)
+            else:
+                await reply_in(message.channel, answer)
+            await react(message, "✅")
         except capabilities.ActionError as e:
+            await react(message, "⚠️")
             await reply_in(message.channel, f"Couldn't run that: {e}")
         except Exception as e:  # noqa: BLE001 — never take the bot down over one task
             log(f"pc-prefix failed:\n{traceback.format_exc()}")
+            await react(message, "⚠️")
             await reply_in(message.channel, f"That failed: {type(e).__name__}: {e}")
         return
 
@@ -1665,6 +1803,7 @@ async def on_message(message):
 
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
+    await react(message, "👀")
     try:
         async with message.channel.typing():
             reply, parked = await agent.respond(
@@ -1675,13 +1814,35 @@ async def on_message(message):
                 where=where, conversation_key=key, call_ctx=call_ctx)
     except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
         log(f"agent failed:\n{traceback.format_exc()}")
+        await react(message, "⚠️")
         await reply_in(message.channel, f"My brain threw an error: {type(e).__name__}: {e}")
         return
 
     if reply:
         await reply_in(message.channel, reply)
     if parked is not None:
-        await reply_in(message.channel, confirm.describe(parked))
+        # The preview carries Approve/Deny buttons wired to the SAME chokepoint a
+        # typed "yes" reaches: consume-then-fire_confirmed, which the model never
+        # touches. A button is a faster finger, not a new authority.
+        channel = message.channel
+
+        async def decide(approved, _parked=parked, _channel=channel):
+            if approved:
+                target = confirm.consume(_parked.token)
+                if target is None:
+                    await reply_in(_channel,
+                                   "That confirmation already expired or was superseded.")
+                    return
+                await fire_confirmed(target, _channel)
+            else:
+                log(f"DECLINED {_parked.action} (token {_parked.token}) by button")
+                confirm.cancel(_parked.token)
+                await reply_in(_channel, "Cancelled — nothing was touched.")
+
+        view = ApprovalView(decide, timeout=max(parked.seconds_left, 1))
+        _views[("confirm", parked.token)] = view
+        await send_with_view(channel, confirm.describe(parked), view)
+    await react(message, "✅")
 
 
 @tasks.loop(seconds=2)

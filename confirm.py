@@ -195,7 +195,7 @@ def describe(p):
         lines += ["", f"_{reason}_"]
     lines += [
         "",
-        f"Reply **yes** to run it, or **no** to cancel. Token `{p.token}`, "
-        f"expires in {p.seconds_left // 60}m.",
+        f"Tap a button, or reply **yes** to run it / **no** to cancel. "
+        f"Token `{p.token}`, expires in {p.seconds_left // 60}m.",
     ]
     return "\n".join(lines)
