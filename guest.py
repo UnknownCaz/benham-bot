@@ -5,12 +5,19 @@ The feature request was doomassassin1's: a whitelist of people who can reach Cla
 through Benham without waiting for Tyler to relay. What makes that safe to build is
 not a longer list of rules, it is a shorter list of powers.
 
-THE PROPERTY THIS FILE EXISTS TO HAVE. The API call below passes no `tools`
-parameter. Not an empty list, not a filtered one - the argument is absent. So the
-question "could a guest reach capability X" has the same answer for all 47 of them,
-for the ones added next year, and for pc_task, without anything here knowing what a
-capability is. A gate that has to enumerate what it forbids is a gate that can be
-out of date; this one cannot be.
+THE PROPERTY THIS FILE EXISTS TO HAVE. The API call below passes no CLIENT tools.
+The single entry in `tools` is Anthropic's server-side web search, which executes on
+Anthropic's infrastructure: no code runs here, nothing is fetched from this machine
+or network, and there is no tool-result loop in this file for a model to steer. So
+the question "could a guest reach capability X" still has the same answer for all of
+them, for the ones added next year, and for pc_task, without anything here knowing
+what a capability is. A gate that has to enumerate what it forbids is a gate that
+can be out of date; this one cannot be. Adding any CLIENT tool here would break the
+property - read this paragraph again before doing it.
+
+Web search rules (Tyler's): a turn that searched counts DOUBLE against the daily
+cap (the search is a second API round trip, so it is priced like one), and every
+query is logged to guest_searches.jsonl for hand moderation.
 
 That is also why this is a separate module rather than a flag on agent.py. agent.py's
 whole job is handing the model a tool list and running the loop; "the same thing but
@@ -54,6 +61,7 @@ load_dotenv(os.path.join(BASE_DIR, "environ.env"))
 MEMORY_FILE = os.path.join(BASE_DIR, "guest_memory.json")
 USAGE_FILE = os.path.join(BASE_DIR, "guest_usage.json")
 PERSONA_FILE = os.path.join(BASE_DIR, "guest_persona.md")
+SEARCH_LOG = os.path.join(BASE_DIR, "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
 MODEL = _CFG.get("model") or "claude-haiku-4-5"
@@ -62,6 +70,8 @@ HISTORY_TURNS = int(_CFG.get("history_turns", 10))
 COOLDOWN = float(_CFG.get("cooldown_seconds", 3))
 DAILY_CAP = int(_CFG.get("daily_message_cap", 100))
 GLOBAL_CAP = int(_CFG.get("global_daily_cap", 400))
+WEB_SEARCH = bool(_CFG.get("web_search", True))
+SEARCHES_PER_TURN = int(_CFG.get("searches_per_turn", 2))
 
 _client = None
 _persona_cache = None
@@ -152,6 +162,41 @@ def refund(user_id):
         u["users"][uid] = max(0, int(u["users"].get(uid, 0)) - 1)
         u["global"] = max(0, int(u.get("global", 0)) - 1)
         jsonio.write_json(USAGE_FILE, u)
+
+
+def charge_search(user_id):
+    """Spend one extra message for a turn that used web search.
+
+    Tyler's pricing rule: a searched turn counts double, because the search is a
+    second round trip billed like one. Charged AFTER the response (only then is it
+    known a search happened), so unlike _reserve this never refuses - a guest at
+    the cap already got their answer, and the honest ledger entry matters more
+    than a cap technically exceeded by one. The cap check next turn settles it.
+    """
+    with _quota_lock:
+        u = _usage()
+        uid = str(int(user_id))
+        u["users"][uid] = int(u["users"].get(uid, 0)) + 1
+        u["global"] = int(u.get("global", 0)) + 1
+        jsonio.write_json(USAGE_FILE, u)
+
+
+def _log_searches(user_id, queries):
+    """Append each query to guest_searches.jsonl - the hand-moderation trail.
+
+    Append-only JSONL, one object per query, written even if the reply then fails
+    to send: the search happened, so it belongs in the record.
+    """
+    import json
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(SEARCH_LOG, "a", encoding="utf-8") as f:
+            for q in queries:
+                f.write(json.dumps({"ts": ts, "user_id": int(user_id),
+                                    "query": str(q)}) + "\n")
+    except OSError:
+        pass
 
 
 def spent_today(user_id):
@@ -315,15 +360,31 @@ def respond(user_id, text, log=None):
     # The cooldown clock is started by check(), not here: it has to advance for a
     # message that was accepted even if this call then fails, or a guest whose turns
     # error out is free to retry with no rate limit at all.
+    kw = {}
+    if WEB_SEARCH:
+        # Anthropic's SERVER-SIDE web search - the only tool a guest gets, and the
+        # only kind that keeps this file's security property: it runs on Anthropic's
+        # servers, touches nothing on this machine or network, and there is no
+        # client tool-result loop here for fetched content to steer. Do NOT add
+        # client tools; see the module docstring.
+        kw["tools"] = [{"type": "web_search_20250305", "name": "web_search",
+                        "max_uses": SEARCHES_PER_TURN}]
     resp = _get_client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=_system_prompt(),
         messages=turns,
-        # NO tools= argument. This absence is the security property; see the module
-        # docstring before adding anything here.
+        **kw,
     )
     raw = "".join(b.text for b in resp.content if b.type == "text").strip()
+
+    queries = [getattr(b, "input", {}).get("query", "?")
+               for b in resp.content
+               if getattr(b, "type", "") == "server_tool_use"]
+    if queries:
+        _log_searches(user_id, queries)
+        charge_search(user_id)   # a searched turn counts double - Tyler's rule
+        _log(f"guest search [{user_id}]: " + "; ".join(repr(q) for q in queries))
 
     # Strip directives, apply none. brain.parse_persona_directive is deliberately not
     # called: it writes to personality_overrides.txt, which every surface reads.
