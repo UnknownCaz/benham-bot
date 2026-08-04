@@ -125,7 +125,7 @@ The approval DM shows the **full command**, up to 1200 characters. An early vers
 `cd` anywhere or use absolute paths. It keeps scratch files tidy; it contains nothing.
 
 **Secrets are readable.** Tyler chose full file access deliberately. Reads are free, so anyone who
-can DM Benham can ask it to read `environ.env` and get the bot token and API key. The
+can DM Benham can ask it to read `config/environ.env` and get the bot token and API key. The
 ask-before-changing gate does not help here, because reading is not a change. What the code does
 instead is make it loud: every read of a credential-shaped path logs at `SECRET-READ`. That is a
 trail, not a block. Flipping this to a hard deny is a one-line change to `_SECRET_RE`'s use in
@@ -177,7 +177,7 @@ Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_ou
 | `python benham.py read_history [limit=100]` | Invisible one-shot: same, across every non-Testing guild at once. |
 | `python benham.py do find_user query=<name>` | Turn a name, @mention or id into the `user_id` every other action wants. Searches every server unless given `guild_id=`. |
 | `python benham.py do read_attachments channel_id=<id> message_id=<id>` | Download that message's files into `downloads/<message_id>/`; text files come back with their contents. `save=false` to look without keeping. |
-| tail `inbox.jsonl` | Live feed of every message the running bot sees (one JSON per line). |
+| tail `state/inbox.jsonl` | Live feed of every message the running bot sees (one JSON per line). |
 
 ### CLI - voice (via the outbox)
 
@@ -305,7 +305,7 @@ all once the turn has read what other people wrote.
   talks, never *what* it may do.
 - **Review-first for outward posts:** use `draft.py` so a human sees a reply before it goes to a
   real channel.
-- **Secrets** live in `environ.env` (`BOT_KEY`, `ANTHROPIC_API_KEY`) - gitignored, never committed
+- **Secrets** live in `config/environ.env` (`BOT_KEY`, `ANTHROPIC_API_KEY`) - gitignored, never committed
   or printed.
 
 ## Running it
@@ -349,7 +349,7 @@ duplicate outbox actions. Guarded by a named mutex against another supervisor, a
 check against a `bot.py` someone started by hand - in either case it logs the conflict and exits
 1 rather than connecting.
 
-**Its log rotates.** `supervise.log` holds the supervisor's own lines plus all bot output, and
+**Its log rotates.** `logs/supervise.log` holds the supervisor's own lines plus all bot output, and
 moves aside to `supervise.log.1` past 5MB - one generation, the same convention
 `jsonio.rotate_if_large` uses for transcripts.
 
