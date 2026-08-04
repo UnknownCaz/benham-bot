@@ -23,7 +23,7 @@ could reach it - every other action had a script and this one didn't.
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 DEFAULT_DAYS = 7
 SCOPES = ("channel", "guild")

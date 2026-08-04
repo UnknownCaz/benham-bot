@@ -16,7 +16,7 @@ outbox/failed with a Forbidden error rather than failing silently.
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 # The bot's owner. Kept here rather than in a config file because dm.py is the
 # only thing that needs it; move it out if a second caller ever appears.

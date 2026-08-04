@@ -13,6 +13,11 @@ in that guest's own folder.
     python test_guest_workspace.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import os
 import shutil
@@ -20,10 +25,10 @@ import sys
 import tempfile
 import threading
 
-import capabilities
-import identity
-import policy
-from policy import Origin
+from benham.core import capabilities
+from benham.core import identity
+from benham.core import policy
+from benham.core.policy import Origin
 
 TYLER = 273967061619965952
 DOOM = 777000777000777000
@@ -44,7 +49,7 @@ def section(name):
     print(f"\n{name}")
 
 
-import guest_workspace as ws  # noqa: E402
+from benham.guest import guest_workspace as ws  # noqa: E402
 
 # Point the whole module at a scratch tree - tests never touch the real one.
 _tmp = tempfile.mkdtemp(prefix="benham-ws-test-")

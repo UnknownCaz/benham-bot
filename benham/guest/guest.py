@@ -49,11 +49,11 @@ from datetime import date
 
 from dotenv import load_dotenv
 
-import brain
-import identity
-import jsonio
-import policy
-import shared_tools
+from benham.core import brain
+from benham.core import identity
+from benham.core import jsonio
+from benham.core import policy
+from benham.core import shared_tools
 
 from benham import paths
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))

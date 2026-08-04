@@ -11,7 +11,7 @@ channels.json under each guild's "voice_channels".
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 
 def main(argv):

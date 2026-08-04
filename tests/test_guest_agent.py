@@ -19,15 +19,20 @@ with a scripted fake API and asserts on what it did NOT do:
     python test_guest_agent.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import os
 import sys
 import tempfile
 
-import capabilities
-import identity
-import policy
-from policy import Origin
+from benham.core import capabilities
+from benham.core import identity
+from benham.core import policy
+from benham.core.policy import Origin
 
 TYLER = 273967061619965952
 DOOM = 777000777000777000
@@ -55,9 +60,9 @@ def set_guest(caps=(), mode="workspace", web_search=True):
 
 set_guest()
 
-import guest  # noqa: E402
-import guest_agent  # noqa: E402
-import shared_tools  # noqa: E402
+from benham.guest import guest  # noqa: E402
+from benham.guest import guest_agent  # noqa: E402
+from benham.core import shared_tools  # noqa: E402
 
 _tmp = tempfile.mkdtemp(prefix="benham-guestagent-test-")
 guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
@@ -111,7 +116,7 @@ def run_turn(script, text="hi", caps=()):
 
 
 def reset_usage():
-    import jsonio
+    from benham.core import jsonio
     jsonio.write_json(guest.USAGE_FILE, {})
 
 
@@ -270,7 +275,7 @@ check("nothing about the action leaked to the model",
       "Delete everything" in str(api.kwargs[1]["messages"]), False)
 check("the leak was logged loudly",
       any("GUEST-CONFIRM-LEAK" in m for m in logged), True)
-import confirm  # noqa: E402
+from benham.core import confirm  # noqa: E402
 check("nothing was parked for Tyler", confirm.current(), None)
 
 

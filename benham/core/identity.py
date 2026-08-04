@@ -24,7 +24,7 @@ was a mistake:
 
 import os
 
-import jsonio
+from benham.core import jsonio
 
 from benham import paths
 CONTROL_FILE = os.path.join(paths.CONFIG_DIR, "control.json")

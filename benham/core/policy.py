@@ -34,7 +34,7 @@ still live where they were, and move here one at a time - each with the system f
 working in between, so a regression is always attributable to a single step.
 """
 
-import identity
+from benham.core import identity
 
 
 class Origin:

@@ -16,6 +16,11 @@ swapped in the REGISTRY so the real capabilities.run + policy chain still runs.
     python test_pc_reply.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import re
 import sys
@@ -24,8 +29,8 @@ from datetime import datetime, timezone
 import discord
 
 import bot
-import capabilities
-import confirm
+from benham.core import capabilities
+from benham.core import confirm
 
 TYLER = 273967061619965952
 TESTING = 736988645562646619

@@ -24,15 +24,20 @@ fires nothing at all, so one case proves the wiring is live.
     python test_guest.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import os
 import sys
 import tempfile
 
-import capabilities
-import identity
-import policy
-from policy import CallContext, Origin
+from benham.core import capabilities
+from benham.core import identity
+from benham.core import policy
+from benham.core.policy import CallContext, Origin
 
 TYLER = 273967061619965952
 DOOM = 777000777000777000
@@ -65,7 +70,7 @@ enable_guests()
 
 # Import guest AFTER the allowlist exists, then redirect its state files so a test
 # run never touches the real conversation history or today's real counters.
-import guest  # noqa: E402
+from benham.guest import guest  # noqa: E402
 
 _tmp = tempfile.mkdtemp(prefix="benham-guest-test-")
 guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
@@ -158,7 +163,7 @@ section("Quota — Tyler pays for every one of these")
 import threading  # noqa: E402
 import time  # noqa: E402
 
-import jsonio  # noqa: E402
+from benham.core import jsonio  # noqa: E402
 
 
 def reset_usage():
@@ -276,7 +281,7 @@ guest.forget()
 # --------------------------------------------------------------------------
 section("Memory isolation — a guest never sees Tyler's thread")
 
-import agent  # noqa: E402
+from benham.core import agent  # noqa: E402
 
 check("guest memory is a different FILE from the agent's",
       os.path.abspath(guest.MEMORY_FILE) == os.path.abspath(agent.MEMORY_FILE),
@@ -349,7 +354,7 @@ check("personality_overrides.txt is untouched — no cross-surface contamination
 # guest.py actually promises is "no CLIENT tools". The one permitted entry is
 # Anthropic's server-side search - asserting the exact list means a second entry
 # of any kind, or a client tool swapped in, fails loudly.
-import shared_tools  # noqa: E402
+from benham.core import shared_tools  # noqa: E402
 check("the only tool passed is Anthropic's SERVER-SIDE web search - no client tools",
       [t.get("type") for t in (_fake.messages.kwargs or {}).get("tools", [])],
       [shared_tools.WEB_SEARCH_TYPE] if guest.WEB_SEARCH else [])
@@ -365,8 +370,8 @@ section("The live path — driving the real bot.on_message")
 os.environ.setdefault("BOT_KEY", "test-token-not-used")
 import bot  # noqa: E402
 
-import codesession  # noqa: E402
-import confirm  # noqa: E402
+from benham.core import codesession  # noqa: E402
+from benham.core import confirm  # noqa: E402
 
 
 class _Author:

@@ -10,7 +10,7 @@ sends it, and moves it to outbox/sent or outbox/failed with a result file.
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 
 def main(argv):

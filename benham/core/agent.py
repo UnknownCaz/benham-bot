@@ -33,12 +33,12 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-import capabilities
-import confirm
-import identity
-import policy
-import jsonio
-import shared_tools
+from benham.core import capabilities
+from benham.core import confirm
+from benham.core import identity
+from benham.core import policy
+from benham.core import jsonio
+from benham.core import shared_tools
 
 from benham import paths
 

@@ -24,9 +24,9 @@ import os
 import sys
 import time
 
-import capabilities  # noqa: F401 — imported for its registration side effects
-import identity
-import outbox
+from benham.core import capabilities  # noqa: F401 — imported for its registration side effects
+from benham.core import identity
+from benham.core import outbox
 
 RESULT_DIRS = ("sent", "failed")
 

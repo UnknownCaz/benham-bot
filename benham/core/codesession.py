@@ -36,7 +36,7 @@ import re
 
 from dotenv import load_dotenv
 
-import identity
+from benham.core import identity
 
 from benham import paths
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))

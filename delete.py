@@ -14,7 +14,7 @@ old messages at once, use purge.py.
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 
 def main(argv):
