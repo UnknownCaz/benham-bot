@@ -24,7 +24,7 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 
-import bot
+from benham import bot
 from benham.core import capabilities
 from benham.core import confirm
 from benham.core import identity

@@ -1,7 +1,7 @@
 """status.py — quick, READ-ONLY health check for benham-bot.
 
 Answers "is Benham up and what is it doing" without touching Discord:
-  - is a bot.py process running (pid)?
+  - is a benham.bot process running (pid)?
   - which guilds/channels does it see (from channels.json, written each boot)?
   - AUTO_REPLY on/off + the guild allowlist (from environ.env + exaroton_watch.json)
   - last login / command-sync lines from the newest log file
@@ -21,10 +21,10 @@ from benham import paths
 
 
 def bot_pid():
-    """Best-effort: pid of a running `python bot.py`, or None. Uses PowerShell on Windows."""
+    """Best-effort: pid of a running `python -m benham.bot`, or None. Uses PowerShell on Windows."""
     ps = (
         "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | "
-        "Where-Object { $_.CommandLine -match 'bot\\.py' } | "
+        "Where-Object { $_.CommandLine -match '-m benham\\.bot' } | "
         "Select-Object -First 1 -ExpandProperty ProcessId"
     )
     try:
