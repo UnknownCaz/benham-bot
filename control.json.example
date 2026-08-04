@@ -39,6 +39,7 @@
     "enabled": false,
     "mode": "chat",
     "ids": [],
+    "capabilities": [],
     "model": "claude-haiku-4-5",
     "max_tokens": 500,
     "history_turns": 10,
@@ -48,7 +49,7 @@
     "web_search": true,
     "searches_per_turn": 2
   },
-  "_guest": "Lets whitelisted NON-owners hold a plain conversation with Claude by DM. Conversation ONLY apart from web_search: the guest path passes no CLIENT tools to the API - the single entry is Anthropic's SERVER-SIDE web search (runs on their servers, nothing fetched from this machine or network; searches_per_turn caps uses per message). A turn that searched counts DOUBLE against the daily cap, and every query is appended to guest_searches.jsonl for hand moderation. So no Discord action, no channel read and no PC access is reachable from it - a guest id buys a reply instead of a refusal, and nothing else. ids: Discord user ids; an owner id here is ignored. mode: only 'chat' exists today; an unrecognised mode disables guest chat rather than guessing. Guests are DM-only and cannot be reached by mention. Caps are per calendar day and reset on the first message after midnight; every message bills Tyler, which is what the caps are for. Separate memory file (guest_memory.json) - a guest never sees, and is never seen by, Tyler's own conversation. RESTART REQUIRED, both ways: this file is read once at import, so enabling guests, disabling them, or striking someone from ids all take effect on the next start and not before. To cut a guest off immediately, bounce the bot - 'enabled: false' on its own does nothing to a running process.",
+  "_guest": "Lets whitelisted NON-owners hold a plain conversation with Claude by DM. Conversation ONLY apart from web_search: the guest path passes no CLIENT tools to the API - the single entry is Anthropic's SERVER-SIDE web search (runs on their servers, nothing fetched from this machine or network; searches_per_turn caps uses per message). A turn that searched counts DOUBLE against the daily cap, and every query is appended to guest_searches.jsonl for hand moderation. So no Discord action, no channel read and no PC access is reachable from it - a guest id buys a reply instead of a refusal, and nothing else. ids: Discord user ids; an owner id here is ignored. capabilities: names of capabilities guests may reach - the CONFIG half of a three-part grant (the capability must ALSO declare guest=True in code and name the guest origin), so a typo here can only turn things OFF. As of Stage 2 no capability carries the flag, so this list grants nothing whatever it says; it becomes meaningful when the guest workspace ships (Stage 4). mode: only 'chat' exists today; an unrecognised mode disables guest chat rather than guessing. Guests are DM-only and cannot be reached by mention. Caps are per calendar day and reset on the first message after midnight; every message bills Tyler, which is what the caps are for. Separate memory file (guest_memory.json) - a guest never sees, and is never seen by, Tyler's own conversation. RESTART REQUIRED, both ways: this file is read once at import, so enabling guests, disabling them, or striking someone from ids all take effect on the next start and not before. To cut a guest off immediately, bounce the bot - 'enabled: false' on its own does nothing to a running process.",
 
   "confirm": {
     "ttl_seconds": 3600,

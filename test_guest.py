@@ -82,10 +82,12 @@ check("every registered capability denies a guest", reachable, [])
 check("...and that is all 50 of them", len(capabilities.REGISTRY), 50)
 
 # Both denials are asserted separately: either alone would secure this, and the
-# point of having two is that a future edit to one is survivable.
+# point of having two is that a future edit to one is survivable. Since Stage 2
+# the first refusal comes from the guest lane's own gate (rule_guest), which
+# names the actual reason - not a guest capability - instead of the owner rule.
 send = capabilities.REGISTRY["send_message"]
-check("rule_owner is the one that fires first",
-      policy.authorize(send, gctx).rule, "owner")
+check("the guest lane's own gate is what fires first",
+      policy.authorize(send, gctx).rule, "guest_capability")
 check("GUEST_DM is absent from DEFAULT_ORIGINS (the second, independent denial)",
       Origin.GUEST_DM in policy.DEFAULT_ORIGINS, False)
 check("GUEST_DM is a recognised origin, so it fails the owner rule not the "

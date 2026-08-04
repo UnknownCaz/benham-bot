@@ -59,7 +59,7 @@ class Action:
 
     def __init__(self, name, tier, summary, params, handler, needs_guild,
                  outward=False, taints=False, always_confirm=False, posts=False,
-                 origins=None, blocked_when_tainted=False):
+                 origins=None, blocked_when_tainted=False, guest=False):
         self.name = name
         self.tier = tier
         self.summary = summary
@@ -74,6 +74,13 @@ class Action:
         # values when a capability should not be reachable from every direction.
         self.origins = frozenset(origins) if origins is not None else None
         self.blocked_when_tainted = blocked_when_tainted
+        # Whether a GUEST may ever reach this capability. Code-side half of a
+        # three-part grant: this flag, GUEST_DM in origins, AND the name listed in
+        # control.json's guest.capabilities - policy.rule_guest checks the config,
+        # rule_origin_allowed checks the origins, and all three must agree. The
+        # default is the entire point: a capability written next year is
+        # guest-proof on the day it is written, exactly as before Stage 2.
+        self.guest = bool(guest)
 
     @property
     def destructive(self):
@@ -93,16 +100,70 @@ class Action:
 
 def action(name, tier, summary, params=None, needs_guild=False,
            outward=False, taints=False, always_confirm=False, posts=False,
-           origins=None, blocked_when_tainted=False):
-    """Register one capability."""
+           origins=None, blocked_when_tainted=False, guest=False):
+    """Register one capability.
+
+    A guest=True declaration is checked HERE, at import, and a violation refuses
+    to register - the bot crashes at startup rather than carrying a capability
+    whose declaration lies. The rules (see PLAN-guest-permissions.md §2):
+
+      not destructive / posts / always_confirm / outward - the guest lane never
+      confirms and never produces content other people see, so a guest capability
+      that would need either is a contradiction, not a configuration.
+
+      not blocked_when_tainted - a guest turn is BORN tainted, so such a
+      capability could be granted in config and dead in practice, which is
+      exactly the kind of lie a registry must not tell.
+
+      GUEST_DM in origins - rule_origin_allowed is the second, independent
+      denial, and a guest capability that forgot to name the guest origin would
+      pass the flag check and then refuse every real call.
+    """
     def deco(fn):
+        if guest:
+            problems = []
+            if tier >= identity.DESTRUCTIVE:
+                problems.append("destructive")
+            if posts:
+                problems.append("posts")
+            if always_confirm:
+                problems.append("always_confirm")
+            if outward:
+                problems.append("outward")
+            if blocked_when_tainted:
+                problems.append("blocked_when_tainted (guest turns are born tainted)")
+            if origins is None or policy.Origin.GUEST_DM not in origins:
+                problems.append("origins must explicitly include Origin.GUEST_DM")
+            if problems:
+                raise ValueError(
+                    f"capability {name!r} declares guest=True but violates the "
+                    f"guest-lane invariant: {'; '.join(problems)}. See "
+                    "PLAN-guest-permissions.md §2.")
         REGISTRY[name] = Action(name, tier, summary, params, fn, needs_guild,
                                 outward=outward, taints=taints,
                                 always_confirm=always_confirm, posts=posts,
                                 origins=origins,
-                                blocked_when_tainted=blocked_when_tainted)
+                                blocked_when_tainted=blocked_when_tainted,
+                                guest=guest)
         return fn
     return deco
+
+
+def guest_grants():
+    """The capabilities a guest may actually reach, {name: Action}.
+
+    The single computation of the three-way agreement: flag, origins, config.
+    The guest tool loop (Stage 3) builds its schemas from this, and the invariant
+    suite recomputes it independently - two consumers, one definition, no drift.
+    Lives here rather than in policy.py only because the registry does (policy
+    cannot import capabilities without a cycle); policy.rule_guest applies the
+    same three conditions per-call.
+    """
+    cfg = identity.guest_capabilities()
+    return {name: act for name, act in REGISTRY.items()
+            if act.guest and act.origins is not None
+            and policy.Origin.GUEST_DM in act.origins
+            and name in cfg}
 
 
 # --------------------------------------------------------------------------
