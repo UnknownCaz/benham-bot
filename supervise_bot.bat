@@ -1,6 +1,6 @@
 @echo off
 REM ---------------------------------------------------------------------------
-REM benham-bot supervisor - entry point. Keeps exactly ONE bot.py alive,
+REM benham-bot supervisor - entry point. Keeps exactly ONE benham.bot alive,
 REM restarting it when it exits, and giving up if it cannot start at all.
 REM
 REM This is a shim. The logic lives in supervise_bot.ps1, because the two things

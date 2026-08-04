@@ -470,7 +470,7 @@ try:
     section("The DM path can see an attachment at all")
     # bot.py hands the agent TEXT, so an attachment is invisible unless it is
     # described. These two facts are what make "what's in this?" answerable.
-    import bot
+    from benham import bot
 
     msg = _StubMessage(4242, _StubChannel(cid=555), [
         _StubAttachment(1, "crash.log", b"x" * 10, "text/plain"),

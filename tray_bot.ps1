@@ -39,7 +39,7 @@ function Get-BotPid {
     # what "the bot is running" means.
     try {
         Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop |
-            Where-Object { $_.CommandLine -match 'bot\.py' } |
+            Where-Object { $_.CommandLine -match '-m benham\.bot' } |
             Select-Object -First 1 -ExpandProperty ProcessId
     } catch { $null }
 }
@@ -553,7 +553,7 @@ Add-Item "Stop bot until reboot" {
     if ($answer -ne 'Yes') { return }
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     # Task Scheduler is supposed to take the process tree down with the task, but
-    # kill bot.py explicitly rather than trust that.
+    # kill the bot process explicitly rather than trust that.
     $p = Get-BotPid
     if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
     $script:StoppedByTray = $true

@@ -368,7 +368,7 @@ guest.forget()
 section("The live path — driving the real bot.on_message")
 
 os.environ.setdefault("BOT_KEY", "test-token-not-used")
-import bot  # noqa: E402
+from benham import bot  # noqa: E402
 
 from benham.core import codesession  # noqa: E402
 from benham.core import confirm  # noqa: E402

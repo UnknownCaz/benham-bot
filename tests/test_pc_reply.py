@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 
 import discord
 
-import bot
+from benham import bot
 from benham.core import capabilities
 from benham.core import confirm
 
