@@ -8,20 +8,28 @@ servers it has been invited to.
 
 ## Architecture
 
-A single persistent process, `bot.py`, stays connected to Discord and does all the I/O. Nothing
-talks to Discord directly; instead small CLI scripts drop request files into `outbox/` and read
-results back, which keeps the heavy always-on process separate from one-shot actions.
+A single persistent process, `benham/bot.py`, stays connected to Discord and does all the I/O.
+Nothing talks to Discord directly; instead CLI commands drop request files into `state/outbox/`
+and read results back, which keeps the heavy always-on process separate from one-shot actions.
 
 ```
-  CLI (send.py, draft.py, delete.py, fetch.py, ...)  ->  outbox/*.json
+  CLI (python benham.py send|draft|delete|fetch ...)  ->  state/outbox/*.json
                                                             |
-                                        bot.py polls outbox every ~2s
+                                      the bot polls the outbox every ~2s
                                                             |
-                        Discord  <->  bot.py  ->  outbox/sent|failed/*_result.json
+                  Discord  <->  the bot  ->  state/outbox/sent|failed/*_result.json
                                         |
-              every message it sees  ->  inbox.jsonl   (live capture, one JSON per line)
-              on each boot           ->  channels.json (guild + channel IDs it can see)
+        every message it sees  ->  state/inbox.jsonl   (live capture, one JSON per line)
+        on each boot           ->  state/channels.json (guild + channel IDs it can see)
 ```
+
+Source layout (since the Aug 2026 reorg): the `benham/` package holds all code —
+`benham/core/` (shared libraries), `benham/cli/` (one module per command), `benham/guest/`
+(the guest lane), `benham/bot.py` (the process), `benham/paths.py` (the one module that knows
+where every file lives). `benham.py` at the root is the CLI dispatcher; `python benham.py --help`
+is the command catalog. Non-code splits by who writes it: `config/` (hand-edited), `state/`
+(bot-written, never committed), `prompts/` (personas + guardrails), `logs/`, `scripts/`
+(supervisor, tray, Task Scheduler exports), `tests/`.
 
 ## Benham as Claude's face
 
@@ -55,7 +63,7 @@ Every capability declares one, and `capabilities.run()` enforces it.
 | **manage** (20) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 
-Run `python do.py list` for the full catalogue, `python do.py help <action>` for one action's
+Run `python benham.py do list` for the full catalogue, `python benham.py do help <action>` for one action's
 parameters.
 
 ### How destructive actions work
@@ -79,11 +87,11 @@ message content anywhere can talk its way into a delete. Expiry means cancelled;
 assent.
 
 ```bash
-python do.py purge_messages channel_id=809357286036078612 limit=20 contains="test"
+python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test"
 #   --- DRY RUN, nothing has happened ---
 #   Delete 1 messages from #asd in Testing Server
 #   ... To run it for real, repeat with: confirm_token=80ac01
-python do.py purge_messages channel_id=809357286036078612 limit=20 contains="test" confirm_token=80ac01
+python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test" confirm_token=80ac01
 ```
 
 ## PC access - a real Claude Code session
@@ -142,9 +150,9 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 
 | command | what it does |
 |---------|--------------|
-| `python do.py list` | Catalogue every action, grouped by tier. `--tier destructive` to filter. |
-| `python do.py help <action>` | One action's parameters, which are required, and its tier. |
-| `python do.py <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
+| `python benham.py do list` | Catalogue every action, grouped by tier. `--tier destructive` to filter. |
+| `python benham.py do help <action>` | One action's parameters, which are required, and its tier. |
+| `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 `do.py` covers all 49 registered capabilities and replaces the need for a script per action. The
 older single-purpose CLIs below still work and route through their original code paths.
@@ -153,9 +161,9 @@ older single-purpose CLIs below still work and route through their original code
 
 | command | what it does |
 |---------|--------------|
-| `python send.py <channel_id> "msg"` | Send a message to a channel. |
-| `python draft.py <target_channel_id> "msg"` | Post a labeled DRAFT to Testing #asd for review, and print the `send.py` command to deliver it for real (review-first flow). |
-| `python delete.py <channel_id> <message_id>` | Delete one specific message (its own always; others need Manage Messages). Permanent. |
+| `python benham.py send <channel_id> "msg"` | Send a message to a channel. |
+| `python benham.py draft <target_channel_id> "msg"` | Post a labeled DRAFT to Testing #asd for review, and print the `send.py` command to deliver it for real (review-first flow). |
+| `python benham.py delete <channel_id> <message_id>` | Delete one specific message (its own always; others need Manage Messages). Permanent. |
 
 Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_outbox`); the newer
 `do.py purge_messages` adds author/text filters and goes through the dry-run + confirm gate.
@@ -164,20 +172,20 @@ Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_ou
 
 | command | what it does |
 |---------|--------------|
-| `python fetch.py <channel_id> [limit=20]` | Pull recent history into `outbox/sent/<name>_result.json` (via the running bot). |
-| `python catchup.py <channel_id> [limit=40]` | Invisible one-shot: print one channel's recent messages, post nothing, exit. |
-| `python read_history.py [limit=100]` | Invisible one-shot: same, across every non-Testing guild at once. |
-| `python do.py find_user query=<name>` | Turn a name, @mention or id into the `user_id` every other action wants. Searches every server unless given `guild_id=`. |
-| `python do.py read_attachments channel_id=<id> message_id=<id>` | Download that message's files into `downloads/<message_id>/`; text files come back with their contents. `save=false` to look without keeping. |
+| `python benham.py fetch <channel_id> [limit=20]` | Pull recent history into `outbox/sent/<name>_result.json` (via the running bot). |
+| `python benham.py catchup <channel_id> [limit=40]` | Invisible one-shot: print one channel's recent messages, post nothing, exit. |
+| `python benham.py read_history [limit=100]` | Invisible one-shot: same, across every non-Testing guild at once. |
+| `python benham.py do find_user query=<name>` | Turn a name, @mention or id into the `user_id` every other action wants. Searches every server unless given `guild_id=`. |
+| `python benham.py do read_attachments channel_id=<id> message_id=<id>` | Download that message's files into `downloads/<message_id>/`; text files come back with their contents. `save=false` to look without keeping. |
 | tail `inbox.jsonl` | Live feed of every message the running bot sees (one JSON per line). |
 
 ### CLI - voice (via the outbox)
 
 | command | what it does |
 |---------|--------------|
-| `python speak.py <voice_channel_id> "text"` | Join, speak via edge-tts neural voice, leave. |
-| `python listen.py <voice_channel_id>` | Join and transcribe speech into `voice_transcript.jsonl`. |
-| `python stoplisten.py <voice_channel_id>` | Stop listening and leave the voice channel. |
+| `python benham.py speak <voice_channel_id> "text"` | Join, speak via edge-tts neural voice, leave. |
+| `python benham.py listen <voice_channel_id>` | Join and transcribe speech into `voice_transcript.jsonl`. |
+| `python benham.py stoplisten <voice_channel_id>` | Stop listening and leave the voice channel. |
 
 Voices are switchable by a named "B-voice" roster (`voices.json`); wake words are "benham"/"claude".
 Listening works on discord.py 2.7 via a DAVE-decryption patch in `bot.py`. With `BENHAM_AUTO_REPLY=1`
@@ -187,7 +195,7 @@ the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
 
 | command | what it does |
 |---------|--------------|
-| `python status.py` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
+| `python benham.py status` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
 | `supervise_bot.bat` | Restart-on-crash wrapper for always-on running, for running by hand. Shim over `supervise_bot.ps1`, which the `benham-bot` logon task launches directly and windowless. |
 | `tray_bot.ps1` | Tray icon showing supervisor/bot state. A monitor only - closing it does not stop anything. |
 
@@ -220,9 +228,9 @@ and never auto-responds in text chat (voice wake words are the only autonomous t
 ### Example - reply to a friend, review-first
 
 ```
-python catchup.py 1525016583305429072 15                              # read recent #minecraft-chat
-python draft.py 1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # DRAFT -> Testing #asd
-python send.py  1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # after you eyeball it
+python benham.py catchup 1525016583305429072 15                              # read recent #minecraft-chat
+python benham.py draft 1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # DRAFT -> Testing #asd
+python benham.py send  1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # after you eyeball it
 ```
 
 ## Autonomous voice replies (AUTO_REPLY)
@@ -303,13 +311,13 @@ all once the turn has read what other people wrote.
 ## Running it
 
 ```
-python bot.py            # foreground; logs in, writes channels.json, starts the outbox poller
+python -u -m benham.bot            # foreground; logs in, writes channels.json, starts the outbox poller
 ```
 
 ### 24/7 supervision
 
-`supervise_bot.ps1` keeps exactly one `bot.py` alive. It is registered as a **logon Scheduled Task
-named `benham-bot`**, so it comes back after a reboot. (`supervise_bot.bat` is the hand-run entry
+`scripts/supervise_bot.ps1` keeps exactly one `benham.bot` alive. It is registered as a **logon Scheduled Task
+named `benham-bot`**, so it comes back after a reboot. (`scripts/supervise_bot.bat` is the hand-run entry
 point for the same script; the task invokes the `.ps1` directly.)
 
 ```powershell
@@ -321,12 +329,12 @@ Stop-ScheduledTask  benham-bot      # stop supervising (does not stop a bot alre
 Four behaviours worth knowing:
 
 **It runs windowless, and `-WindowStyle Hidden` is not what does it.** The task action is
-`conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File supervise_bot.ps1`.
+`conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\supervise_bot.ps1`.
 The obvious spelling - `powershell.exe -WindowStyle Hidden` - looks right and silently does not
 work on Windows 11: with the default terminal set to "Let Windows decide", the console is handed
 off to Windows Terminal, which ignores the hidden window style and puts a terminal in Alt+Tab for
 a process nobody needs to look at. `--headless` forces the legacy console host with no window and
-skips that handoff. Nothing is lost by it - every line already goes to `supervise.log`, and the
+skips that handoff. Nothing is lost by it - every line already goes to `logs/supervise.log`, and the
 tray icon is the thing meant to be looked at. Task Scheduler still reports `Running` correctly,
 because `conhost` stays alive for as long as the supervisor does, which is what the tray reads.
 
@@ -383,18 +391,18 @@ Portal.
 
 | file | purpose | committed? |
 |------|---------|-----------|
-| `environ.env` | tokens + `BENHAM_AUTO_REPLY` | no (gitignored) |
-| `control.json` | owner ids, destructive/agent guild allowlists, agent model, intents | no (see `.example`) |
-| `exaroton_watch.json` | `/server` + watchdog + `auto_reply_guilds` | no (see `.example`) |
-| `channels.json` | guild/channel IDs (written each boot) | no |
-| `voices.json` | named voice roster | yes |
-| `guardrails.md` / `persona.md` | voice system prompt | yes |
-| `agent_persona.md` | text-agent personality (editable) | yes |
-| `agent_memory.json` | per-conversation history | no (gitignored - private) |
-| `webhooks.json` | webhook URLs | no (gitignored) |
-| `guest_persona.md` | guest-facing prompt (separate from `persona.md`) | yes |
-| `guest_memory.json` / `guest_usage.json` | guest conversations + daily counters | no (gitignored - private) |
-| `logs/` | rotated-out `boot*.out/.err` and run logs | no (gitignored) |
+| `config/environ.env` | tokens + `BENHAM_AUTO_REPLY` | no (gitignored) |
+| `config/control.json` | owner ids, destructive/agent guild allowlists, agent model, intents | no (see `.example`) |
+| `config/exaroton_watch.json` | `/server` + watchdog + `auto_reply_guilds` | no (see `.example`) |
+| `config/webhooks.json` | webhook URLs | no (gitignored) |
+| `config/voices.json` | named voice roster | yes |
+| `prompts/guardrails.md` / `prompts/persona.md` | the one shared personality + voice guardrails | yes |
+| `prompts/guest_persona.md` | guest-facing prompt (separate from `persona.md`) | yes |
+| `state/channels.json` | guild/channel IDs (written each boot) | no |
+| `state/voice_settings.json` | bot-written voice defaults | no |
+| `state/agent_memory.json` | per-conversation history | no (gitignored - private) |
+| `state/guest_memory.json` / `state/guest_usage.json` | guest conversations + daily counters | no (gitignored - private) |
+| `logs/` | supervise.log + boot captures and run logs | no (gitignored) |
 
 Friend-server reads and derived data (`read_full*`, `*.u8`, `*.tsv`) are gitignored so private chat
 is never committed.
@@ -432,7 +440,7 @@ Other properties worth knowing:
   is refunded.
 
 Turn it on by editing `control.json` (see `_guest` in `control.json.example`) and restarting.
-`python guest.py status` shows the allowlist, caps and today's spend; `python guest.py forget
+`python benham.py guest status` shows the allowlist, caps and today's spend; `python benham.py guest forget
 <user_id>` drops one conversation.
 
 **Turning it off needs a restart too.** `control.json` is read once at import, so `enabled:
@@ -449,10 +457,9 @@ assertions are not passing merely because nothing ran.
 
 ### Logs
 
-A boot writes `boot<N>.out` / `.err` in the repo root and keeps the handle open for the life of
-the process, so the live pair stays there; older pairs get moved into `logs/`. Both `usage.py` and
-`status.py` search the root and `logs/`, so archiving a capture never hides it from a report -
-`usage.py --all` still sees the full history. Pruning `logs/` is what actually discards it.
+Everything lives in `logs/` since the source reorg: `supervise.log` (supervisor lines + all
+bot output, rotated at 5MB) and the `boot<N>.out` / `.err` captures. `python benham.py usage --all`
+still sees the full history; pruning `logs/` is what actually discards it.
 
 ### Attachments
 
@@ -513,10 +520,10 @@ whole channel dumps along with it.
 ## Testing
 
 ```
-python test_control.py      # gates, allowlists, confirm matching, agent history shape
-python test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
-python test_injection.py    # can text someone else wrote make Benham act?
-python test_policy.py       # every capability x every origin, plus the rule matrix
+python tests/test_control.py      # gates, allowlists, confirm matching, agent history shape
+python tests/test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
+python tests/test_injection.py    # can text someone else wrote make Benham act?
+python tests/test_policy.py       # every capability x every origin, plus the rule matrix
 ```
 
 Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want

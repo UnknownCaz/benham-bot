@@ -1,6 +1,15 @@
 # Source Directory Reorganization — Plan
 
-**Status: agreed, not started.**
+**Status: stages 0–6 executed 2026-08-04; Stage 7 (live verification + Task
+Scheduler re-import) pending.** Deviations found during execution, all landed:
+`channels.json`, `voice_settings.json` and `personality_overrides.txt` are
+bot-written so they live in `state/`, not `config/` (voice_settings was also
+untracked from git); the Task Scheduler XML exports embed the machine SID and
+account name, so they are gitignored in `scripts/` rather than committed;
+`inbox.jsonl.bak` had escaped both jsonl ignore patterns and is now covered;
+test invocation is `python tests/test_x.py` (self-running scripts, not pytest).
+
+**Original plan as agreed:**
 Decisions locked with Tyler 2026-08-04: full package layout (`benham/` with `core`,
 `cli`, `guest` subpackages), a single root CLI dispatcher (`benham.py`, clean cut — the
 old per-command scripts are deleted, not shimmed), a `config/` + `state/` split for

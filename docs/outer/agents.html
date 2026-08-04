@@ -49,7 +49,7 @@
       <tr><td>PC session</td><td><code>pc.use_api_key</code>: currently <code>false</code> = bills the Claude subscription</td><td>a trivial task runs a few cents on API; not free</td></tr>
       <tr><td>voice brain</td><td>API</td><td>only fires on wake words in allowed guilds</td></tr>
     </table>
-    <p>Check actual spend: <code>python usage.py --today</code> — see
+    <p>Check actual spend: <code>python benham.py usage --today</code> — see
     <a href="health-logs-cost.html">Health, logs &amp; cost</a>.</p>
 
     <h2 id="paper-trail">Paper trail</h2>
@@ -60,7 +60,7 @@
       <p><strong><code>guest_searches.jsonl</code></strong> — same for guests (append-only, hand-moderate it):</p>
       <pre><code>{"ts": "2026-07-30T22:20:12…", "user_id": 1097…1815, "query": "&lt;search query&gt;"}</code></pre>
       <p><strong>PC sessions</strong> — full Claude Code transcripts as <code>*.jsonl</code>;
-      don't read them raw, use <code>python watch_pc.py</code> (follow live), <code>--last</code>
+      don't read them raw, use <code>python benham.py watch_pc</code> (follow live), <code>--last</code>
       (replay), <code>--list</code>. Credential-shaped reads log loud as <code>SECRET-READ</code>
       in the bot log.</p>
       <p><strong>Owner/guest conversations</strong> — <code>agent_memory.json</code> /

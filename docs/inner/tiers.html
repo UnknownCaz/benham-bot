@@ -23,7 +23,7 @@
       <tr><td><strong>destructive</strong> (7)</td><td><code>delete_message</code>, <code>purge_messages</code>, <code>delete_channel</code>, <code>kick_member</code>, <code>ban_member</code></td><td>guild allowlist + dry-run + explicit confirm</td></tr>
     </table>
     <p>56 capabilities as of Aug 2026 — counts drift as capabilities are added, and
-    <code>python do.py list</code> is always the live truth. A capability's tier travels
+    <code>python benham.py do list</code> is always the live truth. A capability's tier travels
     with its declaration, not with who's calling.</p>
 
     <h2 id="why">Why we chose this</h2>
@@ -50,7 +50,7 @@
     <div class="paper-trail">
       <p>Every <code>run()</code> logs the action + verdict in the bot log
       (<code>boot&lt;N&gt;.out</code> / <code>supervise.log</code>); refusals name the rule.
-      <code>python usage.py</code> aggregates which capabilities ran, what policy refused, what
+      <code>python benham.py usage</code> aggregates which capabilities ran, what policy refused, what
       got proposed and confirmed.</p>
     </div>
   </main>

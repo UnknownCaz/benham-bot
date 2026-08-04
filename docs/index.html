@@ -27,6 +27,18 @@
     </div>
 
     <div class="status-strip">
+      <strong>Source layout (Aug 2026 reorg):</strong>
+      code lives in the <code>benham/</code> package (<code>core/</code> libraries,
+      <code>cli/</code> commands, <code>guest/</code> lane, <code>bot.py</code>);
+      every command runs as <code>python benham.py &lt;name&gt;</code>, the bot as
+      <code>python -u -m benham.bot</code>. Hand-edited files in <code>config/</code>,
+      bot-written files in <code>state/</code>, personas in <code>prompts/</code>,
+      logs in <code>logs/</code>, supervisor + tray in <code>scripts/</code>. Where an
+      older page says <code>do.py</code> or <code>policy.py</code>, read
+      <code>benham/cli/do.py</code> or <code>benham/core/policy.py</code>.
+    </div>
+
+    <div class="status-strip">
       <strong>Guest refactor status:</strong>
       Stages 0–4 <span class="badge shipped">SHIPPED</span>
       workspace grants <span class="badge off">EMPTY · OFF</span>
