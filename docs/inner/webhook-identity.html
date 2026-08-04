@@ -16,7 +16,7 @@
 
     <h2 id="what">What it does</h2>
     <p><code>webhook.py</code> posts via a saved webhook URL: no gateway, no bot token, no
-    <code>bot.py</code> — it works while the bot is stopped. The post wears the webhook's own
+    <code>benham/bot.py</code> — it works while the bot is stopped. The post wears the webhook's own
     name and avatar (overridable per post with <code>--username</code>), configured per
     channel in <code>webhooks.json</code>. It exists because Benham is only in Testing and
     Chillbar, while the Isle of Berk changelog channel is in a server it was never invited
@@ -50,7 +50,7 @@
     <h2 id="paper-trail">Paper trail</h2>
     <div class="paper-trail">
       <p>Honestly: <strong>none, and that's the documented trade.</strong> The Discord channel
-      itself is the only record of a webhook post. <code>python webhook.py --list</code> shows
+      itself is the only record of a webhook post. <code>python benham.py webhook --list</code> shows
       what's configured (names and labels, never URLs); <code>webhooks.json</code> is the
       gitignored source of truth. If a post needs an audit trail, don't use this path — use
       <code>send.py</code> into a channel Benham is actually in.</p>

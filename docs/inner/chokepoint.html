@@ -15,16 +15,16 @@
     Everything else is files.</p>
 
     <h2 id="what">What it does</h2>
-    <p><code>bot.py</code> is the single persistent process holding the Discord connection.
+    <p><code>benham/bot.py</code> is the single persistent process holding the Discord connection.
     Nothing else talks to Discord directly — the CLI scripts drop atomic request files into
-    <code>outbox/</code>, the bot polls every ~2s, executes, and files a result:</p>
-    <pre><code>CLI (send.py, draft.py, do.py, …)  →  outbox/*.json
+    <code>state/outbox/</code>, the bot polls every ~2s, executes, and files a result:</p>
+    <pre><code>CLI (benham.py send|draft|do …)  →  state/outbox/*.json
                                           |
-                        bot.py polls outbox every ~2s
+                    the bot polls the outbox every ~2s
                                           |
-        Discord  ←→  bot.py  →  outbox/sent|failed/*_result.json
+      Discord  ←→  the bot  →  state/outbox/sent|failed/*_result.json
                        |
-     every message seen → inbox.jsonl      each boot → channels.json</code></pre>
+ every message seen → state/inbox.jsonl    each boot → state/channels.json</code></pre>
     <p>The second chokepoint is logical: <code>capabilities.run()</code> is the single execution
     path for all 56 capabilities — authorize → validate → authorize_target → confirm-or-execute
     — and <code>policy.py</code> is the single place authorization is decided. Every entry

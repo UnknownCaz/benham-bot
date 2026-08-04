@@ -1,6 +1,7 @@
 # Guest Capability Refactor — Plan
 
 **Status: proposal, nothing implemented.**
+*(File paths updated 2026-08-04 for the source reorg - see PLAN-src-reorg.md.)*
 Scope agreed with Tyler 2026-08-03: shared web search (owner + guest, one implementation),
 a guest file workspace (per-guest folders plus a read-only commons), limited Discord
 reads of allowlisted channels, and sandboxed code runs. Grant model: a capability is
@@ -17,29 +18,29 @@ regression is always attributable to a single step.
 
 What the refactor builds on, file by file:
 
-- **policy.py** — single chokepoint. Caller rules (`RULES`) then target rules
+- **benham/core/policy.py** — single chokepoint. Caller rules (`RULES`) then target rules
   (`TARGET_RULES`). Guests are denied twice, independently: `rule_owner` refuses any
   human non-owner (GUEST_DM is deliberately in `Origin.HUMAN` for exactly this), and
   `DEFAULT_ORIGINS` omits `GUEST_DM` so every capability is guest-proof the day it is
   written. `may_chat_as_guest` authorises the *conversation*, not any capability.
-- **guest.py** — chat mode. Its founding property: **no CLIENT tools ever**. The only
+- **benham/guest/guest.py** — chat mode. Its founding property: **no CLIENT tools ever**. The only
   tool passed is Anthropic's server-side `web_search_20250305`, which runs on their
   infrastructure. Quota (`_reserve`/`refund`/`charge_search`), cooldown, separate
-  memory file, separate persona, search log (`guest_searches.jsonl`), searched turns
+  memory file, separate persona, search log (`state/guest_searches.jsonl`), searched turns
   count double.
-- **identity.py** — `GUEST_MODES = frozenset({"chat"})`, with the comment already
+- **benham/core/identity.py** — `GUEST_MODES = frozenset({"chat"})`, with the comment already
   reserving `"workspace"` for Phase 2. An unrecognised mode disables guest chat
   rather than guessing. Config is read once at import; kill switches require a
   restart, deliberately.
-- **capabilities.py** — the registry. `Action` carries `tier`, `outward`, `taints`,
+- **benham/core/capabilities.py** — the registry. `Action` carries `tier`, `outward`, `taints`,
   `always_confirm`, `posts`, `origins`, `blocked_when_tainted`. `run()` is the single
   execution chokepoint: authorize → validate → authorize_target → confirm-or-execute.
   Also home of `_safe_filename` / `_confined_path`, the attachment-download path
   hygiene we will reuse.
-- **agent.py** — owner tool loop. Compiles the registry into tool schemas. **Has no
+- **benham/core/agent.py** — owner tool loop. Compiles the registry into tool schemas. **Has no
   web search today** — guests can search and Tyler cannot, which is half the reason
   "shared search" is on this list.
-- **bot.py** — `on_message` routes a DM from a known guest to `handle_guest_dm`
+- **benham/bot.py** — `on_message` routes a DM from a known guest to `handle_guest_dm`
   (~line 1595/1665) before anything else; a guest never falls through to the owner
   paths. `handle_guest_dm` does check → respond-in-thread → refund-on-failure.
 
@@ -66,7 +67,7 @@ A capability is guest-reachable only when **all three** hold:
    `origins` set. `DEFAULT_ORIGINS` continues to omit it, so `rule_origin_allowed`
    remains the second, independent denial — exactly the "either alone would be
    sufficient" structure policy.py documents today.
-3. **control.json** — `guest.capabilities` must list the action name. Config says
+3. **config/control.json** — `guest.capabilities` must list the action name. Config says
    what is *on*. Empty list (the default) = nothing granted, whatever the code says.
 
 A typo in config can therefore only ever *disable* something; it can never expose an
@@ -152,30 +153,30 @@ their own, smaller loop (§5).
 
 The "shared function" ask. Today the server-side web-search tool block, the
 `server_tool_use` query extraction, and the search log format all live inline in
-`guest.py`. Extract into a new module, then give the owner agent search from the
+`benham/guest/guest.py`. Extract into a new module, then give the owner agent search from the
 same code:
 
-**`shared_tools.py`** (new, no Discord imports, no state of its own):
+**`benham/core/shared_tools.py`** (new, no Discord imports, no state of its own):
 
 - `web_search_tool(max_uses)` → the `{"type": "web_search_20250305", ...}` dict.
 - `search_queries(resp)` → list of query strings from `server_tool_use` blocks
   (the exact extraction guest.respond does today).
 - `log_searches(path, actor_id, queries, role)` → append JSONL; same shape as
-  today's `guest_searches.jsonl` lines plus a `role` field ("guest"/"owner"). The
+  today's `state/guest_searches.jsonl` lines plus a `role` field ("guest"/"owner"). The
   existing file name and consumer keep working; old lines just lack `role`.
 
 Consumers:
 
-- **guest.py** — swaps its inline block for the module. Behaviour identical:
+- **benham/guest/guest.py** — swaps its inline block for the module. Behaviour identical:
   same log file, same double-charge via `charge_search`, same `searches_per_turn`.
   Its module docstring's property is untouched — this is still the server-side
   tool, still zero client tools.
-- **agent.py** — gains web search for the owner, config-gated:
+- **benham/core/agent.py** — gains web search for the owner, config-gated:
   `agent.web_search` (default true) and `agent.searches_per_turn` (default 3) in
-  control.json. Owner queries logged to `agent_searches.jsonl` — separate file from
+  control.json. Owner queries logged to `state/agent_searches.jsonl` — separate file from
   the guest one for the same reason guest memory is a separate file: one typo apart
   is too close. No quota (Tyler is billing himself), but log always.
-- **guest_agent.py** (§5) — same module again when workspace mode arrives.
+- **benham/guest/guest_agent.py** (§5) — same module again when workspace mode arrives.
 
 This stage is a pure win with zero guest exposure, which is why it ships first.
 
@@ -186,7 +187,7 @@ This stage is a pure win with zero guest exposure, which is why it ships first.
 ### Layout
 
 ```
-guest_work/                  (new, gitignored, inside BASE_DIR)
+state/guest_work/                  (new, gitignored, inside BASE_DIR)
   commons/                   Tyler-curated; guests read, never write
   <user_id>/                 one per guest, created on first write
 ```
@@ -200,7 +201,7 @@ Per-guest + commons, as agreed. Rules:
 - **Path discipline**: every capability takes a *relative* path parameter. Resolution
   is `confined(root_for(ctx.actor_id), rel)` built from the same two functions the
   attachment path already trusts — `_safe_filename` and `_confined_path` — **moved**
-  out of capabilities.py into a new `pathsafe.py` that both call sites import
+  out of capabilities.py into a new `benham/core/pathsafe.py` that both call sites import
   (Stage 0). One implementation of "may this path exist", not two drifting copies.
   Absolute paths, drive letters, `..`, reserved device names, and both slash
   directions are all refused by construction.
@@ -287,18 +288,18 @@ that is the moderation trail, same as searches.
 
 A third module, and deliberately not a flag on either neighbour:
 
-- **guest.py** keeps its docstring property forever: that file passes no client
+- **benham/guest/guest.py** keeps its docstring property forever: that file passes no client
   tools, full stop. It remains the `mode: "chat"` implementation, untouched.
-- **agent.py** stays the owner's. Its loop parks confirmations, carries the full
+- **benham/core/agent.py** stays the owner's. Its loop parks confirmations, carries the full
   registry, reads persona.md. "Same loop but smaller list" is one wrong conditional
   from being the same list — the exact collapse guest.py's docstring warns about.
 
-`guest_agent.py` (mode `"workspace"`):
+`benham/guest/guest_agent.py` (mode `"workspace"`):
 
 - Builds tool schemas from `capabilities.catalog()` filtered to the **effective
   grant set** (flag ∧ config ∧ GUEST_DM-in-origins — computed by one function,
   `policy.guest_grants()`, so the loop and the tests use the same answer), plus the
-  server-side search tool from `shared_tools.py`.
+  server-side search tool from `benham/core/shared_tools.py`.
 - Every tool call goes through `capabilities.run(..., call_ctx=CallContext.guest_dm(uid, ch))`
   — the same chokepoint, the same logging, the same denials. The loop adds no
   authority; it only decides how many rounds to pay for.
@@ -306,10 +307,10 @@ A third module, and deliberately not a flag on either neighbour:
 - A CONFIRM verdict is structurally impossible on this path (policy denies first),
   but the loop still treats any non-(result, None) shape from run() as a hard error
   and ends the turn — belt and braces.
-- Memory: `guest_memory.json`, same `guest:<id>` keys, same text-pairs-only
+- Memory: `state/guest_memory.json`, same `guest:<id>` keys, same text-pairs-only
   persistence trick as agent.py (store no tool blocks — same 400-proofing and same
   cost logic).
-- Persona: `guest_persona.md` updated to describe the real, tiny tool set —
+- Persona: `prompts/guest_persona.md` updated to describe the real, tiny tool set —
   the current text says "you have NO tools", which becomes a lie in workspace mode,
   and a model told wrong things about its tools promises wrong things.
 - Cooldown/quota: unchanged `guest.check()` / `refund()`. New: `charge_rounds(n)` in
@@ -367,7 +368,7 @@ Design:
 
 - Config: `guest.code_execution: {enabled: false, runs_per_day: 10}` — its own
   switch, default off, independent of everything else.
-- When enabled, `guest_agent.py` adds the code-execution server tool (exact tool
+- When enabled, `benham/guest/guest_agent.py` adds the code-execution server tool (exact tool
   type/version pinned at implementation time from current Anthropic docs — verify
   then, not from memory) to the API call, `max_uses` capped per turn.
 - Workspace bridge, if wanted later: upload named `ws_` files to the container via
@@ -377,7 +378,7 @@ Design:
   second design (Files API lifecycle, output vetting: sanitise names, size caps,
   runnable-suffix refusal — outputs land via the same `pathsafe` gate as `ws_write`)
   and should not block the simple version.
-- Ledger: every run appended to `guest_runs.jsonl` (ts, user_id, bytes in/out),
+- Ledger: every run appended to `state/guest_runs.jsonl` (ts, user_id, bytes in/out),
   runs count against the daily message cap like searches do (double), plus their own
   `runs_per_day`.
 
@@ -457,10 +458,10 @@ never `parse_persona_directive`) carries over to guest_agent.py unchanged.
 
 | # | Ships | Risk added | Proves |
 |---|-------|-----------|--------|
-| 0 | ~~`pathsafe.py` + `shared_tools.py` extractions~~ **SHIPPED** (a91a07f) | none | extraction is faithful (existing tests still green) |
-| 1 | ~~Owner web search in agent.py via shared_tools; `agent_searches.jsonl`~~ **SHIPPED**, live-tested 2026-08-03. Two decisions made during implementation: **a searched turn is tainted** (a web page is stranger-written text; taint set BEFORE that response's tool calls run, since server-side results arrive inside the response that chose them — proven by test_injection's search-taint case); and cited answers must be reassembled with `_response_text` ("" join within a response — the first live search came back as confetti without it) | none (owner-only) | shared module works in production |
+| 0 | ~~`benham/core/pathsafe.py` + `benham/core/shared_tools.py` extractions~~ **SHIPPED** (a91a07f) | none | extraction is faithful (existing tests still green) |
+| 1 | ~~Owner web search in agent.py via shared_tools; `state/agent_searches.jsonl`~~ **SHIPPED**, live-tested 2026-08-03. Two decisions made during implementation: **a searched turn is tainted** (a web page is stranger-written text; taint set BEFORE that response's tool calls run, since server-side results arrive inside the response that chose them — proven by test_injection's search-taint case); and cited answers must be reassembled with `_response_text` ("" join within a response — the first live search came back as confetti without it) | none (owner-only) | shared module works in production |
 | 2 | ~~policy: `rule_guest`, `rule_guest_never_confirms`, `Action.guest`, registration-time invariant, `identity.guest_capabilities()`; config empty~~ **SHIPPED**, suite + clean boot verified 2026-08-04. One placement deviation from this plan: `guest_grants()` lives in capabilities.py, not policy.py — the registry lives there and policy cannot import capabilities without a cycle. Only observable delta: a guest probing a capability is now refused by `guest_capability` instead of `owner` in the logs | none (grants empty ⇒ behaviour identical; invariant tests prove it) | the gate exists and fails closed |
-| 3 | ~~`guest_agent.py` loop, `"workspace"` in GUEST_MODES, bot.py mode routing; grants still empty~~ **SHIPPED** (suite + clean boot 2026-08-04; live workspace-mode soak with a real guest still pending — do that before granting anything). Pricing decision made during implementation: extra rounds are charged by API calls beyond the first (calls − 1), not by tool rounds entered — the two differ exactly at the round limit. The loop never imports confirm.py (absence as property); a preview arriving anyway logs GUEST-CONFIRM-LEAK, tells the model nothing, parks nothing | ~none | the loop, charging, routing, refunds |
+| 3 | ~~`benham/guest/guest_agent.py` loop, `"workspace"` in GUEST_MODES, bot.py mode routing; grants still empty~~ **SHIPPED** (suite + clean boot 2026-08-04; live workspace-mode soak with a real guest still pending — do that before granting anything). Pricing decision made during implementation: extra rounds are charged by API calls beyond the first (calls − 1), not by tool rounds entered — the two differ exactly at the round limit. The loop never imports confirm.py (absence as property); a preview arriving anyway logs GUEST-CONFIRM-LEAK, tells the model nothing, parks nothing | ~none | the loop, charging, routing, refunds |
 | 4 | ~~`ws_*` capabilities (incl. `ws_import`) + quotas + reply-attachment path + persona rewrite~~ **SHIPPED** (full suite green on Windows 2026-08-04; grants still empty — live enablement checklist in OWNERS-GUIDE, soak workspace-with-zero-grants first). Deviations from plan, all narrowing: SIX capabilities not five (`ws_attach` added — deliverables ride the reply via an on_attach collector on Ctx, re-verified in bot.py by `verify_outgoing`; no send capability exists). Workspace is FLAT (filenames only, no subdirs — smaller parameter space). Writes refuse a name that sanitisation would change; imports sanitise-and-report (uploader-controlled). Persona is not rewritten: guest_agent appends a grants-generated correction paragraph to the system prompt only when grants are non-empty, so no static file can lie in any config | disk-fill (capped), guest-uploaded inert bytes | the workspace |
 | 5 | `read_shared_channel` + `read_channels` config | curated exposure | shared reads |
 | 6 | server-side code execution, own flag | Anthropic-side compute | code runs |

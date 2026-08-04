@@ -19,7 +19,7 @@
     roster in <code>voices.json</code>); <code>listen.py</code> transcribes everything said
     (faster-whisper) into <code>voice_transcript.jsonl</code>, flagging wake words
     ("benham"/"claude"). Listening on discord.py 2.7 works via a DAVE-decryption patch in
-    <code>bot.py</code>. With <code>BENHAM_AUTO_REPLY=1</code>, wake-word utterances get an
+    <code>benham/bot.py</code>. With <code>BENHAM_AUTO_REPLY=1</code>, wake-word utterances get an
     autonomous spoken reply (<code>brain.py</code>) — but only in
     <code>auto_reply_guilds</code>. In-reply directives let a conversation adjust delivery:
     <code>&lt;&lt;voice=…; rate=…; volume=…&gt;&gt;</code>, <code>&lt;&lt;persona: …&gt;&gt;</code>

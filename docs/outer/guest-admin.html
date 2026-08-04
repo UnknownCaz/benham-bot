@@ -19,8 +19,8 @@
     <table>
       <tr><th>task</th><th>how</th></tr>
       <tr><td>add or remove a guest</td><td>edit <code>guest.ids</code> in <code>control.json</code>, <strong>then restart</strong> — config reads once at boot, in both directions</td></tr>
-      <tr><td>see the live allowlist + caps + today's spend</td><td><code>python guest.py status</code></td></tr>
-      <tr><td>wipe a conversation</td><td><code>python guest.py forget &lt;user_id&gt;</code> (or <code>forget-all</code>)</td></tr>
+      <tr><td>see the live allowlist + caps + today's spend</td><td><code>python benham.py guest status</code></td></tr>
+      <tr><td>wipe a conversation</td><td><code>python benham.py guest forget &lt;user_id&gt;</code> (or <code>forget-all</code>)</td></tr>
       <tr><td>read what they searched</td><td><code>guest_searches.jsonl</code> — append-only, meant for hand moderation</td></tr>
       <tr><td>what guests were told they can do</td><td><code>guest_guide.md</code> — keep it honest when features change</td></tr>
     </table>

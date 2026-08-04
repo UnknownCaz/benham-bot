@@ -16,10 +16,10 @@
     <code>voice_channels</code>). Quick tables first, full options under each.</p>
 
     <h2 id="universal">The universal one (do.py)</h2>
-    <pre><code>python do.py list                    # every capability, grouped by tier
-python do.py list --tier destructive # just one tier
-python do.py help &lt;action&gt;           # one action's params, which are required, its tier
-python do.py &lt;action&gt; key=value ...  # run it</code></pre>
+    <pre><code>python benham.py do list                    # every capability, grouped by tier
+python benham.py do list --tier destructive # just one tier
+python benham.py do help &lt;action&gt;           # one action's params, which are required, its tier
+python benham.py do &lt;action&gt; key=value ...  # run it</code></pre>
     <p><code>do.py</code> covers all 56 registered capabilities — one CLI for the whole registry,
     because the old one-file-per-action pattern meant a new capability was three edits and
     usually got only two (which is how <code>purge</code> went so long with no CLI at all).
@@ -29,11 +29,11 @@ python do.py &lt;action&gt; key=value ...  # run it</code></pre>
     previewed. The token is <em>bound to the parameters captured at preview time</em> — editing
     the arguments between the calls invalidates it rather than silently running something
     else.</p>
-    <pre><code>python do.py purge_messages channel_id=8093…8612 limit=20 contains="test"
+    <pre><code>python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="test"
 #   --- DRY RUN, nothing has happened ---
 #   Delete 1 messages from #asd in Testing Server
 #   ...repeat with: confirm_token=80ac01
-python do.py purge_messages channel_id=8093…8612 limit=20 contains="test" confirm_token=80ac01</code></pre>
+python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="test" confirm_token=80ac01</code></pre>
 
     <h2 id="everyday">Everyday shortcuts</h2>
     <table>
@@ -52,37 +52,37 @@ python do.py purge_messages channel_id=8093…8612 limit=20 contains="test" conf
     joined into one text, so quotes are only needed to protect shell characters. Writes an
     atomic request into <code>outbox/</code>; the running bot delivers within ~2s and files the
     request + result pair under <code>outbox/sent/</code> (or <code>failed/</code>).</p>
-    <pre><code>python send.py 8093…8612 "world's up at UnknownCaz-Gt25.exaroton.me"</code></pre>
+    <pre><code>python benham.py send 8093…8612 "world's up at UnknownCaz-Gt25.exaroton.me"</code></pre>
 
     <h3><code>draft.py</code></h3>
     <p>Args: <code>&lt;target_channel_id&gt; "reply text"</code>. Posts a clearly-labeled DRAFT
     into Testing #asd for your eyeball, and prints the exact <code>send.py</code> command that
     delivers it for real. <strong>Nothing reaches the target channel until you run that
     printed command yourself</strong> — the human-in-the-loop is the point.</p>
-    <pre><code>python draft.py 1491…0261 "yo xavier, sounds good"
+    <pre><code>python benham.py draft 1491…0261 "yo xavier, sounds good"
 # → DRAFT lands in Testing #asd; it prints:
-#   python send.py 1491…0261 "yo xavier, sounds good"</code></pre>
+#   python benham.py send 1491…0261 "yo xavier, sounds good"</code></pre>
 
     <h3><code>dm.py</code></h3>
     <p>Args: <code>&lt;user_id&gt; "text"</code>, or <code>--tyler "text"</code> as the owner
     shorthand. Discord only lets a bot DM someone who shares a guild with it and hasn't
     disabled member DMs — when that fails, the request lands in <code>outbox/failed/</code>
     with a Forbidden error rather than failing silently.</p>
-    <pre><code>python dm.py --tyler "backup finished, all green"
-python dm.py 2739…5952 "hey"</code></pre>
+    <pre><code>python benham.py dm --tyler "backup finished, all green"
+python benham.py dm 2739…5952 "hey"</code></pre>
 
     <h3><code>delete.py</code></h3>
     <p>Args: <code>&lt;channel_id&gt; &lt;message_id&gt;</code>. Deletes ONE specific message.
     Benham's own messages always work; someone else's needs Manage Messages. Deletion is
     <strong>permanent</strong>. For bulk delete-by-filter use <code>do.py purge_messages</code>
     (which gets the dry-run + confirm gate).</p>
-    <pre><code>python delete.py 8093…8612 1531…4876</code></pre>
+    <pre><code>python benham.py delete 8093…8612 1531…4876</code></pre>
 
     <h3><code>fetch.py</code></h3>
     <p>Args: <code>&lt;channel_id&gt; [limit]</code>, default 20. Pulls the last N messages via
     the running bot into <code>outbox/sent/&lt;name&gt;_result.json</code>. For live messages,
     tail <code>inbox.jsonl</code> instead.</p>
-    <pre><code>python fetch.py 8093…8612 50</code></pre>
+    <pre><code>python benham.py fetch 8093…8612 50</code></pre>
 
     <h3><code>catchup.py</code></h3>
     <p>Args: <code>&lt;channel_id&gt; [limit]</code>, default 40. Run with <code>-u</code> for
@@ -90,15 +90,15 @@ python dm.py 2739…5952 "hey"</code></pre>
     prints the last N messages oldest→newest, exits. The process contains no send / react /
     reply code at all, so it cannot post or trigger anything. Intended for a light read —
     recent activity and vibe, not deep profiles.</p>
-    <pre><code>python -u catchup.py 1525…9072 15     # what's happening in #minecraft-chat</code></pre>
+    <pre><code>python -u benham.py catchup 1525…9072 15     # what's happening in #minecraft-chat</code></pre>
 
     <h3><code>read_history.py</code></h3>
     <p>Args: <code>[limit]</code> per channel, default 100 — or <code>all</code> /
     <code>full</code> / <code>0</code> for everything. Same invisible client as catchup, but
     sweeps every readable text channel in every guild <strong>except Testing</strong> (always
     excluded).</p>
-    <pre><code>python -u read_history.py            # 100 per channel, all friend guilds
-python -u read_history.py all        # no limit</code></pre>
+    <pre><code>python -u benham.py read_history            # 100 per channel, all friend guilds
+python -u benham.py read_history all        # no limit</code></pre>
 
     <h2 id="voice">Voice</h2>
     <table>
@@ -111,15 +111,15 @@ python -u read_history.py all        # no limit</code></pre>
     <p>Args: <code>&lt;voice_channel_id&gt; "text"</code>. Joins, speaks via an edge-tts neural
     voice, disconnects. The voice is switchable by the named "B-voice" roster in
     <code>voices.json</code>.</p>
-    <pre><code>python speak.py 8097…7301 "dinner's ready, get off the server"</code></pre>
+    <pre><code>python benham.py speak 8097…7301 "dinner's ready, get off the server"</code></pre>
     <h3><code>listen.py</code> / <code>stoplisten.py</code></h3>
     <p>Args: <code>&lt;voice_channel_id&gt;</code> each. Listen joins and transcribes utterances
     with faster-whisper into <code>voice_transcript.jsonl</code>; wake words
     ("benham"/"claude") are flagged in the record. Autonomous replies to wake words only
     happen with <code>BENHAM_AUTO_REPLY=1</code>, and only in <code>auto_reply_guilds</code>.
     Stoplisten makes it leave.</p>
-    <pre><code>python listen.py 8097…7301
-python stoplisten.py 8097…7301</code></pre>
+    <pre><code>python benham.py listen 8097…7301
+python benham.py stoplisten 8097…7301</code></pre>
     <p><strong>Exaroton, in Discord rather than the terminal:</strong>
     <code>/server status|start|stop|restart &lt;server&gt;</code> — per-guild gating in
     <code>exaroton_watch.json</code> (Testing = all servers, operator required; Chillbar = Isle
@@ -130,14 +130,14 @@ python stoplisten.py 8097…7301</code></pre>
     <p>A different animal from everything above: <code>webhook.py</code> posts straight to
     Discord's webhook API from a saved URL in <code>webhooks.json</code> (gitignored — the URLs
     are secrets). <strong>No bot involved</strong> — no gateway, no token, works while
-    <code>bot.py</code> is stopped, and the post appears under the webhook's own name/avatar,
+    <code>benham/bot.py</code> is stopped, and the post appears under the webhook's own name/avatar,
     not Benham's. It reaches channels Benham was never invited to (the reason it exists: the
     Isle of Berk changelog).</p>
-    <pre><code>python webhook.py "hello world"                # default webhook
-python webhook.py -t test "hello"              # a named one
-python webhook.py --title "Deploy done" "v1.2 is live" --color 3066993   # rich embed
-python webhook.py --username "AlertBot" "..."  # override displayed name
-python webhook.py --list                       # configured webhooks (never prints URLs)</code></pre>
+    <pre><code>python benham.py webhook "hello world"                # default webhook
+python benham.py webhook -t test "hello"              # a named one
+python benham.py webhook --title "Deploy done" "v1.2 is live" --color 3066993   # rich embed
+python benham.py webhook --username "AlertBot" "..."  # override displayed name
+python benham.py webhook --list                       # configured webhooks (never prints URLs)</code></pre>
     <h3>Full options</h3>
     <table>
       <tr><th>option</th><th>does</th></tr>
@@ -177,15 +177,15 @@ python webhook.py --list                       # configured webhooks (never prin
       <tr><td><code>usage.py</code></td><td>what it's actually costing</td></tr>
       <tr><td><code>watch_pc.py</code></td><td>watch a PC session live</td></tr>
       <tr><td><code>guest.py</code></td><td>guest allowlist / spend / forget</td></tr>
-      <tr><td><code>supervise_bot.bat</code></td><td>hand-run the supervisor — see <a href="tray-restart.html">Tray, restart &amp; supervision</a></td></tr>
+      <tr><td><code>scripts\supervise_bot.bat</code></td><td>hand-run the supervisor — see <a href="tray-restart.html">Tray, restart &amp; supervision</a></td></tr>
     </table>
 
     <h3><code>status.py</code></h3>
     <p>No args. Answers "is Benham up and what is it doing" without touching Discord: running
-    <code>bot.py</code> pid, guilds/channels seen (from <code>channels.json</code>), AUTO_REPLY
+    <code>benham/bot.py</code> pid, guilds/channels seen (from <code>channels.json</code>), AUTO_REPLY
     state + allowlist, last login / command-sync lines from the newest log. Never prints
     tokens.</p>
-    <pre><code>python status.py</code></pre>
+    <pre><code>python benham.py status</code></pre>
 
     <h3><code>usage.py</code></h3>
     <table>
@@ -200,7 +200,7 @@ python webhook.py --list                       # configured webhooks (never prin
     dominates a message's price), and activity (which capabilities ran, what policy refused,
     what got proposed and confirmed). Dollar figures are list-rate <em>estimates</em> and the
     output says so — PC sessions actually bill the plan, not per-token.</p>
-    <pre><code>python usage.py --today</code></pre>
+    <pre><code>python benham.py usage --today</code></pre>
 
     <h3><code>watch_pc.py</code></h3>
     <table>
@@ -221,10 +221,10 @@ python webhook.py --list                       # configured webhooks (never prin
       <tr><td><code>forget &lt;user_id&gt;</code></td><td>wipe one guest's conversation</td></tr>
       <tr><td><code>forget-all</code></td><td>wipe every guest conversation</td></tr>
     </table>
-    <pre><code>python guest.py            # same as: python guest.py status
-python guest.py forget 1097…1815</code></pre>
+    <pre><code>python benham.py guest            # same as: python benham.py guest status
+python benham.py guest forget 1097…1815</code></pre>
 
-    <h2 id="needs-bot">What needs bot.py running</h2>
+    <h2 id="needs-bot">What needs the bot running</h2>
     <p>Everything that rides the outbox queue needs the bot up:
     <code>send</code>, <code>draft</code>, <code>dm</code>, <code>delete</code>,
     <code>fetch</code>, <code>do.py</code> actions, and all three voice commands.</p>

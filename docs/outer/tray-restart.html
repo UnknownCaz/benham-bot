@@ -36,29 +36,30 @@
 Start-ScheduledTask benham-bot      # start without waiting for a logon
 Stop-ScheduledTask  benham-bot      # stop supervising (does NOT stop a bot already up)</code></pre>
     <p>Easiest full restart: tray icon → restart bot. To run in the foreground instead
-    (<code>python bot.py</code>), <strong>stop the task first</strong> — otherwise the supervisor
+    (<code>python -u -m benham.bot</code>), <strong>stop the task first</strong> — otherwise the supervisor
     restarts the one you just stopped, or refuses to start alongside yours.</p>
 
     <h2 id="supervise">Supervision</h2>
-    <p><code>supervise_bot.ps1</code> keeps exactly one <code>bot.py</code> alive
+    <p><code>supervise_bot.ps1</code> keeps exactly one <code>benham.bot</code> alive
     (<code>supervise_bot.bat</code> is the hand-run entry point for the same script). Four
     behaviours worth knowing:</p>
     <table>
       <tr><td><strong>Runs windowless</strong></td><td>the task action is <code>conhost.exe --headless powershell.exe …</code> — the obvious <code>-WindowStyle Hidden</code> silently doesn't work on Win 11 (Windows Terminal ignores it and puts a window in Alt+Tab). Nothing is lost: every line goes to <code>supervise.log</code>, and the tray is the thing meant to be looked at.</td></tr>
       <tr><td><strong>Gives up on a crash loop</strong></td><td>five consecutive exits each under 60s = a bot that <em>cannot start</em> (bad token, import error). Backs off 10s → 20s → 40s… to 5 min, then stops and says why. Restart the task (or log back in) to reset.</td></tr>
-      <tr><td><strong>Refuses to be the second instance</strong></td><td>one token with two gateways = duplicate replies and duplicate outbox actions. Named mutex against another supervisor, process check against a hand-started <code>bot.py</code> — either way it logs the conflict and exits rather than connecting.</td></tr>
+      <tr><td><strong>Refuses to be the second instance</strong></td><td>one token with two gateways = duplicate replies and duplicate outbox actions. Named mutex against another supervisor, process check against a hand-started bot — either way it logs the conflict and exits rather than connecting.</td></tr>
       <tr><td><strong>Its log rotates</strong></td><td><code>supervise.log</code> → <code>supervise.log.1</code> past 5MB, one generation.</td></tr>
     </table>
     <p>The limit it cannot cover: if the machine sleeps, the supervisor sleeps with it.</p>
 
     <h2 id="boot">Boot logs</h2>
-    <p>Each boot writes <code>boot&lt;N&gt;.out</code> / <code>.err</code> in the repo root and
-    keeps the handle open for the life of the process — so the live pair stays in the root, and
-    older pairs get moved to <code>logs/</code>. <code>usage.py</code> and <code>status.py</code>
-    search both places, so archiving never hides history from a report; pruning
-    <code>logs/</code> is what actually discards it. Supervisor's own view, redacted:</p>
+    <p>Boot captures (<code>boot&lt;N&gt;.out</code> / <code>.err</code>) live in
+    <code>logs/</code> with everything else since the source reorg; under the current
+    supervisor all bot output goes to <code>logs/supervise.log</code>, so new pairs are
+    rare. <code>benham.py usage</code> and <code>benham.py status</code> read
+    <code>logs/</code>; pruning it is what actually discards history. Supervisor's own
+    view, redacted:</p>
     <div class="paper-trail">
-      <pre><code>[2026-07-28 05:04:27Z] [supervisor] bot.py is already running (pid 2…6), started outside this supervisor.
+      <pre><code>[2026-07-28 05:04:27Z] [supervisor] benham.bot is already running (pid 2…6), started outside this supervisor.
 [2026-07-28 05:04:27Z] [supervisor] Refusing to start a second - one token, two gateways means duplicate replies</code></pre>
     </div>
   </main>
