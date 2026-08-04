@@ -1,12 +1,12 @@
 """
 do.py - run any registered capability from the shell.
 
-    python do.py list
-    python do.py list --tier destructive
-    python do.py help send_embed
-    python do.py send_message channel_id=809357286036078612 content="hey"
-    python do.py purge_messages channel_id=... limit=50
-    python do.py purge_messages channel_id=... limit=50 confirm_token=a1b2c3
+    python benham.py do list
+    python benham.py do list --tier destructive
+    python benham.py do help send_embed
+    python benham.py do send_message channel_id=809357286036078612 content="hey"
+    python benham.py do purge_messages channel_id=... limit=50
+    python benham.py do purge_messages channel_id=... limit=50 confirm_token=a1b2c3
 
 One CLI for the whole registry, rather than a file per action. The old pattern -
 send.py, dm.py, delete.py, each with its own argument parsing - meant a new
@@ -56,7 +56,7 @@ def _print_list(argv):
 def _print_help(name):
     act = capabilities.REGISTRY.get(name)
     if act is None:
-        return outbox.usage(f"unknown action {name!r} — try `python do.py list`")
+        return outbox.usage(f"unknown action {name!r} — try `python benham.py do list`")
     print(f"\n{act.name}  [{identity.TIER_NAMES[act.tier]}]")
     print(f"  {act.summary}\n")
     if act.destructive:
@@ -115,7 +115,7 @@ def main(argv):
 
     name = argv[0]
     if name not in capabilities.REGISTRY:
-        return outbox.usage(f"unknown action {name!r} — try `python do.py list`")
+        return outbox.usage(f"unknown action {name!r} — try `python benham.py do list`")
 
     params, err = _parse_kv(argv[1:])
     if err:

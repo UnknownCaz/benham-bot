@@ -620,11 +620,11 @@ New-SubItem $miLogsMenu "View supervise.log" {
     Show-LogWindow
 } | Out-Null
 
-New-SubItem $miLogsMenu "Full status (status.py)" {
+New-SubItem $miLogsMenu "Full status (benham.py status)" {
     # A console window is the point here - it is a report to read, not a background job.
     Start-Process powershell.exe -ArgumentList @(
         '-NoExit', '-NoProfile', '-Command',
-        "Set-Location '$Dir'; python status.py; python guest.py status")
+        "Set-Location '$Dir'; python benham.py status; python benham.py guest status")
 } | Out-Null
 
 $miOpenMenu = New-Object System.Windows.Forms.ToolStripMenuItem "Open"

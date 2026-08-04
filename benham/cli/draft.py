@@ -7,13 +7,13 @@ delivers it for real once he approves. Nothing goes to the target channel until 
 that command himself.
 
 Usage:
-    python draft.py <target_channel_id> "reply text"
+    python benham.py draft <target_channel_id> "reply text"
 
 Flow:
-    1. python draft.py 1491485711801520261 "yo xavier, sounds good"
+    1. python benham.py draft 1491485711801520261 "yo xavier, sounds good"
        -> a DRAFT lands in Testing #asd for review; the real send command is printed.
     2. If it looks good, run the printed command:
-       python send.py 1491485711801520261 "yo xavier, sounds good"
+       python benham.py send 1491485711801520261 "yo xavier, sounds good"
 
 Like send.py, this just enqueues a request into ./outbox for the running bot.py to deliver
 (the draft goes to Testing #asd). It does not talk to Discord directly.
@@ -50,7 +50,7 @@ def resolve_channel(channel_id):
 def main(argv):
     console_utf8()
     if len(argv) < 3:
-        return usage('Usage: python draft.py <target_channel_id> "reply text"')
+        return usage('Usage: python benham.py draft <target_channel_id> "reply text"')
     ids, err = parse_ids(argv[1:2], ["target_channel_id"])
     if err:
         return usage(err)
@@ -76,7 +76,7 @@ def main(argv):
     print(f"  target: {where}")
     print("  review it in Discord, then to send for real run:")
     # Quote the content so it survives the shell as one argument.
-    print(f'    python send.py {target_id} "{content}"')
+    print(f'    python benham.py send {target_id} "{content}"')
     return EXIT_OK
 
 

@@ -7,7 +7,7 @@ no send/edit/react/voice/on_message code in this process, so it cannot possibly
 post or trigger an auto-reply. Nobody in the server sees Benham come online.
 
 Usage:
-    python -u read_history.py [limit]
+    python -u benham.py read_history [limit]
 Default: limit=100 per channel. Testing Server is always excluded.
 """
 import os
