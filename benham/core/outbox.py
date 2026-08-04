@@ -1,7 +1,7 @@
 """
 outbox.py - the one place that knows how to hand work to the running bot.
 
-Every CLI in this directory (send, dm, speak, listen, stoplisten, fetch, delete,
+Every CLI in benham/cli/ (send, dm, speak, listen, stoplisten, fetch, delete,
 draft, purge) enqueues a request the same way, and until this module existed each
 one carried a byte-identical copy of the write: build a timestamped name, write a
 .json.tmp, os.replace it into place. Nine copies meant nine edits for any change to

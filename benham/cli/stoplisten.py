@@ -2,7 +2,7 @@
 stoplisten.py - tell the bot to stop listening and leave the voice channel.
 
 Usage:
-    python stoplisten.py <voice_channel_id>
+    python benham.py stoplisten <voice_channel_id>
 """
 
 import sys
@@ -13,7 +13,7 @@ from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 def main(argv):
     console_utf8()
     if len(argv) < 2:
-        return usage("Usage: python stoplisten.py <voice_channel_id>")
+        return usage("Usage: python benham.py stoplisten <voice_channel_id>")
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
         return usage(err)

@@ -2,7 +2,7 @@
 fetch.py - ask the running bot.py to pull recent messages from a channel.
 
 Usage:
-    python fetch.py <channel_id> [limit]     (default limit 20)
+    python benham.py fetch <channel_id> [limit]     (default limit 20)
 
 Drops a {"action":"history", ...} request into ./outbox. bot.py fetches the
 last N messages and writes them into outbox/sent/<name>_result.json.
@@ -19,7 +19,7 @@ DEFAULT_LIMIT = 20
 def main(argv):
     console_utf8()
     if len(argv) < 2:
-        return usage("Usage: python fetch.py <channel_id> [limit]")
+        return usage("Usage: python benham.py fetch <channel_id> [limit]")
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
         return usage(err)

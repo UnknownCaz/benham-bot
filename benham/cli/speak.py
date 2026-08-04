@@ -2,7 +2,7 @@
 speak.py - have the bot join a voice channel and say something (edge-tts).
 
 Usage:
-    python speak.py <voice_channel_id> "text to speak"
+    python benham.py speak <voice_channel_id> "text to speak"
 
 Drops a {"action":"speak", ...} request into ./outbox. The running bot.py joins
 the voice channel, speaks the text, then disconnects. Find voice channel IDs in
@@ -17,7 +17,7 @@ from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 def main(argv):
     console_utf8()
     if len(argv) < 3:
-        return usage('Usage: python speak.py <voice_channel_id> "text to speak"')
+        return usage('Usage: python benham.py speak <voice_channel_id> "text to speak"')
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
         return usage(err)

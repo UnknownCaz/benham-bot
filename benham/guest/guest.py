@@ -420,7 +420,7 @@ def respond(user_id, text, log=None):
 
 
 # --------------------------------------------------------------------------
-# CLI: python guest.py [status | forget <user_id> | forget-all]
+# CLI: python benham.py guest [status | forget <user_id> | forget-all]
 # --------------------------------------------------------------------------
 
 def _main(argv):
@@ -457,7 +457,7 @@ def _main(argv):
         print("Forgot every guest conversation")
         return 0
 
-    print("Usage: python guest.py [status | forget <user_id> | forget-all]")
+    print("Usage: python benham.py guest [status | forget <user_id> | forget-all]")
     return 2
 
 

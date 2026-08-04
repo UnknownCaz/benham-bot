@@ -2,8 +2,8 @@
 dm.py - enqueue a Discord DM for the running bot.py to deliver.
 
 Usage:
-    python dm.py <user_id> "message text"
-    python dm.py --tyler "message text"      # shorthand for the owner
+    python benham.py dm <user_id> "message text"
+    python benham.py dm --tyler "message text"      # shorthand for the owner
 
 Writes an atomic request file into ./outbox; bot.py picks it up within ~2s,
 resolves (or opens) the user's DM channel, sends it, and moves the request to
@@ -26,7 +26,7 @@ TYLER_ID = 273967061619965952
 def main(argv):
     console_utf8()
     if len(argv) < 3:
-        return usage('Usage: python dm.py <user_id|--tyler> "message text"')
+        return usage('Usage: python benham.py dm <user_id|--tyler> "message text"')
 
     if argv[1] == "--tyler":
         user_id = TYLER_ID

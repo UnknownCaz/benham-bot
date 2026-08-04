@@ -1,10 +1,10 @@
 """
 usage.py - what Benham has actually consumed, from the log it already writes.
 
-    python usage.py                 # newest log
-    python usage.py --log bot.log   # a specific one
-    python usage.py --all           # every *.out / bot.log together
-    python usage.py --today         # only today's lines
+    python benham.py usage                 # newest log
+    python benham.py usage --log bot.log   # a specific one
+    python benham.py usage --all           # every *.out / bot.log together
+    python benham.py usage --today         # only today's lines
 
 Answers three questions that were previously guesswork:
 

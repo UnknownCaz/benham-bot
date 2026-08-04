@@ -6,7 +6,7 @@ Answers "is Benham up and what is it doing" without touching Discord:
   - AUTO_REPLY on/off + the guild allowlist (from environ.env + exaroton_watch.json)
   - last login / command-sync lines from the newest log file
 
-Prints a short report and exits. Never prints tokens. Run:  python status.py
+Prints a short report and exits. Never prints tokens. Run:  python benham.py status
 """
 
 import os

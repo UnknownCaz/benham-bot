@@ -10,7 +10,7 @@ give Tyler a short catch-up summary. Keep the read LIGHT: recent activity and vi
 profiles or sensitive personal content.
 
 Usage:
-    python -u catchup.py <channel_id> [limit]
+    python -u benham.py catchup <channel_id> [limit]
 Default: limit=40.
 """
 import os
@@ -30,7 +30,7 @@ from benham import paths
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
 if len(sys.argv) < 2:
-    print("Usage: python -u catchup.py <channel_id> [limit]", file=sys.stderr)
+    print("Usage: python -u benham.py catchup <channel_id> [limit]", file=sys.stderr)
     raise SystemExit(2)
 try:
     CHANNEL_ID = int(sys.argv[1])

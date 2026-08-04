@@ -1,9 +1,9 @@
 """
 watch_pc.py - watch, live, what Benham is doing on the PC.
 
-    python watch_pc.py            # follow the active session
-    python watch_pc.py --last     # replay the most recent session and exit
-    python watch_pc.py --list     # list recent sessions
+    python benham.py watch_pc            # follow the active session
+    python benham.py watch_pc --last     # replay the most recent session and exit
+    python benham.py watch_pc --list     # list recent sessions
 
 A pc_task runs a real Claude Code session, and until it finishes the only thing
 bot.log shows is a permission prompt (if one is needed) and a one-line summary

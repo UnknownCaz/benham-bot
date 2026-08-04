@@ -2,7 +2,7 @@
 purge.py - bulk-delete messages older than N days.
 
 Usage:
-    python purge.py <channel_id> [--days N] [--scope channel|guild]
+    python benham.py purge <channel_id> [--days N] [--scope channel|guild]
 
     --days   default 7. Messages older than this are deleted.
     --scope  "channel" (default) purges just that channel;
@@ -32,7 +32,7 @@ SCOPES = ("channel", "guild")
 def main(argv):
     console_utf8()
     if len(argv) < 2:
-        return usage("Usage: python purge.py <channel_id> [--days N] [--scope channel|guild]")
+        return usage("Usage: python benham.py purge <channel_id> [--days N] [--scope channel|guild]")
 
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:

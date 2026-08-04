@@ -16,12 +16,12 @@ Webhooks are configured in webhooks.json (gitignored — holds secret URLs):
 To add a webhook, add another entry under "webhooks" with its own short name.
 
 Usage:
-    python webhook.py "hello world"                 # posts to the default webhook
-    python webhook.py -t test "hello"               # posts to the named webhook "test"
-    python webhook.py --url <url> "hello"           # posts to a raw URL (bypasses config)
-    python webhook.py "hello" --username "AlertBot"  # override the displayed name
-    python webhook.py --title "Deploy done" "v1.2 is live" --color 3066993   # rich embed
-    python webhook.py --list                         # list configured webhooks (no URLs)
+    python benham.py webhook "hello world"                 # posts to the default webhook
+    python benham.py webhook -t test "hello"               # posts to the named webhook "test"
+    python benham.py webhook --url <url> "hello"           # posts to a raw URL (bypasses config)
+    python benham.py webhook "hello" --username "AlertBot"  # override the displayed name
+    python benham.py webhook --title "Deploy done" "v1.2 is live" --color 3066993   # rich embed
+    python benham.py webhook --list                         # list configured webhooks (no URLs)
 
 Exit code 0 on success (Discord returns HTTP 204).
 """

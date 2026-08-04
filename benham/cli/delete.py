@@ -2,7 +2,7 @@
 delete.py - ask the running bot.py to delete ONE specific message by id.
 
 Usage:
-    python delete.py <channel_id> <message_id>
+    python benham.py delete <channel_id> <message_id>
 
 Enqueues a {"action":"delete", ...} request into ./outbox; bot.py fetches that
 message and deletes it (~2s). The bot can always delete its OWN messages; deleting
@@ -20,7 +20,7 @@ from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 def main(argv):
     console_utf8()
     if len(argv) < 3:
-        return usage("Usage: python delete.py <channel_id> <message_id>")
+        return usage("Usage: python benham.py delete <channel_id> <message_id>")
     ids, err = parse_ids(argv[1:3], ["channel_id", "message_id"])
     if err:
         return usage(err)
