@@ -46,6 +46,19 @@ def search_queries(resp):
             if getattr(b, "type", "") == "server_tool_use"]
 
 
+def response_text(resp):
+    """One response's text blocks as ONE string - concatenated, no separator.
+
+    Moved here from agent.py (Stage 3) because both tool loops need it and the
+    bug it fixes is a property of cited responses, not of either loop: a cited
+    answer arrives as MANY text blocks, one per cited span, and they are
+    fragments of one utterance. "" is the only correct joiner within a single
+    response; whatever joiner a loop uses BETWEEN rounds is its own business.
+    """
+    return "".join(b.text for b in getattr(resp, "content", [])
+                   if getattr(b, "type", "") == "text").strip()
+
+
 def log_searches(path, actor_id, queries, role):
     """Append each query to a JSONL moderation trail.
 

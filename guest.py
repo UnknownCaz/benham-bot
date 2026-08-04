@@ -73,6 +73,7 @@ DAILY_CAP = int(_CFG.get("daily_message_cap", 100))
 GLOBAL_CAP = int(_CFG.get("global_daily_cap", 400))
 WEB_SEARCH = bool(_CFG.get("web_search", True))
 SEARCHES_PER_TURN = int(_CFG.get("searches_per_turn", 2))
+TOOL_ROUND_COST = int(_CFG.get("tool_round_cost", 1))
 
 _client = None
 _persona_cache = None
@@ -179,6 +180,26 @@ def charge_search(user_id):
         uid = str(int(user_id))
         u["users"][uid] = int(u["users"].get(uid, 0)) + 1
         u["global"] = int(u.get("global", 0)) + 1
+        jsonio.write_json(USAGE_FILE, u)
+
+
+def charge_rounds(user_id, extra_rounds):
+    """Spend TOOL_ROUND_COST messages per tool round beyond a turn's first.
+
+    Guest-refactor Stage 3, guest_agent.py's pricing rule, and the same shape as
+    charge_search for the same reason: charged AFTER the turn (only then is the
+    round count known), never refuses (the guest already got their answer; the
+    honest ledger matters more than a cap exceeded by one), settled by the cap
+    check on their next turn.
+    """
+    n = int(extra_rounds) * TOOL_ROUND_COST
+    if n <= 0:
+        return
+    with _quota_lock:
+        u = _usage()
+        uid = str(int(user_id))
+        u["users"][uid] = int(u["users"].get(uid, 0)) + n
+        u["global"] = int(u.get("global", 0)) + n
         jsonio.write_json(USAGE_FILE, u)
 
 

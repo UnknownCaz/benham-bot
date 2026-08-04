@@ -627,21 +627,12 @@ def _image_blocks(result):
     return blocks, skipped
 
 
-def _response_text(resp):
-    """One response's text blocks as ONE string - concatenated, no separator.
-
-    Found live on Stage 1's first real search. A cited answer comes back as MANY
-    text blocks, one per cited span, and they are fragments of one utterance:
-    'released - ', 'with the second game drop...', ', centered on'. The loop used
-    to collect blocks individually into reply_parts, whose joiner is \\n\\n - right
-    BETWEEN rounds, which are separate utterances, and sentence-shattering WITHIN
-    one response. Tyler's first searched reply came back as confetti: paragraph
-    breaks mid-clause, punctuation stranded alone. guest.py never had the bug
-    because it always joined with "" - which is the only correct joiner inside a
-    single response, cited or not.
-    """
-    return "".join(b.text for b in getattr(resp, "content", [])
-                   if getattr(b, "type", "") == "text").strip()
+# Found live on Stage 1's first real search: cited answers arrive as sentence
+# FRAGMENTS, one text block per cited span, and joining them with anything but
+# "" shatters the reply. The helper moved to shared_tools in Stage 3 so the
+# guest loop reassembles replies the same way; the alias keeps this module's
+# callers and test_injection.py unchanged.
+_response_text = shared_tools.response_text
 
 
 def _truncate(obj, limit=6000):
