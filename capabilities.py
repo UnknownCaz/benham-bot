@@ -400,7 +400,11 @@ async def _get_message(ctx, p):
 #   3. Nothing is ever run. Files are written and described; a runnable extension is
 #      flagged in the result and otherwise treated as inert bytes.
 
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+# Aliased: two functions below use `paths` as a local for outgoing file lists,
+# and a bare `from benham import paths` would be shadowed there.
+from benham import paths as _paths
+
+DOWNLOAD_DIR = os.path.join(_paths.STATE_DIR, "downloads")
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024      # per file, unless the caller raises it
 HARD_ATTACHMENT_BYTES = 100 * 1024 * 1024   # ceiling the caller cannot raise past
 MAX_TEXT_CHARS = 20000                      # of a text file, returned inline

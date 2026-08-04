@@ -26,8 +26,8 @@ import os
 
 import jsonio
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONTROL_FILE = os.path.join(BASE_DIR, "control.json")
+from benham import paths
+CONTROL_FILE = os.path.join(paths.CONFIG_DIR, "control.json")
 
 # Tiers, ordered. Compared with >= so a threshold check reads naturally.
 READ = 0

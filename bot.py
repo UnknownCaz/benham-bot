@@ -64,13 +64,13 @@ try:
 except Exception:  # noqa: BLE001
     audioop = None
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTBOX = os.path.join(BASE_DIR, "outbox")
+from benham import paths
+OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
 SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
-CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
-INBOX_FILE = os.path.join(BASE_DIR, "inbox.jsonl")
-VOICE_TRANSCRIPT = os.path.join(BASE_DIR, "voice_transcript.jsonl")
+CHANNELS_FILE = os.path.join(paths.STATE_DIR, "channels.json")
+INBOX_FILE = os.path.join(paths.STATE_DIR, "inbox.jsonl")
+VOICE_TRANSCRIPT = os.path.join(paths.STATE_DIR, "voice_transcript.jsonl")
 
 # Canonical wake names. Detection is FUZZY (see is_wake): each word / adjacent word-pair in an
 # utterance is compared to these, so Whisper mishears of "Benham" (Bentham, Ben ham, Benum, Bnham,
@@ -90,7 +90,7 @@ _whisper_model = None
 _whisper_lock = threading.Lock()
 LISTEN_SESSIONS = {}  # guild_id -> {"channel_id": int, "sink": SpeechSink}
 
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))  # must precede env reads below
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))  # must precede env reads below
 
 # --- Autonomous "AUTO_REPLY" mode: the bot answers wake utterances itself via the API brain. ---
 # Off by default (set BENHAM_AUTO_REPLY=1 in environ.env) so the free live-Claude loop stays default.
@@ -101,7 +101,7 @@ REPLY_COOLDOWN_SEC = 1.5        # minimum gap between API calls per guild
 # name until this many seconds pass with no speech from the conversation partner. 0 = disable
 # (wake word required every time). Each engaged utterance re-extends the window.
 CONVO_WINDOW_SEC = float(os.environ.get("BENHAM_CONVO_WINDOW_SEC", "25"))
-VOICE_SETTINGS_FILE = os.path.join(BASE_DIR, "voice_settings.json")
+VOICE_SETTINGS_FILE = os.path.join(paths.STATE_DIR, "voice_settings.json")
 CONVERSATIONS = {}              # guild_id -> deque of {"role", "content"}
 _last_reply_at = {}             # guild_id -> monotonic time of last API reply
 _last_wake_text = {}            # guild_id -> last handled text (dedup)
@@ -129,7 +129,7 @@ for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
 
 # --- exaroton /server commands + watchdog config (public IDs only; no secrets here) ---
-with open(os.path.join(BASE_DIR, "exaroton_watch.json"), encoding="utf-8") as _wf:
+with open(os.path.join(paths.CONFIG_DIR, "exaroton_watch.json"), encoding="utf-8") as _wf:
     WATCH = json.load(_wf)
 GUILD_ID = int(WATCH["guild_id"])
 ALERT_CHAN = int(WATCH["alert_channel_id"])
@@ -528,7 +528,7 @@ def apply_voice_settings(changes):
     return cfg
 
 
-PERSONALITY_OVERRIDES_FILE = os.path.join(BASE_DIR, "personality_overrides.txt")
+PERSONALITY_OVERRIDES_FILE = os.path.join(paths.STATE_DIR, "personality_overrides.txt")
 
 
 def append_override(trait):

@@ -39,8 +39,8 @@ import threading
 import identity
 import pathsafe
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(BASE_DIR, "guest_work")
+from benham import paths
+ROOT = os.path.join(paths.STATE_DIR, "guest_work")
 COMMONS = os.path.join(ROOT, "commons")
 
 _cfg = (identity.guest_config().get("workspace") or {})

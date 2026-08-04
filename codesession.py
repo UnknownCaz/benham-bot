@@ -38,10 +38,10 @@ from dotenv import load_dotenv
 
 import identity
 
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "environ.env"))
+from benham import paths
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKDIR = os.path.join(os.path.dirname(BASE_DIR), "..", "Benhams-inbox")
+WORKDIR = os.path.join(os.path.dirname(paths.ROOT), "..", "Benhams-inbox")
 WORKDIR = os.path.abspath(
     identity.CONTROL.get("pc", {}).get("workdir")
     or os.path.join(os.path.expanduser("~"), "Claude", "Benhams-inbox")
@@ -271,7 +271,7 @@ def _options():
     return ClaudeAgentOptions(**kw)
 
 
-PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
+PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
 
 
 def _persona():

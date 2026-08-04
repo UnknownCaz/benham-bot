@@ -55,14 +55,14 @@ import jsonio
 import policy
 import shared_tools
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))
+from benham import paths
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
 # Deliberately NOT agent_memory.json. See the module docstring.
-MEMORY_FILE = os.path.join(BASE_DIR, "guest_memory.json")
-USAGE_FILE = os.path.join(BASE_DIR, "guest_usage.json")
-PERSONA_FILE = os.path.join(BASE_DIR, "guest_persona.md")
-SEARCH_LOG = os.path.join(BASE_DIR, "guest_searches.jsonl")
+MEMORY_FILE = os.path.join(paths.STATE_DIR, "guest_memory.json")
+USAGE_FILE = os.path.join(paths.STATE_DIR, "guest_usage.json")
+PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "guest_persona.md")
+SEARCH_LOG = os.path.join(paths.STATE_DIR, "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
 MODEL = _CFG.get("model") or "claude-haiku-4-5"
