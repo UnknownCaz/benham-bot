@@ -23,9 +23,11 @@ import json
 import os
 import sys
 
-from outbox import BASE_DIR, EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
-CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
+from benham import paths
+
+CHANNELS_FILE = os.path.join(paths.STATE_DIR, "channels.json")
 
 # Testing Server #asd - the review channel drafts are posted to.
 REVIEW_CHANNEL_ID = 809357286036078612

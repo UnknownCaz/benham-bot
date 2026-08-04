@@ -16,8 +16,8 @@ import sys
 import discord
 from dotenv import load_dotenv
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))
+from benham import paths
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
 TESTING_SERVER_ID = 736988645562646619  # excluded — we want the friend's server only
 # limit arg: a number, or "all"/"0"/"full" for the entire channel history

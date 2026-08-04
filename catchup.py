@@ -26,8 +26,8 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))
+from benham import paths
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
 if len(sys.argv) < 2:
     print("Usage: python -u catchup.py <channel_id> [limit]", file=sys.stderr)

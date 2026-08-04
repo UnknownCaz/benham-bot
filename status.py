@@ -17,7 +17,7 @@ import glob
 import subprocess
 from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from benham import paths
 
 
 def bot_pid():
@@ -56,7 +56,7 @@ def mtime(path):
 def auto_reply_flag():
     """Read only the BENHAM_AUTO_REPLY line from environ.env — never any secret."""
     try:
-        with open(os.path.join(BASE_DIR, "environ.env"), "r", encoding="utf-8") as f:
+        with open(os.path.join(paths.CONFIG_DIR, "environ.env"), "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip().startswith("BENHAM_AUTO_REPLY"):
                     return line.split("=", 1)[1].strip()
@@ -66,11 +66,12 @@ def auto_reply_flag():
 
 
 def newest_log_tail(patterns=("restart_run.log", "bot.log", "supervise.log"), keep=("Logged in as", "AUTO_REPLY", "Synced")):
-    logs = [os.path.join(BASE_DIR, p) for p in patterns if os.path.exists(os.path.join(BASE_DIR, p))]
-    # logs/ holds the rotated-out captures; the live ones are still in BASE_DIR.
-    for d in (BASE_DIR, os.path.join(BASE_DIR, "logs")):
+    logs = [os.path.join(paths.LOG_DIR, p) for p in patterns if os.path.exists(os.path.join(paths.LOG_DIR, p))]
+    # Rotated-out captures live in ROOT/logs; live ones in LOG_DIR. A set, because
+    # after the Stage 5 move those are the same directory.
+    for d in {paths.LOG_DIR, os.path.join(paths.ROOT, "logs")}:
         logs += [p for p in glob.glob(os.path.join(d, "*.log")) if p not in logs]
-    logs += [p for p in glob.glob(os.path.join(BASE_DIR, "boot*.out")) if p not in logs]
+    logs += [p for p in glob.glob(os.path.join(paths.LOG_DIR, "boot*.out")) if p not in logs]
     if not logs:
         return None, []
     newest = max(logs, key=lambda p: os.path.getmtime(p))
@@ -91,12 +92,12 @@ def main():
     pid = bot_pid()
     print(f"process:      {'RUNNING (pid ' + str(pid) + ')' if pid else 'NOT running'}")
 
-    watch = load_json(os.path.join(BASE_DIR, "exaroton_watch.json")) or {}
+    watch = load_json(os.path.join(paths.CONFIG_DIR, "exaroton_watch.json")) or {}
     allow = watch.get("auto_reply_guilds", [watch.get("guild_id")] if watch.get("guild_id") else [])
     print(f"AUTO_REPLY:   env BENHAM_AUTO_REPLY={auto_reply_flag()} | allowed guilds={allow}")
 
-    ch = load_json(os.path.join(BASE_DIR, "channels.json"))
-    ch_mt = mtime(os.path.join(BASE_DIR, "channels.json"))
+    ch = load_json(os.path.join(paths.STATE_DIR, "channels.json"))
+    ch_mt = mtime(os.path.join(paths.STATE_DIR, "channels.json"))
     if ch:
         print(f"guilds:       {len(ch)} (channels.json written {ch_mt:%Y-%m-%d %H:%M}Z)")
         for g in ch:

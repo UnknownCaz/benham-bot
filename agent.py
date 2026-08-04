@@ -40,7 +40,7 @@ import policy
 import jsonio
 import shared_tools
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from benham import paths
 
 # Load environ.env here rather than relying on the importer - the same fix brain.py
 # needed. bot.py imports this module before it calls load_dotenv, so an ANTHROPIC_API_KEY
@@ -48,13 +48,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # use of this module (a test, a REPL) would fail to authenticate at all.
 # load_dotenv does not overwrite variables that are already set, so a real shell
 # environment variable still wins and loading twice is harmless.
-load_dotenv(os.path.join(BASE_DIR, "environ.env"))
-MEMORY_FILE = os.path.join(BASE_DIR, "agent_memory.json")
+load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
+MEMORY_FILE = os.path.join(paths.STATE_DIR, "agent_memory.json")
 # The one shared personality file, also read by brain.py (voice) and codesession.py
 # (PC). Benham used to be three different characters depending on how you reached
 # him - a casual "one of the guys" in voice, something terser in DMs - which is a
 # strange thing for a proxy that is supposed to be one person.
-PERSONA_FILE = os.path.join(BASE_DIR, "persona.md")
+PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))
@@ -71,7 +71,7 @@ SEARCHES_PER_TURN = int(_cfg.get("searches_per_turn", 3))
 # Separate from guest_searches.jsonl on purpose: one file per surface, so a glance
 # at a line never needs the role field to tell you whose query it was, and a
 # moderation pass over guest traffic is not diluted by Tyler's own lookups.
-SEARCH_LOG = os.path.join(BASE_DIR, "agent_searches.jsonl")
+SEARCH_LOG = os.path.join(paths.STATE_DIR, "agent_searches.jsonl")
 
 _client = None
 _last_call = {}          # conversation key -> monotonic time

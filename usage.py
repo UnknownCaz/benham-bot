@@ -33,10 +33,11 @@ import subprocess
 import sys
 import time
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Rotated-out captures live here; the live boot*.out stays in BASE_DIR while its
+# Aliased: `paths` is a local or parameter name throughout this file.
+from benham import paths as _paths
+# Rotated-out captures live here; the live boot*.out stays in LOG_DIR while its
 # process holds the handle, so both directories have to be searched.
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
+LOGS_DIR = os.path.join(_paths.ROOT, "logs")
 
 # Per million tokens, list price. Cache reads are a tenth of input; cache writes
 # are 1.25x. Only used for the estimate, and only for the direct-API paths.
@@ -191,14 +192,16 @@ def log_candidates():
     traffic). Before this line existed, the default pick was that stale boot file
     and --today reported a running bot as all zeros.
     """
-    paths = []
-    for d in (BASE_DIR, LOGS_DIR):
-        paths += glob.glob(os.path.join(d, "*.out"))
-        paths += glob.glob(os.path.join(d, "bot*.log"))
-    sup = os.path.join(BASE_DIR, "supervise.log")
+    cands = []
+    # A set: after the Stage 5 move LOG_DIR and LOGS_DIR are the same directory,
+    # and globbing it twice would double-count every capture.
+    for d in {_paths.LOG_DIR, LOGS_DIR}:
+        cands += glob.glob(os.path.join(d, "*.out"))
+        cands += glob.glob(os.path.join(d, "bot*.log"))
+    sup = os.path.join(_paths.LOG_DIR, "supervise.log")
     if os.path.isfile(sup):
-        paths.append(sup)
-    return paths
+        cands.append(sup)
+    return cands
 
 
 def main(argv):

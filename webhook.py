@@ -33,8 +33,8 @@ import argparse
 import urllib.request
 import urllib.error
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG = os.path.join(BASE_DIR, "webhooks.json")
+from benham import paths
+CONFIG = os.path.join(paths.CONFIG_DIR, "webhooks.json")
 
 
 def load_config():

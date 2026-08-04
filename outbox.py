@@ -20,8 +20,8 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTBOX = os.path.join(BASE_DIR, "outbox")
+from benham import paths
+OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
 
 # Conventional exit codes, shared by every CLI here:
 #   0 ok, 1 runtime failure, 2 usage error.
