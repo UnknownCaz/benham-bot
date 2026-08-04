@@ -126,7 +126,14 @@ check("enabled=false disables a listed guest", identity.guest_enabled(), False)
 check("...and may_chat_as_guest refuses them",
       policy.may_chat_as_guest(CallContext.guest_dm(DOOM)).rule, "guest_disabled")
 
+# "workspace" became a real mode in guest-refactor Stage 3, so the
+# unknown-mode check now uses a genuinely unknown word - the property under
+# test (a config from a NEWER build than the code disables rather than
+# guesses) is unchanged.
 enable_guests(mode="workspace")
+check("workspace is a recognised mode now (Stage 3)",
+      identity.guest_enabled(), True)
+enable_guests(mode="hologram")
 check("an unrecognised mode disables rather than guessing",
       identity.guest_enabled(), False)
 enable_guests()

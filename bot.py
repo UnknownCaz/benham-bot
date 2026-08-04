@@ -53,6 +53,7 @@ import codesession
 import confirm
 import exaroton_ops as exa
 import guest
+import guest_agent
 import identity
 import jsonio
 import policy
@@ -1094,7 +1095,18 @@ async def on_ready():
         # "no tools" was true when guests were pure conversation and became a lie
         # the day server-side search shipped. The distinction that actually holds -
         # and the one the security story rests on - is CLIENT tools: none, ever.
-        log(f"Guest chat: ON ({guest.MODEL}, DM only, no client tools"
+        # The banner names the mode's actual tool surface: chat mode's absence
+        # of client tools is its security property and worth stating; workspace
+        # mode's property is that its grants are exactly guest_grants(), so the
+        # banner prints them - an unexpectedly non-empty list at boot is the
+        # kind of thing this line exists to make loud.
+        _gmode = str(identity.GUEST.get("mode", "chat"))
+        if _gmode == "workspace":
+            _grants = sorted(capabilities.guest_grants())
+            _surface = "tool grants: " + (", ".join(_grants) if _grants else "NONE")
+        else:
+            _surface = "no client tools"
+        log(f"Guest chat: ON ({guest.MODEL}, mode={_gmode}, DM only, {_surface}"
             f"{', web search on' if guest.WEB_SEARCH else ''}) — "
             f"{sorted(identity.GUEST_IDS) or 'nobody whitelisted'}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
@@ -1598,13 +1610,18 @@ def pc_label(typed, replied):
 
 
 async def handle_guest_dm(message):
-    """One conversational turn with a whitelisted non-owner. Text in, text out.
+    """One guest turn: text in, text out, and the reply target cannot vary.
 
-    Everything this function is allowed to do is in its own body: read the message,
-    ask guest.py for a reply, post it back into the same DM. It never resolves a
-    channel, never calls capabilities.run, and cannot address anyone but the person
-    who wrote to it - the reply target is `message.channel` and there is no code path
-    that changes it.
+    Whichever mode runs, this function can only address the person who wrote to
+    it - the reply target is `message.channel` and there is no code path that
+    changes it.
+
+    Two modes share everything but the engine (guest-refactor Stage 3). "chat"
+    is guest.py: a plain conversation, no client tools ever. "workspace" is
+    guest_agent.py: a tool loop over capabilities.guest_grants(), every call of
+    which goes through capabilities.run with a guest context - so what it may do
+    is policy.py's decision, not this function's. The check/refund contract is
+    identical for both, which is what makes the routing a two-line if.
 
     The refusal wording splits on the rule for a reason. Being over quota is worth
     saying out loud, because the guest can act on it by waiting. Not being on the
@@ -1628,8 +1645,14 @@ async def handle_guest_dm(message):
     log(f"guest chat from {message.author} ({message.author.id}): {text[:200]!r}")
     try:
         async with message.channel.typing():
-            reply = await asyncio.to_thread(
-                guest.respond, message.author.id, text, log)
+            if str(identity.GUEST.get("mode", "chat")) == "workspace":
+                # On the event loop, not a worker thread: the loop awaits
+                # capabilities.run, which needs the running loop and the client.
+                reply = await guest_agent.respond(
+                    client, log, message.author.id, text, message.channel.id)
+            else:
+                reply = await asyncio.to_thread(
+                    guest.respond, message.author.id, text, log)
         await reply_in(message.channel, reply)
     except Exception as e:  # noqa: BLE001 - one guest's bad turn never takes the bot down
         # check() charged this message before the call. It did not happen, so give it

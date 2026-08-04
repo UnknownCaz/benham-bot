@@ -97,8 +97,11 @@ GUEST_IDS = set(int(u) for u in (GUEST.get("ids") or []))
 # Modes this build knows how to run. An unrecognised mode disables guest chat
 # rather than falling back to one, because the failure being guarded against is a
 # config written for a newer build than the code - where guessing which mode was
-# meant is exactly the wrong instinct. Phase 2 adds "workspace" here.
-GUEST_MODES = frozenset({"chat"})
+# meant is exactly the wrong instinct. "workspace" arrived with guest-refactor
+# Stage 3: same gate, same quotas, but guest turns run guest_agent.py's tool
+# loop over whatever capabilities.guest_grants() allows (nothing, until Stage 4
+# flags capabilities and control.json lists them).
+GUEST_MODES = frozenset({"chat", "workspace"})
 
 
 def guest_enabled():
