@@ -14,5 +14,5 @@ REM the same bot token = double gateway = duplicate replies and duplicate outbox
 REM actions. The script refuses to start in that case rather than trusting this
 REM comment. Output is appended to supervise.log (rotated at 5MB).
 REM ---------------------------------------------------------------------------
-cd /d "%~dp0"
+cd /d "%~dp0.."
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0supervise_bot.ps1" %*

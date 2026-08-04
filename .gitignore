@@ -58,3 +58,7 @@ guest_work/
 *.task.backup.xml
 # Claude session-local settings and worktrees.
 .claude/
+
+# Bot-written voice defaults (was mistakenly tracked until the src reorg;
+# it lives in state/ now, with the rest of what the bot mutates).
+voice_settings.json
