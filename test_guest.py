@@ -330,8 +330,14 @@ if os.path.exists(OVERRIDES):
 check("personality_overrides.txt is untouched — no cross-surface contamination",
       _after, _before)
 
-check("no tools were passed to the API at all",
-      "tools" in (_fake.messages.kwargs or {}), False)
+# Written as "no tools at all" before guest web search shipped; the invariant
+# guest.py actually promises is "no CLIENT tools". The one permitted entry is
+# Anthropic's server-side search - asserting the exact list means a second entry
+# of any kind, or a client tool swapped in, fails loudly.
+import shared_tools  # noqa: E402
+check("the only tool passed is Anthropic's SERVER-SIDE web search - no client tools",
+      [t.get("type") for t in (_fake.messages.kwargs or {}).get("tools", [])],
+      [shared_tools.WEB_SEARCH_TYPE] if guest.WEB_SEARCH else [])
 check("the guest prompt is used, not persona.md",
       "no tools on this path" in (_fake.messages.kwargs or {}).get("system", "").lower(),
       True)

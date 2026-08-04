@@ -53,6 +53,7 @@ import brain
 import identity
 import jsonio
 import policy
+import shared_tools
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, "environ.env"))
@@ -184,19 +185,11 @@ def charge_search(user_id):
 def _log_searches(user_id, queries):
     """Append each query to guest_searches.jsonl - the hand-moderation trail.
 
-    Append-only JSONL, one object per query, written even if the reply then fails
-    to send: the search happened, so it belongs in the record.
+    The writer moved to shared_tools.log_searches (Stage 0) so the owner agent's
+    search log comes out the same shape; this wrapper pins THIS surface's file and
+    role so no caller in this module can misfile a guest query.
     """
-    import json
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).isoformat()
-    try:
-        with open(SEARCH_LOG, "a", encoding="utf-8") as f:
-            for q in queries:
-                f.write(json.dumps({"ts": ts, "user_id": int(user_id),
-                                    "query": str(q)}) + "\n")
-    except OSError:
-        pass
+    shared_tools.log_searches(SEARCH_LOG, user_id, queries, role="guest")
 
 
 def spent_today(user_id):
@@ -366,9 +359,9 @@ def respond(user_id, text, log=None):
         # only kind that keeps this file's security property: it runs on Anthropic's
         # servers, touches nothing on this machine or network, and there is no
         # client tool-result loop here for fetched content to steer. Do NOT add
-        # client tools; see the module docstring.
-        kw["tools"] = [{"type": "web_search_20250305", "name": "web_search",
-                        "max_uses": SEARCHES_PER_TURN}]
+        # client tools; see the module docstring. shared_tools is server-side-only
+        # by charter, so building the entry there does not weaken this paragraph.
+        kw["tools"] = [shared_tools.web_search_tool(SEARCHES_PER_TURN)]
     resp = _get_client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
@@ -378,9 +371,7 @@ def respond(user_id, text, log=None):
     )
     raw = "".join(b.text for b in resp.content if b.type == "text").strip()
 
-    queries = [getattr(b, "input", {}).get("query", "?")
-               for b in resp.content
-               if getattr(b, "type", "") == "server_tool_use"]
+    queries = shared_tools.search_queries(resp)
     if queries:
         _log_searches(user_id, queries)
         charge_search(user_id)   # a searched turn counts double - Tyler's rule

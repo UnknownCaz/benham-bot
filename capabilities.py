@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 import identity
+import pathsafe
 import policy
 
 REGISTRY = {}
@@ -331,68 +332,34 @@ MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024      # per file, unless the caller raises
 HARD_ATTACHMENT_BYTES = 100 * 1024 * 1024   # ceiling the caller cannot raise past
 MAX_TEXT_CHARS = 20000                      # of a text file, returned inline
 
-# Types worth returning as text. Judged by extension as well as content_type,
-# because Discord reports plenty of real text files as application/octet-stream.
-_TEXTUAL_TYPES = ("text/", "application/json", "application/xml", "application/csv",
-                  "application/javascript", "application/x-yaml")
-_TEXTUAL_SUFFIXES = {".txt", ".log", ".md", ".json", ".yml", ".yaml", ".toml", ".ini",
-                     ".cfg", ".conf", ".csv", ".tsv", ".xml", ".html", ".css", ".py",
-                     ".js", ".ts", ".ps1", ".sh", ".bat", ".java", ".c", ".h", ".cpp",
-                     ".rs", ".go", ".sql", ".properties", ".env", ".gitignore", ".mcmeta"}
-# Extensions Windows will execute on a double click. Flagged, never blocked: a
-# blocklist here would refuse `.jar`-shaped legitimate work (mod files are a normal
-# thing for Tyler to be handed) while stopping nothing, since the file is only ever
-# written and never launched.
-_RUNNABLE_SUFFIXES = {".exe", ".bat", ".cmd", ".com", ".scr", ".ps1", ".msi", ".vbs",
-                      ".jse", ".wsf", ".lnk", ".reg"}
+# Filename hygiene and path confinement live in pathsafe.py now (Stage 0 of
+# PLAN-guest-permissions.md) so the guest workspace can share one implementation
+# with this quarantine rather than growing a second. The private aliases below
+# keep every internal call site - and test_attachments.py, which reaches in for
+# them - exactly as they were.
+#
+# Runnable extensions here are FLAGGED, never blocked: a blocklist would refuse
+# `.jar`-shaped legitimate work (mod files are a normal thing for Tyler to be
+# handed) while stopping nothing, since the file is only ever written and never
+# launched. That is this call site's policy, not pathsafe's - the guest workspace
+# makes the opposite call with the same list.
 
-_UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
-_RESERVED_STEMS = ({"con", "prn", "aux", "nul"}
-                   | {f"com{i}" for i in range(1, 10)}
-                   | {f"lpt{i}" for i in range(1, 10)})
-
-
-def _safe_filename(raw, fallback):
-    """Rewrite an uploader's filename into something safe to create.
-
-    This is the single field of an attachment an attacker fully controls, and
-    `..\\..\\Windows\\System32\\evil.dll` is a legal thing to name a Discord upload.
-    basename() alone is not enough on Windows: `CON` and `NUL` are devices rather
-    than files, a trailing dot or space silently renames what you opened, and both
-    slash directions separate paths.
-    """
-    name = str(raw or "").replace("\\", "/").split("/")[-1]
-    name = _UNSAFE_NAME_RE.sub("_", name).strip(" .")
-    if not name:
-        return fallback
-    root, ext = os.path.splitext(name)
-    if root.lower() in _RESERVED_STEMS:
-        root = "_" + root
-    # Long names are truncated from the stem so the extension survives - the
-    # extension is what says whether this is a log or a video.
-    if len(root) + len(ext) > 120:
-        root = root[:max(1, 120 - len(ext))]
-    return (root + ext) or fallback
+_RUNNABLE_SUFFIXES = pathsafe.RUNNABLE_SUFFIXES
+_safe_filename = pathsafe.safe_filename
+_is_textual = pathsafe.is_textual
 
 
 def _confined_path(root, filename):
-    """Join, then verify the result is really inside root.
+    """pathsafe.confined_path, re-raised in this module's vocabulary.
 
-    The sanitiser above should make this impossible, which is the point: a path
-    check that only fires when the sanitiser has a bug is exactly the check worth
-    having, and it costs one realpath.
+    pathsafe deliberately does not know what ActionError is (capabilities imports
+    pathsafe, not the reverse) or what the root MEANS - "outside downloads/" is a
+    sentence about this call site.
     """
-    dest = os.path.realpath(os.path.join(root, filename))
-    if os.path.commonpath([dest, os.path.realpath(root)]) != os.path.realpath(root):
+    try:
+        return pathsafe.confined_path(root, filename)
+    except pathsafe.ConfinementError:
         raise ActionError(f"refusing to write outside downloads/: {filename!r}")
-    return dest
-
-
-def _is_textual(content_type, filename):
-    ct = (content_type or "").lower()
-    if any(ct.startswith(t) for t in _TEXTUAL_TYPES):
-        return True
-    return os.path.splitext(filename.lower())[1] in _TEXTUAL_SUFFIXES
 
 
 @action("read_attachments", identity.READ,
