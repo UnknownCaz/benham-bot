@@ -40,6 +40,8 @@ this loop is chat mode with a different engine - which is the point: the
 plumbing gets proven in production before the first capability exists.
 """
 
+import os
+
 import identity
 
 import brain
@@ -113,12 +115,38 @@ def _truncate(obj, limit=4000):
     return s[:limit] + f"\n... [truncated, {len(s)} chars total]"
 
 
-async def respond(client, log, user_id, text, channel_id=None):
-    """One guest turn through the tool loop. Returns the reply text.
+def _system_prompt():
+    """guest_persona.md plus, when grants exist, the truth about them.
+
+    The persona file says the guest path has no tools, which stays true for
+    chat mode and for this loop while the grant list is empty. The moment
+    Stage 4 grants are switched on, that sentence becomes a lie a model would
+    repeat - promising it cannot do things it is about to do. So the grant
+    list, when non-empty, is appended HERE, generated from guest_grants() so
+    the prompt cannot drift from what policy will actually allow.
+    """
+    base = guest._system_prompt()
+    grants = capabilities.guest_grants()
+    if not grants:
+        return base
+    lines = "\n".join(f"- {name}: {act.summary}"
+                      for name, act in sorted(grants.items()))
+    return (base + "\n\n## Correction: your workspace tools\n"
+            "Unlike the text above says, on THIS surface you do have these "
+            "tools, and only these:\n" + lines + "\n"
+            "They touch only the caller's own workspace folder and the shared "
+            "commons. Everything else above still holds: no Discord actions, "
+            "no reading channels, nothing on the owner's machine, and no tool "
+            "exists that asks the owner for approval - a refusal is final.")
+
+
+async def respond(client, log, user_id, text, channel_id=None, message_id=None):
+    """One guest turn through the tool loop. Returns (reply_text, attach_paths).
 
     The caller (bot.handle_guest_dm) has already taken quota via guest.check()
-    and will refund on an exception - identical contract to guest.respond, so
-    the two modes are interchangeable from the routing's point of view.
+    and will refund on an exception. attach_paths are files ws_attach collected
+    for THIS reply; bot.py re-verifies every one against this guest's own
+    folder before a byte leaves - check twice, as always.
     """
     def _log(msg):
         if log:
@@ -130,8 +158,9 @@ async def respond(client, log, user_id, text, channel_id=None):
 
     api = _get_client()
     tools = build_tools()
-    system = guest._system_prompt()
+    system = _system_prompt()
     reply_parts = []
+    attachments = []
     calls_made = 0
 
     for round_no in range(TOOL_ROUNDS):
@@ -175,7 +204,9 @@ async def respond(client, log, user_id, text, channel_id=None):
             try:
                 result, preview = await capabilities.run(
                     client, log, call.name, params, actor_id=user_id,
-                    force=False, call_ctx=ctx)
+                    force=False, call_ctx=ctx,
+                    source_message_id=message_id,
+                    on_attach=attachments.append)
                 if preview is not None:
                     # Structurally impossible: rule_guest_never_confirms DENIES
                     # anything confirmable on this lane before run() could park
@@ -230,4 +261,7 @@ async def respond(client, log, user_id, text, channel_id=None):
     mine, everyone = guest.spent_today(user_id)
     _log(f"guest chat: {user_id} used {mine}/{guest.DAILY_CAP} today "
          f"(global {everyone}/{guest.GLOBAL_CAP})")
-    return reply
+    if attachments:
+        _log(f"guest attach: {user_id} sending "
+             + ", ".join(os.path.basename(p) for p in attachments))
+    return reply, attachments

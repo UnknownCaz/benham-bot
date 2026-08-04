@@ -112,9 +112,18 @@ of Berk, anyone). Watchdog posts crash/offline alerts for `watch: true` servers.
 Guests = whitelisted friends who can DM Claude-through-Benham. Chat + web search
 only; zero client tools, zero Discord reach, zero PC reach.
 
+**Turning the workspace on (Stage 4 — code shipped, off until you flip it):**
+first soak `mode: "workspace"` with `capabilities: []` for a bit (behaves exactly
+like chat), then add some of `ws_list, ws_read, ws_write, ws_delete, ws_import,
+ws_attach` to `guest.capabilities` + restart. Boot banner prints the live grant
+list — check it says what you meant. Guests get `guest_work/<their_id>/` (20MB,
+100 files, nothing runnable, flat names) + read-only `guest_work/commons/` you
+fill by hand. Update `guest_guide.md` when you flip it so guests aren't surprised.
+
 | task | how |
 |---|---|
 | add/remove a guest | edit `guest.ids` in `control.json`, **then restart** — config reads once at boot, both directions |
+| see/curate guest files | `guest_work\<user_id>\` in the repo folder; drop shared stuff in `guest_work\commons\` (no restart needed — files are read live) |
 | cut someone off NOW | remove id + bounce the bot (restart IS the kill switch) |
 | see spend/caps/allowlist | `python guest.py status` |
 | wipe a conversation | `python guest.py forget <user_id>` (or `forget-all`) |
