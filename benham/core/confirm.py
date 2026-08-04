@@ -27,7 +27,7 @@ approval granted to a process that no longer remembers why it asked.
 import time
 import uuid
 
-import identity
+from benham.core import identity
 
 # Narrow affirmative set. Matched against the whole message, lowercased and
 # stripped of punctuation - NOT a substring search. "yes" as a substring would fire

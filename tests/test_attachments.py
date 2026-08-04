@@ -13,6 +13,11 @@ so a test run never writes into the repo's real downloads/.
     python test_attachments.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import os
 import shutil
@@ -21,8 +26,8 @@ import tempfile
 
 import discord
 
-import capabilities
-import policy
+from benham.core import capabilities
+from benham.core import policy
 
 TESTING = 736988645562646619
 TESTING_CHAN = 5552
@@ -382,7 +387,7 @@ try:
     # The bug this covers: read_attachments downloaded a JPEG perfectly, reported
     # its name/size/type, and Benham still answered "I can't see the image" -
     # because a description of a picture is not the picture.
-    import agent
+    from benham.core import agent
 
     img = os.path.join(TMP, "shot.png")
     open(img, "wb").write(PNG)

@@ -12,12 +12,17 @@ as nothing at all.
     python test_policy.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import sys
 
-import capabilities
-import identity
-import policy
-from policy import CallContext, Origin
+from benham.core import capabilities
+from benham.core import identity
+from benham.core import policy
+from benham.core.policy import CallContext, Origin
 
 TYLER = 273967061619965952
 TESTING = 736988645562646619

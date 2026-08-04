@@ -28,9 +28,9 @@ from datetime import datetime, timezone, timedelta
 
 import discord
 
-import identity
-import pathsafe
-import policy
+from benham.core import identity
+from benham.core import pathsafe
+from benham.core import policy
 
 REGISTRY = {}
 
@@ -1516,7 +1516,7 @@ async def _pc_task(ctx, p):
     # Imported lazily: the SDK pulls in a large dependency tree and spawns the
     # Claude Code CLI, and neither should be a cost paid by a bot that never
     # touches the PC.
-    import codesession
+    from benham.core import codesession
     if not codesession.ENABLED:
         raise ActionError("PC access is off (pc.enabled in control.json)")
 
@@ -1546,7 +1546,7 @@ async def _pc_task(ctx, p):
 
 def _ws(call, *args):
     """Run one guest_workspace function, translating its refusals."""
-    import guest_workspace
+    from benham.guest import guest_workspace
     try:
         return getattr(guest_workspace, call)(*args)
     except guest_workspace.WorkspaceError as e:
@@ -1625,7 +1625,7 @@ async def _ws_import(ctx, p):
     if not atts:
         return {"count": 0, "note": "that message has no attachments"}
 
-    import guest_workspace
+    from benham.guest import guest_workspace
     out = []
     for offset, a in enumerate(atts):
         rec = {"index": base + offset, "filename": a.filename, "bytes": a.size}

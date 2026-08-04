@@ -15,14 +15,19 @@ surface open - even if every individual tool then refuses him.
     python test_owner_gate.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import sys
 from datetime import datetime, timezone
 
 import bot
-import capabilities
-import confirm
-import identity
+from benham.core import capabilities
+from benham.core import confirm
+from benham.core import identity
 
 TYLER = 273967061619965952
 STRANGER = 999000999000999000
@@ -329,7 +334,7 @@ async def main():
     # The whole point of stage 2. on_message would never build a stranger context,
     # so this reaches past it and asks capabilities.run directly - simulating a
     # future entry point that forgets the early check. Before stage 2 this ran.
-    import policy
+    from benham.core import policy
     stranger_ctx = policy.CallContext.owner_dm(STRANGER, 555)
     refused = []
     for name, params in (("send_message", {"channel_id": 555, "content": "x"}),

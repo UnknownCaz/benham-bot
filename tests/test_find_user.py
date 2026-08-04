@@ -13,11 +13,16 @@ search that returned all of them.
     python test_find_user.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import sys
 
-import capabilities
-import policy
+from benham.core import capabilities
+from benham.core import policy
 
 _fails = []
 

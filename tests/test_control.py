@@ -10,16 +10,21 @@ cannot casually test "does it refuse to purge Chillbar" in Chillbar.
     python test_control.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import os
 import sys
 
 import discord
 
-import capabilities
-import confirm
-import identity
-import policy
+from benham.core import capabilities
+from benham.core import confirm
+from benham.core import identity
+from benham.core import policy
 
 TESTING = 736988645562646619
 CHILLBAR = 1491485711076167711
@@ -206,7 +211,7 @@ check("expired is not pending", confirm.current(), None)
 confirm.cancel()
 
 section("Agent history — must always alternate user/assistant")
-import agent  # noqa: E402 — imported here so a missing API key can't break earlier checks
+from benham.core import agent  # noqa: E402 — imported here so a missing API key can't break earlier checks
 
 _orig_mem_file = agent.MEMORY_FILE
 agent.MEMORY_FILE = os.path.join(os.path.dirname(_orig_mem_file), "_test_agent_memory.json")

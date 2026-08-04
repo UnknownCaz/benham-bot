@@ -42,13 +42,13 @@ plumbing gets proven in production before the first capability exists.
 
 import os
 
-import identity
+from benham.core import identity
 
-import brain
-import capabilities
-import guest
-import policy
-import shared_tools
+from benham.core import brain
+from benham.core import capabilities
+from benham.guest import guest
+from benham.core import policy
+from benham.core import shared_tools
 
 _CFG = identity.guest_config()
 TOOL_ROUNDS = int(_CFG.get("tool_rounds", 4))

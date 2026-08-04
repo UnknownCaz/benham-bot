@@ -23,14 +23,19 @@ of them are enforceable in code:
     python test_injection.py
 """
 
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package and bot.py live.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import asyncio
 import sys
 
-import agent
-import capabilities
-import confirm
-import identity
-import policy
+from benham.core import agent
+from benham.core import capabilities
+from benham.core import confirm
+from benham.core import identity
+from benham.core import policy
 
 TYLER = 273967061619965952
 TESTING = 736988645562646619

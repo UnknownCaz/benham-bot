@@ -46,18 +46,18 @@ from discord.ext import tasks
 from discord.ext import voice_recv
 from dotenv import load_dotenv
 
-import agent
-import brain
-import capabilities
-import codesession
-import confirm
-import exaroton_ops as exa
-import guest
-import guest_agent
-import guest_workspace
-import identity
-import jsonio
-import policy
+from benham.core import agent
+from benham.core import brain
+from benham.core import capabilities
+from benham.core import codesession
+from benham.core import confirm
+from benham.core import exaroton_ops as exa
+from benham.guest import guest
+from benham.guest import guest_agent
+from benham.guest import guest_workspace
+from benham.core import identity
+from benham.core import jsonio
+from benham.core import policy
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)

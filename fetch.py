@@ -11,7 +11,7 @@ Tail inbox.jsonl for live messages instead if the bot has been running.
 
 import sys
 
-from outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
 
 DEFAULT_LIMIT = 20
 

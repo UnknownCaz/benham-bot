@@ -36,8 +36,8 @@ quarantine is the deliberate human step that makes it live.
 import os
 import threading
 
-import identity
-import pathsafe
+from benham.core import identity
+from benham.core import pathsafe
 
 from benham import paths
 ROOT = os.path.join(paths.STATE_DIR, "guest_work")
