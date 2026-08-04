@@ -169,8 +169,13 @@ for label, kw in BAD:
     except ValueError:
         check(f"guest=True + {label} refuses to register", "ValueError", "ValueError")
 
-check("no live capability carries guest=True yet (Stage 2 ships with zero)",
-      [n for n, a in capabilities.REGISTRY.items() if a.guest], [])
+# Stage 2 shipped this as "zero capabilities carry the flag". Stage 4 added
+# exactly the six workspace ones; anything beyond that set appearing here means
+# someone flagged a capability without updating the suites that audit the set -
+# which is the drift this check exists to catch.
+check("the guest-flagged capabilities are exactly the Stage 4 six",
+      sorted(n for n, a in capabilities.REGISTRY.items() if a.guest),
+      ["ws_attach", "ws_delete", "ws_import", "ws_list", "ws_read", "ws_write"])
 
 
 # --------------------------------------------------------------------------

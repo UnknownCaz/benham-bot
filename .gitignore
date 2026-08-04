@@ -47,3 +47,6 @@ downloads/
 diag*.txt
 d[0-9].txt
 m[0-9].txt
+
+# Guest workspace (guest-refactor Stage 4) - guests' files, never committed
+guest_work/

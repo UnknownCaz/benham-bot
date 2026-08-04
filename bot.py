@@ -54,6 +54,7 @@ import confirm
 import exaroton_ops as exa
 import guest
 import guest_agent
+import guest_workspace
 import identity
 import jsonio
 import policy
@@ -1644,16 +1645,33 @@ async def handle_guest_dm(message):
 
     log(f"guest chat from {message.author} ({message.author.id}): {text[:200]!r}")
     try:
+        files = []
         async with message.channel.typing():
             if str(identity.GUEST.get("mode", "chat")) == "workspace":
                 # On the event loop, not a worker thread: the loop awaits
                 # capabilities.run, which needs the running loop and the client.
-                reply = await guest_agent.respond(
-                    client, log, message.author.id, text, message.channel.id)
+                reply, want_attached = await guest_agent.respond(
+                    client, log, message.author.id, text, message.channel.id,
+                    message.id)
+                # Check twice: every path the loop hands back is re-verified
+                # against THIS guest's own folder before a byte leaves. A path
+                # that fails verification is dropped and logged, never sent -
+                # a bug upstream should cost an attachment, not ship a file.
+                for p in want_attached:
+                    ok = guest_workspace.verify_outgoing(message.author.id, p)
+                    if ok:
+                        files.append(discord.File(ok))
+                    else:
+                        log(f"GUEST-ATTACH-REFUSED {message.author.id}: {p!r} "
+                            "failed re-verification")
             else:
                 reply = await asyncio.to_thread(
                     guest.respond, message.author.id, text, log)
-        await reply_in(message.channel, reply)
+        if files:
+            await message.channel.send(content=(reply or None)[:1900] if reply
+                                       else None, files=files[:10])
+        else:
+            await reply_in(message.channel, reply)
     except Exception as e:  # noqa: BLE001 - one guest's bad turn never takes the bot down
         # check() charged this message before the call. It did not happen, so give it
         # back - otherwise a run of transient errors silently eats someone's day.
