@@ -241,6 +241,46 @@ def rule_context_present(action, ctx):
     return None
 
 
+def rule_guest(action, ctx):
+    """The guest lane's own gate: may THIS guest reach THIS capability?
+
+    Guest-refactor Stage 2. Runs before rule_owner, and owns guest origins
+    entirely - rule_owner steps aside for them (see its early return). Fail
+    closed: the default answer for a guest is no, and every condition below must
+    hold before this rule merely PASSES, at which point the remaining rules still
+    run. In particular rule_origin_allowed still requires the capability to have
+    named GUEST_DM in its origins - the second, independent denial, preserved
+    from the pre-refactor design where either alone would have sufficed.
+
+    Passing means returning None, never an early ALLOW: first-non-None-wins is
+    the contract, and a rule that answered ALLOW from inside its own lane would
+    silence every rule after it.
+
+    The refusal reasons are deliberately distinct (guest_disabled /
+    guest_allowlist / guest_capability / guest_config) because the fix for each
+    is different, and the audit line naming the wrong one costs real time at
+    exactly the moment someone is asking "why did this refuse".
+    """
+    if ctx.origin not in Origin.GUEST:
+        return None
+    if not identity.guest_enabled():
+        return _deny("guest_disabled",
+                     "guest access is switched off in control.json.")
+    if not identity.is_guest(ctx.actor_id):
+        return _deny("guest_allowlist",
+                     f"user {ctx.actor_id} is not on the guest allowlist.")
+    if not getattr(action, "guest", False):
+        return _deny("guest_capability",
+                     f"`{action.name}` is not a guest capability. Guests reach "
+                     "only what is explicitly marked for them, and this is not.")
+    if action.name not in identity.guest_capabilities():
+        return _deny("guest_config",
+                     f"`{action.name}` is guest-capable in code but not granted "
+                     "in control.json (guest.capabilities). Adding it there and "
+                     "restarting is the deliberate step that turns it on.")
+    return None
+
+
 def rule_owner(action, ctx):
     """A request carrying a human actor must carry Tyler.
 
@@ -251,12 +291,19 @@ def rule_owner(action, ctx):
     run, so that a future entry point that forgets the early check still cannot get
     past here.
 
+    Guest origins are rule_guest's lane, not this one's (guest-refactor Stage 2).
+    The step-aside is safe precisely because rule_guest is fail-closed and runs
+    FIRST - a guest origin cannot arrive here without rule_guest having already
+    passed it, and RULES' ordering is asserted by the invariant suite.
+
     Only human origins are checked. LOCAL_CLI has no Discord actor to verify (its
     authority comes from already having the machine) and SYSTEM has no actor at all,
     so demanding an owner id from either would deny every automated call and every
     CLI invocation that did not bother to pass one. Both are constrained instead by
     rule_origin_allowed, which is the appropriate control for them.
     """
+    if ctx.origin in Origin.GUEST:
+        return None
     if ctx.origin not in Origin.HUMAN:
         return None
     if identity.is_owner(ctx.actor_id):
@@ -281,6 +328,7 @@ def rule_origin_allowed(action, ctx):
         Origin.OWNER_VOICE: "a voice channel",
         Origin.LOCAL_CLI: "the local CLI",
         Origin.SYSTEM: "an automated trigger",
+        Origin.GUEST_DM: "a guest DM",
     }
     ways = ", ".join(sorted(friendly.get(o, o) for o in allowed))
     return _deny("origin_allowed",
@@ -319,6 +367,37 @@ def rule_blocked_when_tainted(action, ctx):
                      f"`{action.name}` is blocked because I have already read content "
                      "other people wrote in this conversation. Ask me again in a fresh "
                      "message and I can do it.")
+    return None
+
+
+def rule_guest_never_confirms(action, ctx):
+    """On the guest lane, anything that would CONFIRM is a flat DENY instead.
+
+    Guest-refactor Stage 2, first in TARGET_RULES and ahead of both confirm
+    rules, which is load-bearing twice over: CONFIRM means "park a preview and
+    ask Tyler", and a guest must get neither half - not the preview (it leaks
+    what would happen), and not the ability to generate approval traffic aimed
+    at Tyler's phone.
+
+    The registration invariant in capabilities.action() makes this rule
+    unreachable in practice - a guest capability cannot be declared
+    needs_confirm or outward at all. It exists anyway, for the same reason
+    rule_owner re-states the entry-point check: a security check worth having is
+    worth having twice, and this one specifically survives a future edit that
+    relaxes the registration invariant without remembering why it was strict.
+    """
+    if ctx.origin not in Origin.GUEST:
+        return None
+    if action.needs_confirm:
+        return _deny("guest_never_confirms",
+                     f"`{action.name}` needs a confirmation, and guest requests "
+                     "are never parked for one - this is a hard no, not a "
+                     "waiting yes.")
+    if action.outward:
+        return _deny("guest_never_confirms",
+                     f"`{action.name}` is outward, and a guest turn is always "
+                     "tainted - what would be a confirmation for the owner is a "
+                     "refusal here.")
     return None
 
 
@@ -426,8 +505,12 @@ def rule_outward_tainted(action, ctx):
 # Caller rules: everything decidable from who is asking and how they reached us.
 # Order matters - context validity, then whether this route may reach this
 # capability at all, then conditions that depend on the state of the turn.
+# rule_guest sits before rule_owner because it OWNS guest origins: it is
+# fail-closed for them, and rule_owner steps aside for them on that exact
+# guarantee. Swapping the two would make rule_owner's step-aside an open door.
 RULES = (
     rule_context_present,
+    rule_guest,
     rule_owner,
     rule_origin_allowed,
     rule_agent_guild,
@@ -441,6 +524,7 @@ RULES = (
 # wins, so an action that is refused outright never comes back asking to be
 # confirmed - which would invite answering yes to something that was never on offer.
 TARGET_RULES = (
+    rule_guest_never_confirms,
     rule_destructive_guild,
     rule_posting_scope,
     rule_always_confirm,

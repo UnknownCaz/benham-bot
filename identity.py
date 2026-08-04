@@ -143,6 +143,19 @@ def guest_config():
     return dict(GUEST)
 
 
+def guest_capabilities():
+    """Capability names control.json grants to guests. Config half of the grant.
+
+    Empty set unless guest.capabilities is present and non-empty, which is the
+    fail-closed direction: an old control.json means no grants, not default
+    grants. Listing a name here does nothing unless the capability ALSO declares
+    guest=True in the registry - a typo in this list can only turn things off.
+    Same import-once semantics as everything else in this file: editing the list
+    takes effect on the next restart, and the restart is the kill switch.
+    """
+    return frozenset(str(n) for n in (GUEST.get("capabilities") or []))
+
+
 def destructive_allowed(guild_id):
     """Whether tier-3 actions may run in this guild at all.
 

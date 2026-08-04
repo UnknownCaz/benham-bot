@@ -149,7 +149,8 @@ stage lands this section gets unmarked and expanded.
 | stage | you get | your admin surface |
 |---|---|---|
 | ~~1~~ | **SHIPPED** — owner web search (documented above, not planned any more) | — |
-| 2–3 | plumbing; guests unchanged | `guest.mode: "workspace"` becomes valid; `guest.capabilities` list appears (empty = today's behaviour) |
+| ~~2~~ | **SHIPPED** — gate scaffolding; guests unchanged | `guest.capabilities` list exists in control.json (empty; grants nothing until Stage 4 — a typo there can only turn things off) |
+| 3 | engine plumbing; guests unchanged | `guest.mode: "workspace"` becomes valid |
 | 4 | guests get files: create/read/upload (`ws_import`)/get-back, each confined to `guest_work/<their_id>/` + read-only `guest_work/commons/` you curate | quotas in `guest.workspace` (20MB/guest default); drop files in `commons/` to share with all guests; runnable files (.exe/.bat) refused everywhere |
 | 5 | guests can read channels **you list** | `guest.read_channels` — treat listing a channel as publishing it to every guest |
 | 6 | guests can run code — on **Anthropic's servers only**, never your PC | `guest.code_execution.enabled` (own switch, default off), runs → `guest_runs.jsonl` |
