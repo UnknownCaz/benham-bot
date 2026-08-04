@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guest admin — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="outer/guest-admin.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Guest admin</h1>
+    <p class="lede">Guests = whitelisted friends who can DM Claude-through-Benham. Today: chat +
+    web search only — zero client tools, zero Discord reach, zero PC reach. The why lives in
+    <a href="../inner/guests.html">Inner → The guest system</a>.</p>
+
+    <h2 id="add-remove">Add / remove</h2>
+    <table>
+      <tr><th>task</th><th>how</th></tr>
+      <tr><td>add or remove a guest</td><td>edit <code>guest.ids</code> in <code>control.json</code>, <strong>then restart</strong> — config reads once at boot, in both directions</td></tr>
+      <tr><td>see the live allowlist + caps + today's spend</td><td><code>python guest.py status</code></td></tr>
+      <tr><td>wipe a conversation</td><td><code>python guest.py forget &lt;user_id&gt;</code> (or <code>forget-all</code>)</td></tr>
+      <tr><td>read what they searched</td><td><code>guest_searches.jsonl</code> — append-only, meant for hand moderation</td></tr>
+      <tr><td>what guests were told they can do</td><td><code>guest_guide.md</code> — keep it honest when features change</td></tr>
+    </table>
+    <p>The owner is never a guest — your own id in the list is ignored. Guests are DM-only; a
+    guild mention is not a guest route.</p>
+
+    <h2 id="kill">The kill switch</h2>
+    <p>To cut someone off <strong>now</strong>: remove their id + bounce the bot.
+    <strong>Restart IS the kill switch</strong> — <code>control.json</code> is read once at
+    import, so <code>enabled: false</code> or a removed id does nothing to a running process.
+    The tray icon menu can also turn guest chat OFF entirely (panic button) — it deliberately
+    cannot turn it back ON; that stays a hand-edit to <code>control.json</code>.</p>
+
+    <h2 id="flip">Workspace flip <span class="badge off">CODE SHIPPED · OFF</span></h2>
+    <p>Stage 4 of the <a href="../index.html">guest refactor</a>: guests get files. The code is
+    in; nothing is granted until you flip it. The procedure, in order:</p>
+    <ol>
+      <li>Set <code>guest.mode: "workspace"</code> with <code>capabilities: []</code> and soak it
+      a while — behaves exactly like chat, proves the plumbing.</li>
+      <li>Add some of <code>ws_list, ws_read, ws_write, ws_delete, ws_import, ws_attach</code> to
+      <code>guest.capabilities</code> + restart.</li>
+      <li><strong>Check the boot banner</strong> — it prints the live grant list; confirm it says
+      what you meant.</li>
+      <li>Update <code>guest_guide.md</code> so guests aren't surprised.</li>
+    </ol>
+    <p>What they get: <code>guest_work/&lt;their_id&gt;/</code> each (20MB, 100 files, flat names,
+    nothing runnable) plus read-only <code>guest_work/commons/</code> that you fill by hand —
+    drop files in anytime, no restart needed, files are read live.</p>
+
+    <h2 id="caps">Caps &amp; spend</h2>
+    <table>
+      <tr><th>cap</th><th>value</th><th>where</th></tr>
+      <tr><td>per-guest daily messages</td><td>100</td><td rowspan="4">the <code>guest</code> block in <code>control.json</code></td></tr>
+      <tr><td>global daily messages</td><td>400</td></tr>
+      <tr><td>cooldown between messages</td><td>3s</td></tr>
+      <tr><td>searched turns</td><td>count <strong>double</strong></td></tr>
+    </table>
+    <p>Every guest message bills you — that's what the caps are for. Caps reset on the first
+    message after midnight. Reservation happens under a lock, so two concurrent turns can't
+    both spend the same remaining message; a failed turn is refunded.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p><em>(Real lines, redacted: IDs truncated, content replaced.)</em></p>
+      <p><strong><code>guest_usage.json</code></strong> — today's counters, live:</p>
+      <pre><code>{"date": "2026-08-03", "users": {"1097…1815": 9}, "global": 9}</code></pre>
+      <p><strong><code>guest_searches.jsonl</code></strong> — every search any guest ran:</p>
+      <pre><code>{"ts": "2026-07-30T22:20:12…", "user_id": 1097…1815, "query": "&lt;search query&gt;"}</code></pre>
+      <p><strong><code>guest_memory.json</code></strong> — their conversations (private,
+      gitignored). <strong><code>guest_work/&lt;user_id&gt;/</code></strong> — their files, once
+      the workspace ships. <strong><code>guest_runs.jsonl</code></strong>
+      <span class="badge planned">PLANNED</span> — code-execution runs, Stage 6.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

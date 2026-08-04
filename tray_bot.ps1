@@ -1,4 +1,4 @@
-<#
+﻿<#
 tray_bot.ps1 - a tray icon for Benham: is it up, and the few things worth doing to it.
 
 Deliberately NOT the supervisor. supervise_bot.ps1 keeps running headless under the
@@ -105,39 +105,102 @@ function Get-BotUptime($botPid) {
 # Built once and reused. Building them per tick would leak a GDI handle every few
 # seconds, which on a process meant to run for weeks eventually stops drawing
 # anything at all.
+#
+# The art is a stripped-down Benham signet - the octagon plate and B from
+# assets/benham-discord-avatar.svg in its own maroon/orange - with status
+# carried by a small dot bottom-right (the old green/red/grey language) and
+# unread DMs by an orange dot top-left.
+#
+# Sizing: the tray slot is SystemInformation.SmallIconSize (16 at 96dpi, larger
+# at higher scaling). Handing the shell any other size invites its rescaling -
+# a fixed 32px version came back visibly shrunken. So render 4x supersampled in
+# a 32-unit art space, then downscale once, ourselves, to the exact slot size.
 
-function New-DotIcon([System.Drawing.Color]$color, [bool]$badge = $false) {
-    $bmp = New-Object System.Drawing.Bitmap 16, 16
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
+function New-SignetIcon([System.Drawing.Color]$statusColor, [bool]$badge = $false) {
+    $slot = [System.Windows.Forms.SystemInformation]::SmallIconSize.Width
+    if ($slot -lt 16) { $slot = 16 }
+
+    $ss = New-Object System.Drawing.Bitmap 128, 128
+    $g = [System.Drawing.Graphics]::FromImage($ss)
     $g.SmoothingMode = 'AntiAlias'
+    $g.TextRenderingHint = 'AntiAlias'
     $g.Clear([System.Drawing.Color]::Transparent)
-    $brush = New-Object System.Drawing.SolidBrush $color
-    $g.FillEllipse($brush, 1, 1, 14, 14)
-    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(90, 0, 0, 0)), 1
-    $g.DrawEllipse($pen, 1, 1, 14, 14)
+    $g.ScaleTransform(4, 4)
+
+    $plate = [System.Drawing.Color]::FromArgb(151, 58, 55)     # seal face
+    $keyline = [System.Drawing.Color]::FromArgb(221, 122, 47)  # keyline + B
+    $ringCol = [System.Drawing.Color]::FromArgb(28, 28, 28)    # dot separator
+
+    # Octagon plate: flats at 0/45/90 like the avatar. Vertex radius 14.8 fills
+    # the canvas edge-to-edge (keyline pen adds ~1 outward, landing on ~15.8).
+    $pts = New-Object 'System.Drawing.PointF[]' 8
+    for ($k = 0; $k -lt 8; $k++) {
+        $a = (22.5 + 45 * $k) * [Math]::PI / 180
+        $pts[$k] = [System.Drawing.PointF]::new(16 + 14.8 * [Math]::Cos($a), 16 + 14.8 * [Math]::Sin($a))
+    }
+    $brush = New-Object System.Drawing.SolidBrush $plate
+    $g.FillPolygon($brush, $pts)
+    $pen = New-Object System.Drawing.Pen $keyline, 2
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.DrawPolygon($pen, $pts)
+
+    # The B, centered on the plate.
+    $font = New-Object System.Drawing.Font('Segoe UI', 19, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $sf = New-Object System.Drawing.StringFormat
+    $sf.Alignment = [System.Drawing.StringAlignment]::Center
+    $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
+    $bBrush = New-Object System.Drawing.SolidBrush $keyline
+    $rect = New-Object System.Drawing.RectangleF 0, 1, 32, 32
+    $g.DrawString('B', $font, $bBrush, $rect, $sf)
+
+    # Status dot bottom-right: a dark ring first so it reads as its own element
+    # against both the plate and whatever the taskbar is doing behind it.
+    # Kept fully inside the canvas (0.5 margin) - an earlier version ran 0.5
+    # past the edge, clipped, and dragged the icon's visual weight low-right.
+    $rb = New-Object System.Drawing.SolidBrush $ringCol
+    $sb = New-Object System.Drawing.SolidBrush $statusColor
+    $g.FillEllipse($rb, 18.5, 18.5, 13, 13)
+    $g.FillEllipse($sb, 20.0, 20.0, 10, 10)
+
     if ($badge) {
-        # Unread-DM marker: a small orange dot bottom-right, same idea as every
-        # messenger's notification badge.
+        # Unread-DM marker top-left, mirror of the status dot.
         $bb = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 150, 20))
-        $g.FillEllipse($bb, 9, 9, 7, 7)
+        $g.FillEllipse($rb, 0.5, 0.5, 13, 13)
+        $g.FillEllipse($bb, 2.0, 2.0, 10, 10)
         $bb.Dispose()
     }
-    $brush.Dispose(); $pen.Dispose(); $g.Dispose()
+
+    $brush.Dispose(); $pen.Dispose(); $font.Dispose(); $sf.Dispose()
+    $bBrush.Dispose(); $rb.Dispose(); $sb.Dispose(); $g.Dispose()
+
+    # One clean downscale to the slot size - the shell gets exactly what it asked
+    # for and never rescales.
+    $bmp = New-Object System.Drawing.Bitmap $slot, $slot
+    $g2 = [System.Drawing.Graphics]::FromImage($bmp)
+    $g2.InterpolationMode = 'HighQualityBicubic'
+    $g2.PixelOffsetMode = 'HighQuality'
+    $g2.DrawImage($ss, 0, 0, $slot, $slot)
+    $g2.Dispose(); $ss.Dispose()
+
     $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
     $bmp.Dispose()
     return $icon
 }
 
-$IconGreen = New-DotIcon ([System.Drawing.Color]::FromArgb(60, 190, 90))
-$IconRed = New-DotIcon ([System.Drawing.Color]::FromArgb(215, 70, 70))
-$IconGrey = New-DotIcon ([System.Drawing.Color]::FromArgb(140, 140, 140))
-$IconGreenDm = New-DotIcon ([System.Drawing.Color]::FromArgb(60, 190, 90)) $true
-$IconRedDm = New-DotIcon ([System.Drawing.Color]::FromArgb(215, 70, 70)) $true
-$IconGreyDm = New-DotIcon ([System.Drawing.Color]::FromArgb(140, 140, 140)) $true
+$IconGreen = New-SignetIcon ([System.Drawing.Color]::FromArgb(60, 190, 90))
+$IconRed = New-SignetIcon ([System.Drawing.Color]::FromArgb(215, 70, 70))
+$IconGrey = New-SignetIcon ([System.Drawing.Color]::FromArgb(140, 140, 140))
+$IconGreenDm = New-SignetIcon ([System.Drawing.Color]::FromArgb(60, 190, 90)) $true
+$IconRedDm = New-SignetIcon ([System.Drawing.Color]::FromArgb(215, 70, 70)) $true
+$IconGreyDm = New-SignetIcon ([System.Drawing.Color]::FromArgb(140, 140, 140)) $true
 
 # The viewer marks DMs read; start with everything current so a fresh tray does
 # not badge history you have long since seen.
 $script:DmSeen = Get-DmCount
+
+# True only after "Stop bot until reboot" was used, so the status row can say why
+# the supervisor is off. Cleared whenever the supervisor is seen running again.
+$script:StoppedByTray = $false
 
 # --- inbox viewer ---------------------------------------------------------
 # A read-only window over inbox.jsonl: one line of JSON per message, rendered as
@@ -341,6 +404,81 @@ function Show-LogWindow {
     $form.Show()
 }
 
+# --- menu theme -----------------------------------------------------------
+# Signet dark: the avatar's plum/maroon/orange applied through a custom
+# renderer. ToolStripManager.Renderer themes every strip in this process,
+# submenu flyouts included. The C# compiles once at startup (~a second).
+#
+# $MenuFontName is the one knob for typeface experiments - 'Georgia' or
+# 'Cambria' lean into the signet look, 'Consolas' goes terminal.
+$MenuFontName = 'Segoe UI'
+$MenuFontSize = 9.5
+
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
+using System.Drawing;
+using System.Windows.Forms;
+
+public class BenhamColorTable : ProfessionalColorTable
+{
+    private static readonly Color Plum = Color.FromArgb(82, 48, 65);
+    private static readonly Color Maroon = Color.FromArgb(103, 54, 56);
+    private static readonly Color Orange = Color.FromArgb(221, 122, 47);
+
+    public override Color ToolStripDropDownBackground { get { return Plum; } }
+    public override Color ImageMarginGradientBegin { get { return Plum; } }
+    public override Color ImageMarginGradientMiddle { get { return Plum; } }
+    public override Color ImageMarginGradientEnd { get { return Plum; } }
+    public override Color MenuItemSelected { get { return Orange; } }
+    public override Color MenuItemSelectedGradientBegin { get { return Orange; } }
+    public override Color MenuItemSelectedGradientEnd { get { return Orange; } }
+    public override Color MenuItemBorder { get { return Orange; } }
+    public override Color MenuItemPressedGradientBegin { get { return Maroon; } }
+    public override Color MenuItemPressedGradientMiddle { get { return Maroon; } }
+    public override Color MenuItemPressedGradientEnd { get { return Maroon; } }
+    public override Color MenuBorder { get { return Maroon; } }
+    public override Color SeparatorDark { get { return Maroon; } }
+    public override Color SeparatorLight { get { return Plum; } }
+}
+
+public class BenhamRenderer : ToolStripProfessionalRenderer
+{
+    private static readonly Color Cream = Color.FromArgb(242, 229, 218);
+    private static readonly Color HeaderCream = Color.FromArgb(232, 201, 168);
+    private static readonly Color HoverInk = Color.FromArgb(58, 31, 45);
+    private static readonly Color MutedRose = Color.FromArgb(201, 160, 143);
+
+    public BenhamRenderer() : base(new BenhamColorTable())
+    {
+        this.RoundedEdges = false;
+    }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+    {
+        // Base paints disabled items in SystemColors.GrayText no matter what,
+        // which is mud on plum - draw those ourselves. Bold + disabled is the
+        // header row; plain disabled are the guest status rows.
+        if (!e.Item.Enabled)
+        {
+            Color c = e.Item.Font.Bold ? HeaderCream : MutedRose;
+            TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, e.TextRectangle, c, e.TextFormat);
+            return;
+        }
+        if (e.Item.Pressed) { e.TextColor = Cream; }          // open submenu parent, maroon bg
+        else if (e.Item.Selected) { e.TextColor = HoverInk; } // hover, orange bg
+        else { e.TextColor = Cream; }
+        base.OnRenderItemText(e);
+    }
+
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+    {
+        e.ArrowColor = (e.Item.Selected && !e.Item.Pressed) ? HoverInk : MutedRose;
+        base.OnRenderArrow(e);
+    }
+}
+'@
+
+[System.Windows.Forms.ToolStripManager]::Renderer = New-Object BenhamRenderer
+
 # --- tray -----------------------------------------------------------------
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
@@ -349,6 +487,7 @@ $notify.Text = "Benham: checking..."
 $notify.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
+$menu.Font = New-Object System.Drawing.Font($MenuFontName, $MenuFontSize)
 $notify.ContextMenuStrip = $menu
 
 function Add-Item($text, $action) {
@@ -357,9 +496,18 @@ function Add-Item($text, $action) {
     return $i
 }
 
-$miStatus = Add-Item "Benham: checking..." $null
-$miGuest = Add-Item "Guest chat: ?" $null
-$miUsage = Add-Item "Guest usage today: ?" $null
+function New-SubItem($parent, $text, $action) {
+    # Same contract as Add-Item, but into a submenu's dropdown.
+    $i = New-Object System.Windows.Forms.ToolStripMenuItem $text
+    if ($action) { $i.add_Click($action) } else { $i.Enabled = $false }
+    $parent.DropDownItems.Add($i) | Out-Null
+    return $i
+}
+
+# One bold header row carries the whole at-a-glance story; the guest detail
+# rows that used to sit here live in the Guest submenu now.
+$miHeader = Add-Item "Benham: checking..." $null
+$miHeader.Font = New-Object System.Drawing.Font($MenuFontName, $MenuFontSize, [System.Drawing.FontStyle]::Bold)
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 Add-Item "Restart bot" {
@@ -395,9 +543,43 @@ Add-Item "Restart bot" {
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Benham", 'OK', 'Error') | Out-Null }
 } | Out-Null
 
+Add-Item "Stop bot until reboot" {
+    # Stops the supervisor task so nothing revives the bot, then kills the bot.
+    # The task is logon-triggered, so "until reboot" needs no extra state - and
+    # "Restart bot" above already knows how to start the task again sooner.
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "Stop the supervisor and bot until the next reboot (or until you click Restart bot)?",
+        "Benham - stop bot", 'YesNo', 'Question')
+    if ($answer -ne 'Yes') { return }
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    # Task Scheduler is supposed to take the process tree down with the task, but
+    # kill bot.py explicitly rather than trust that.
+    $p = Get-BotPid
+    if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    $script:StoppedByTray = $true
+    $notify.ShowBalloonTip(5000, "Benham",
+        "Bot stopped until reboot. Use 'Restart bot' to bring it back.", 'Info')
+    Update-Tray
+} | Out-Null
+
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
-Add-Item "Disable guest chat + restart" {
+Add-Item "View inbox" {
+    Show-InboxWindow
+} | Out-Null
+
+# Everything guest-related in one flyout: the status rows, the off switch, and
+# the audit trail.
+$miGuestMenu = New-Object System.Windows.Forms.ToolStripMenuItem "Guest"
+$menu.Items.Add($miGuestMenu) | Out-Null
+# Flyouts do not reliably inherit the parent strip's font - set it explicitly.
+$miGuestMenu.DropDown.Font = $menu.Font
+
+$miGuest = New-SubItem $miGuestMenu "Guest chat: ?" $null
+$miUsage = New-SubItem $miGuestMenu "Guest usage today: ?" $null
+$miGuestMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+New-SubItem $miGuestMenu "Disable guest chat + restart" {
     # Off only. See the header: turning guests ON stays a deliberate file edit.
     $g = Get-GuestState
     if (-not $g.On) {
@@ -424,17 +606,39 @@ Add-Item "Disable guest chat + restart" {
     }
 } | Out-Null
 
-Add-Item "View inbox" {
-    Show-InboxWindow
-} | Out-Null
-
-Add-Item "Open guest search log" {
+New-SubItem $miGuestMenu "Open search log" {
     $sl = Join-Path $Dir 'guest_searches.jsonl'
     if (Test-Path $sl) { Start-Process notepad.exe $sl }
     else { $notify.ShowBalloonTip(3000, "Benham", "No guest searches logged yet.", 'Info') }
 } | Out-Null
 
-Add-Item "Open Benhams-inbox folder" {
+$miLogsMenu = New-Object System.Windows.Forms.ToolStripMenuItem "Logs"
+$menu.Items.Add($miLogsMenu) | Out-Null
+$miLogsMenu.DropDown.Font = $menu.Font
+
+New-SubItem $miLogsMenu "View supervise.log" {
+    Show-LogWindow
+} | Out-Null
+
+New-SubItem $miLogsMenu "Full status (status.py)" {
+    # A console window is the point here - it is a report to read, not a background job.
+    Start-Process powershell.exe -ArgumentList @(
+        '-NoExit', '-NoProfile', '-Command',
+        "Set-Location '$Dir'; python status.py; python guest.py status")
+} | Out-Null
+
+$miOpenMenu = New-Object System.Windows.Forms.ToolStripMenuItem "Open"
+$menu.Items.Add($miOpenMenu) | Out-Null
+$miOpenMenu.DropDown.Font = $menu.Font
+
+New-SubItem $miOpenMenu "Manual" {
+    # The owner's manual - a local HTML site in docs/. Opens in the default browser.
+    $manual = Join-Path $Dir 'docs\index.html'
+    if (Test-Path $manual) { Start-Process $manual }
+    else { $notify.ShowBalloonTip(3000, "Benham", "Manual not found: $manual", 'Warning') }
+} | Out-Null
+
+New-SubItem $miOpenMenu "Benhams-inbox folder" {
     # The pc.. workdir, where task artifacts land. Read from control.json each
     # click so a moved workdir does not leave the tray pointing at the old one.
     $wd = $null
@@ -442,17 +646,6 @@ Add-Item "Open Benhams-inbox folder" {
     if (-not $wd) { $wd = 'C:\Users\Tyler\Claude\Benhams-inbox' }
     if (Test-Path $wd) { Start-Process explorer.exe $wd }
     else { $notify.ShowBalloonTip(3000, "Benham", "Workdir not found: $wd", 'Warning') }
-} | Out-Null
-
-Add-Item "View supervise.log" {
-    Show-LogWindow
-} | Out-Null
-
-Add-Item "Full status (status.py)" {
-    # A console window is the point here - it is a report to read, not a background job.
-    Start-Process powershell.exe -ArgumentList @(
-        '-NoExit', '-NoProfile', '-Command',
-        "Set-Location '$Dir'; python status.py; python guest.py status")
 } | Out-Null
 
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
@@ -472,9 +665,13 @@ function Update-Tray {
 
     $dmNew = [Math]::Max(0, (Get-DmCount) - $script:DmSeen)
 
+    # Supervisor back by any path (Restart bot, shell, reboot) means the
+    # stopped-by-tray explanation no longer applies.
+    if ($supUp) { $script:StoppedByTray = $false }
+
     if (-not $supUp) {
         $notify.Icon = if ($dmNew) { $IconGreyDm } else { $IconGrey }
-        $state = "supervisor OFF"
+        $state = if ($script:StoppedByTray) { "stopped until reboot (via tray)" } else { "supervisor OFF" }
     } elseif ($botPid) {
         $notify.Icon = if ($dmNew) { $IconGreenDm } else { $IconGreen }
         $state = "up (pid $botPid, $(Get-BotUptime $botPid))"
@@ -485,13 +682,14 @@ function Update-Tray {
 
     if ($g.On) { $guestText = "Guest chat: ON ($($g.Count) whitelisted)" }
     else { $guestText = "Guest chat: off" }
-    if ($dmNew) { $guestText += " - $dmNew new DM" + $(if ($dmNew -gt 1) { 's' }) }
+    # New DMs belong on the header - they are about Benham, not about guests.
+    $dmText = if ($dmNew) { " - $dmNew new DM" + $(if ($dmNew -gt 1) { 's' }) } else { '' }
 
-    $miStatus.Text = "Benham: $state"
+    $miHeader.Text = "Benham: $state$dmText"
     $miGuest.Text = $guestText
     $miUsage.Text = Get-GuestUsage
     # NotifyIcon.Text throws over 63 chars, which would kill the timer thread.
-    $tip = "Benham: $state`n$guestText"
+    $tip = "Benham: $state$dmText`n$guestText"
     if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 60) + "..." }
     $notify.Text = $tip
 }

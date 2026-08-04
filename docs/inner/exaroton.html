@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exaroton — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/exaroton.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Exaroton</h1>
+    <p class="lede">Minecraft server control as slash commands — with the whitelist attached to
+    the room, not the person.</p>
+
+    <h2 id="what">What it does</h2>
+    <p><code>/server status|start|stop|restart &lt;server&gt;</code>, registered per guild via
+    <code>command_guilds</code> in <code>exaroton_watch.json</code>, backed by
+    <code>exaroton_ops.py</code>. Per guild: <code>servers</code> (which exaroton servers that
+    guild may see — <code>"*"</code> or a list; the argument only autocompletes to these) and
+    <code>require_operator</code> (if true, start/stop/restart need an owner id or someone with
+    Administrator / Manage Server; <code>status</code> is always open within the whitelist).
+    Current: Testing = all servers, operators required; Chillbar = Isle of Berk only, anyone.
+    A background watchdog posts crash / offline / back-online alerts for servers flagged
+    <code>watch: true</code>.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>Gated per guild, not per user, because the question is "what may this room
+    control", not "who is trusted".</strong> Chillbar's residents restarting their own Isle of
+    Berk without pinging you is the feature; the same people can't touch any other server from
+    there because the room's whitelist, not their standing, is what's consulted. It's the same
+    shape as <code>destructive_guilds</code>: place-scoped authority that no amount of asking
+    can widen.</p>
+    <p><strong>Slash commands, not chat parsing:</strong> plain text is never
+    command-triggered — the bot records what it sees and stays quiet (voice wake words are the
+    only autonomous trigger anywhere). Slash commands make "this is an instruction" an explicit
+    Discord-level act with Discord-level attribution, rather than something inferred from
+    text — inference is exactly what the <a href="taint.html">injection defences</a> exist to
+    refuse.</p>
+    <p><strong>The watchdog posts outside the chokepoint</strong> (straight
+    <code>channel.send</code>) — tolerable where webhook.py is tolerable and for the same
+    reason: a fixed, code-authored message shape ("server X crashed") with no model and no
+    stranger text anywhere in the loop. See <a href="webhook-identity.html">Webhook
+    identity</a> for the general rule.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Alerts and command responses are visible in the channels themselves;
+      <code>exaroton_watch.json</code> is the authority record (which guild may touch which
+      server); slash-command sync lines appear in the boot log.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

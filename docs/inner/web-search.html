@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web search — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/web-search.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Web search</h1>
+    <p class="lede">Both you and guests can ask for live information. Neither search fetches a
+    single byte from your machine — and every search is a stranger talking.</p>
+
+    <h2 id="what">What it does</h2>
+    <p>One implementation (<code>shared_tools.py</code>), consumed by both lanes. It's
+    Anthropic's <em>server-side</em> search tool: it executes on their infrastructure, nothing
+    is fetched from your machine or network, and there's no tool-result loop in guest code for
+    a model to steer. Owner: <code>agent.web_search</code> (on), <code>searches_per_turn</code>
+    3, no quota, always logged. Guest: <code>searches_per_turn</code> 2, and a searched turn
+    counts <strong>double</strong> against the daily cap.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>One module because two implementations drift.</strong> The tool block, query
+    extraction, and log format lived inline in guest.py; extracting them (Stage 0) meant the
+    owner lane gained search from code already proven on the riskier lane.</p>
+    <p><strong>Two log files because one typo apart is too close.</strong>
+    <code>agent_searches.jsonl</code> and <code>guest_searches.jsonl</code> are separate for
+    the same reason guest memory is a separate file — prefixed keys in a shared file are one
+    bug from crossing streams.</p>
+    <p><strong>A searched turn is tainted.</strong> A web page is text a stranger wrote,
+    cheaper to publish than a Discord message is to post. The subtle part (caught by test, not
+    intuition): taint is set <em>before</em> the response's tool calls run, because server-side
+    results arrive inside the same response that chose to search. Details:
+    <a href="taint.html">The taint model</a>.</p>
+    <p><strong>Why guests' searches cost double:</strong> the search is a second API round
+    trip, so it's priced like one — an honest ledger, not a punishment. And logging every query
+    isn't surveillance theater: search is the one guest surface that sends text <em>out</em> to
+    the world; the log is what makes "don't ask me to google anything weird" enforceable after
+    the fact.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p><em>(Real lines, redacted.)</em> Owner — note the <code>role</code> field newer lines
+      carry:</p>
+      <pre><code>{"ts": "2026-08-04T03:45:46…", "user_id": 2739…5952, "query": "&lt;query&gt;", "role": "owner"}</code></pre>
+      <p>Guest:</p>
+      <pre><code>{"ts": "2026-07-30T22:20:12…", "user_id": 1097…1815, "query": "&lt;query&gt;"}</code></pre>
+      <p>Both append-only. Searched guest turns also show as double-charges in
+      <code>guest_usage.json</code>.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

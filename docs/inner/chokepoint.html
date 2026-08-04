@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The chokepoint — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/chokepoint.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>The chokepoint</h1>
+    <p class="lede">One process talks to Discord. One function decides what's allowed.
+    Everything else is files.</p>
+
+    <h2 id="what">What it does</h2>
+    <p><code>bot.py</code> is the single persistent process holding the Discord connection.
+    Nothing else talks to Discord directly — the CLI scripts drop atomic request files into
+    <code>outbox/</code>, the bot polls every ~2s, executes, and files a result:</p>
+    <pre><code>CLI (send.py, draft.py, do.py, …)  →  outbox/*.json
+                                          |
+                        bot.py polls outbox every ~2s
+                                          |
+        Discord  ←→  bot.py  →  outbox/sent|failed/*_result.json
+                       |
+     every message seen → inbox.jsonl      each boot → channels.json</code></pre>
+    <p>The second chokepoint is logical: <code>capabilities.run()</code> is the single execution
+    path for all 56 capabilities — authorize → validate → authorize_target → confirm-or-execute
+    — and <code>policy.py</code> is the single place authorization is decided. Every entry
+    point must state its <strong>origin</strong> (<code>OWNER_DM</code>, <code>OWNER_GUILD</code>,
+    <code>OWNER_VOICE</code>, <code>LOCAL_CLI</code>, <code>SYSTEM</code>, <code>GUEST_DM</code>);
+    a call with no context or an unrecognised origin is denied.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>The file bus:</strong> it keeps the heavy always-on process separate from
+    one-shot actions, and it makes every action leave a request/result pair on disk whether or
+    not anyone remembered to log — the audit trail exists by construction, not by discipline.
+    One token, one gateway also prevents the duplicate-reply problem the supervisor separately
+    guards against.</p>
+    <p><strong>The policy chokepoint exists because of a specific bug.</strong>
+    <code>identity.agent_allowed()</code> encoded "the owner cannot drive the agent from
+    Chillbar", was asserted by a passing test — and was dead code. <code>bot.on_message</code>
+    re-implemented a subset inline and left the guild check out. Green suite, opposite
+    behaviour. A gate that is written but not wired is indistinguishable, from tests, from one
+    that works. The design goal is narrow: make that shape impossible. One decision point,
+    mandatory origin declaration, and deny-on-unknown means a new call site threaded wrong
+    fails loudly instead of permitting silently.</p>
+    <p><strong>Two phases on purpose:</strong> <code>authorize()</code> answers caller rules
+    with no network access at all — a refusal never resolves a channel and never reports
+    anything about one. <code>authorize_target()</code> runs after parameter validation,
+    because "may this touch that guild" isn't answerable before then. Refusals leak nothing.</p>
+    <p>Two things deliberately live <em>outside</em> the chokepoint — <code>webhook.py</code>
+    and the exaroton watchdog. What that trade costs: <a href="webhook-identity.html">Webhook
+    identity</a>.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p><strong><code>inbox.jsonl</code></strong> — everything seen;
+      <strong><code>outbox/sent|failed/</code></strong> — every action as a request/result
+      pair (samples: <a href="../outer/daily-driving.html#paper-trail">Daily driving</a>);
+      <strong><code>channels.json</code></strong> — the world map, rewritten each boot;
+      policy refusals log in the bot log naming the rule that fired.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily driving — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="outer/daily-driving.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Daily driving</h1>
+    <p class="lede">Just DM Benham. No prefixes, no commands — the agent decides whether to
+    answer, act, or both.</p>
+
+    <h2 id="dm">DM patterns</h2>
+    <table>
+      <tr><th>you want</th><th>do</th></tr>
+      <tr><td>Discord stuff — read, send, manage, anything</td><td>DM it in plain language. "what's going on in #general" reads it; "post X in #general" posts it.</td></tr>
+      <tr><td>something on the PC</td><td>DM starting with <code>pc..</code> (straight to a Claude Code session, no agent round-trip) — or just ask normally and the agent delegates via <code>pc_task</code></td></tr>
+      <tr><td>drive it from a guild channel</td><td>@mention it — only works in guilds on <code>agent_guilds</code> (currently Testing only)</td></tr>
+      <tr><td>talk without it acting</td><td>just talk; it won't act unless asked</td></tr>
+      <tr><td>current info from the web</td><td>just ask — it searches when actually needed. The trade: <strong>a turn that searched is tainted</strong> (a web page is text a stranger wrote), so "search then post it" will ask you to confirm the post, and <code>pc_task</code> is blocked until a fresh message.</td></tr>
+    </table>
+
+    <h2 id="confirm">When it asks to confirm</h2>
+    <p>Destructive actions (delete / purge / kick / ban) and role changes always come back as a
+    <strong>preview + token</strong> first. Reply naming the token to fire. A stray "yes" without
+    the token does nothing, on purpose. Previews expire (<code>confirm.ttl_seconds</code>,
+    currently 1h) — expired = cancelled, never assumed yes.</p>
+    <p><strong>"Why is it asking approval for a normal send?"</strong> The turn is
+    <em>tainted</em> — Benham read something a non-owner wrote: a channel, a nickname, a
+    forwarded message, or a web search result. Outward actions then need your yes. Not a bug.
+    Want it free again? Ask in a fresh message that doesn't read stranger content first.
+    The reasoning lives in <a href="../inner/taint.html">Inner → The taint model</a>.</p>
+
+    <h2 id="refuse">Why did it refuse?</h2>
+    <p>Refusals are different from confirmations — nothing you say can unlock them.</p>
+    <table>
+      <tr><th>refusal mentions</th><th>fix</th></tr>
+      <tr><td><code>destructive_guilds</code></td><td>that guild isn't on the tier-3 allowlist in <code>control.json</code> — edit by hand + restart; no confirmation can unlock it</td></tr>
+      <tr><td>posting allowlist / <code>post_guilds</code></td><td>hard scope cap on where Benham may put content; edit <code>control.json</code> + restart</td></tr>
+      <tr><td><code>agent_guilds</code></td><td>you mentioned it in a guild not on the agent list — DM instead</td></tr>
+      <tr><td>"already read content other people wrote"</td><td>tainted turn; <code>pc_task</code> is flat-blocked then — send a fresh message</td></tr>
+      <tr><td>unknown origin / no call context</td><td>a code-path bug — that's a "bug Claude about it" one</td></tr>
+    </table>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p><strong><code>inbox.jsonl</code></strong> — every message the running bot sees, one JSON
+      per line. Live view: tail it. <em>(Samples on this site are real lines, redacted: IDs
+      truncated, content replaced.)</em></p>
+      <pre><code>{"ts": "2026-07-24T08:49:24…", "guild": "Testing Server", "guild_id": 7369…6619,
+ "channel": "asd", "channel_id": 8093…8612, "author": "Benham#2721",
+ "author_id": 7523…1218, "is_self": true, "content": "&lt;message text&gt;"}</code></pre>
+      <p><strong><code>outbox/sent/</code></strong> — every queued action as a request/result JSON
+      pair (failures land in <code>outbox/failed/</code>):</p>
+      <pre><code>2026…_1b60b425_….json         {"action": "send_message", "channel_id": 8093…8612,
+                               "content": "&lt;text&gt;", "queued_at": "2026-07-27T11:33:33…"}
+2026…_1b60b425_…_result.json  {"processed_at": "…", "status": "ok",
+                               "request": {…}, "result": {"status": "sent",
+                               "message_id": 1531…4876, "jump_url": "https://discord…"}}</code></pre>
+      <p>How to read it: filenames pair by shared id; <code>status</code> says whether it landed;
+      <code>jump_url</code> takes you to the message.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

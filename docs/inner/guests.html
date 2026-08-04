@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The guest system — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/guests.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>The guest system</h1>
+    <p class="lede">The one exception to "Benham obeys one person" — and the most
+    security-sensitive thing in the codebase, which is why it's built out of absences.</p>
+
+    <h2 id="what">What it does</h2>
+    <p>Whitelisted friends can DM Claude-through-Benham. Chat mode (today's default): a plain
+    conversation plus server-side web search, capped daily, separate memory, separate persona.
+    The staged refactor adds, behind flags: a file workspace
+    <span class="badge shipped">CODE SHIPPED</span> (grants empty), allowlisted channel reads
+    <span class="badge planned">PLANNED</span>, and Anthropic-server-side code runs
+    <span class="badge planned">PLANNED</span>. Admin procedures live in
+    <a href="../outer/guest-admin.html">Outer → Guest admin</a>.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>The founding property is an absence, not a rule.</strong> <code>guest.py</code>
+    calls the API with <em>no client tools argument</em> — not an empty list, not a filtered
+    one. So "can a guest reach capability X" has the same answer for all 56, for
+    <code>pc_task</code>, and for anything added next year, without that code knowing what a
+    capability is. A gate that has to enumerate what it forbids can be out of date; this one
+    can't be.</p>
+    <p><strong>Everything is denied at least twice, independently.</strong> <code>GUEST_DM</code>
+    is in <code>Origin.HUMAN</code>, so <code>rule_owner</code> refuses it; it's also absent
+    from <code>DEFAULT_ORIGINS</code>, so <code>rule_origin_allowed</code> refuses it again.
+    A capability written next year inherits both without anyone remembering guests exist —
+    invariant 1 of the refactor: <em>new capabilities are guest-proof the day they're
+    written</em>.</p>
+    <p><strong>The grant model needs three declarations to agree:</strong> the registry flag
+    (<code>guest=True</code> — code says what's <em>possible</em>), the origins set (must name
+    <code>GUEST_DM</code>), and <code>guest.capabilities</code> in control.json (config says
+    what's <em>on</em>). A config typo can only ever disable; it can never expose an action the
+    code didn't mark. And the registry refuses at import to register <code>guest=True</code> on
+    anything outward, posting, destructive, confirmable, or taint-blocked — a violating
+    declaration crashes the boot rather than existing as a lie.</p>
+    <p><strong>Three modules, not flags.</strong> <code>guest.py</code> (chat) keeps its
+    no-tools property forever; <code>guest_agent.py</code> (workspace) runs a loop over exactly
+    the granted set; <code>agent.py</code> stays yours. "The same loop but a smaller list" is
+    one wrong conditional from being the same list — two files that do different things cannot
+    be collapsed by accident.</p>
+    <p><strong>Guests never see a confirmation</strong> — anything that would ask you is a flat
+    no for them (the preview would leak what would happen; the traffic would aim approval fatigue
+    at you). Guest turns are <a href="taint.html">born tainted</a>. Nothing a guest does
+    executes on your machine, at any stage — code runs, when they come, are Anthropic-side
+    only; a local sandbox was rejected as a research project with a catastrophic failure
+    mode.</p>
+    <p><strong>The threat model is re-answered per stage:</strong> a hostile guest today can
+    burn caps and log ugly searches — nothing else. With the workspace: fill a capped folder
+    with inert bytes (runnable suffixes refused however a file arrives). With shared reads:
+    see exactly what you chose to publish to every guest. Never: any outward action, any
+    confirmation, any code on your PC.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p><strong><code>guest_usage.json</code></strong> (daily counters),
+      <strong><code>guest_searches.jsonl</code></strong> (every query, hand-moderable),
+      <strong><code>guest_memory.json</code></strong> (their conversations — a separate file so
+      a typo can't merge a guest thread with yours), <strong><code>guest_work/</code></strong>
+      (their files, once granted), <strong><code>guest_runs.jsonl</code></strong>
+      <span class="badge planned">PLANNED</span> (Stage 6). Samples:
+      <a href="../outer/guest-admin.html#paper-trail">Outer → Guest admin</a>.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

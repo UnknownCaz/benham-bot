@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Confirmation flow — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/confirm-flow.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Confirmation flow</h1>
+    <p class="lede">Three independent gates in front of every destructive action — and the
+    model can never open the last one itself.</p>
+
+    <h2 id="what">What it does</h2>
+    <ol>
+      <li><strong>Guild allowlist.</strong> <code>destructive_guilds</code> in control.json.
+      Tier-3 anywhere else is refused outright — checked <em>before</em> the dry-run, so a
+      refused action never even reports what it would have touched.</li>
+      <li><strong>Mandatory dry-run.</strong> The first call performs nothing and returns real
+      facts: counts, date spans, author breakdowns, who currently holds the role. This is what
+      catches a wrong channel id or an <code>older_than_days</code> off by 10×.</li>
+      <li><strong>Explicit confirm.</strong> In a DM: preview + a token, and only a narrow
+      affirmative naming it fires. From the CLI: re-run with <code>confirm_token=</code>.
+      No inline shortcut exists in either path.</li>
+    </ol>
+    <p>Previews expire (<code>confirm.ttl_seconds</code>, 1h): expired = cancelled, silence is
+    never assent. The token is bound to the parameters captured at preview time — editing the
+    arguments between the two calls invalidates it rather than silently running something
+    else.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>The model cannot confirm its own actions — structurally.</strong> A tier-3 tool
+    call returns a preview and <em>halts the tool chain</em>. Your "yes" is matched by code in
+    <code>on_message</code> before the agent is ever invoked, and fires the parked action
+    directly. The approval path never passes through the model, so no message content anywhere
+    — no channel text, no web page, no clever phrasing — can talk its way into a delete.
+    Ambiguity is not consent.</p>
+    <p><strong>Why deny rules run before confirm rules:</strong> a refused action must never
+    come back asking to be approved. If the guild isn't allowlisted, no confirmation is on
+    offer — otherwise "just say yes" becomes a social-engineering surface pointed at you.</p>
+    <p><strong>Why <code>force</code> doesn't exist in policy.py:</strong> policy says what a
+    call needs; whether that need was met is the caller's bookkeeping. A "the confirmation
+    already happened" flag inside policy would be a second answer to the same question — and a
+    lie waiting to be passed.</p>
+    <p><strong>Guests get neither half of a confirmation.</strong> On the guest lane, anything
+    that would confirm is a flat deny — a guest must not receive the preview (it leaks what
+    would happen) and must not generate approval traffic at you. The registry refuses to even
+    register a guest-reachable capability that could confirm; a policy rule re-states it
+    anyway. Twice, as always.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Dry-runs and confirmations print in full in the CLI / DM; parked and fired
+      confirmations log in the bot log; <code>usage.py</code> counts proposed vs confirmed.
+      Sample dry-run output: <a href="../outer/cli.html#universal">CLI → do.py</a>.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

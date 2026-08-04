@@ -103,7 +103,8 @@ def run_turn(script, text="hi", caps=()):
     api = _FakeAPI(script)
     guest_agent._client = api
     try:
-        reply = asyncio.run(guest_agent.respond(None, lambda *_: None, DOOM, text, 111))
+        reply, _files = asyncio.run(
+            guest_agent.respond(None, lambda *_: None, DOOM, text, 111))
     finally:
         guest_agent._client = None
     return reply, api
@@ -256,7 +257,8 @@ try:
     set_guest()
     api = _FakeAPI(script)
     guest_agent._client = api
-    reply = asyncio.run(guest_agent.respond(None, logged.append, DOOM, "hi", 111))
+    reply, _files = asyncio.run(
+        guest_agent.respond(None, logged.append, DOOM, "hi", 111))
 finally:
     capabilities.run = real_run
     guest_agent._client = None

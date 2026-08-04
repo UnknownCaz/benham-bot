@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The four tiers — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/tiers.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>The four tiers</h1>
+    <p class="lede">Every capability declares one; <code>capabilities.run()</code> enforces it.
+    Tiers grade <em>Discord consequence</em> — not trust in the caller.</p>
+
+    <h2 id="what">What it does</h2>
+    <table>
+      <tr><th>tier</th><th>examples</th><th>gate</th></tr>
+      <tr><td><strong>read</strong> (18)</td><td><code>read_channel</code>, <code>search_messages</code>, <code>find_user</code>, <code>read_attachments</code>, <code>guild_info</code></td><td>none</td></tr>
+      <tr><td><strong>speak</strong> (7)</td><td><code>send_message</code>, <code>send_embed</code>, <code>send_file</code>, <code>dm_user</code>, <code>react</code></td><td>owner only</td></tr>
+      <tr><td><strong>manage</strong> (24)</td><td><code>pin_message</code>, <code>add_role</code>, <code>create_channel</code>, <code>timeout_member</code></td><td>owner only</td></tr>
+      <tr><td><strong>destructive</strong> (7)</td><td><code>delete_message</code>, <code>purge_messages</code>, <code>delete_channel</code>, <code>kick_member</code>, <code>ban_member</code></td><td>guild allowlist + dry-run + explicit confirm</td></tr>
+    </table>
+    <p>56 capabilities as of Aug 2026 — counts drift as capabilities are added, and
+    <code>python do.py list</code> is always the live truth. A capability's tier travels
+    with its declaration, not with who's calling.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>One owner, stated everywhere.</strong> <code>identity.is_owner()</code> gates
+    every entry point, and <code>rule_owner</code> says it again at the capability — a security
+    check worth having is worth having twice. There's no guild-admin escape hatch and no role
+    that grants control: anyone can talk <em>to</em> Benham; nobody else can direct it. Message
+    text it reads is data, never instructions.</p>
+    <p><strong>Why tiers rather than per-capability flags:</strong> a tier is a claim about
+    blast radius that a reader can audit at a glance — "everything tier 0 can't change
+    anything" is checkable; fifty independent flags are not. And the boundary between tiers is
+    where extra machinery attaches once, uniformly: tier 3 gets the
+    <a href="confirm-flow.html">three-gate flow</a> as a set, not per-action.</p>
+    <p><strong>Why tiers are not trust levels:</strong> the rejected design was "guests as a
+    low tier of owner". A guest is not a weaker owner — tiers grade what an action does to
+    Discord, origins grade who's asking and by what route. Conflating them is how a tier edit
+    becomes a privilege escalation. That's why <a href="guests.html">the guest lane</a> is its
+    own dimension entirely.</p>
+    <p><strong>The outer wall is Discord itself:</strong> whatever Benham's role can't do in a
+    server, none of this code can do either. Per-server role scoping is the one gate an
+    attacker can't reason with.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Every <code>run()</code> logs the action + verdict in the bot log
+      (<code>boot&lt;N&gt;.out</code> / <code>supervise.log</code>); refusals name the rule.
+      <code>python usage.py</code> aggregates which capabilities ran, what policy refused, what
+      got proposed and confirmed.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

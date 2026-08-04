@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC access — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/pc-access.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>PC access</h1>
+    <p class="lede">A real Claude Code session on the actual machine — read freely, ask before
+    changing.</p>
+
+    <h2 id="what">What it does</h2>
+    <p><code>codesession.py</code> drives the real Claude Code CLI through the agent SDK, with
+    your own settings and skills loaded — "restart Isle of Berk" works because <em>your</em>
+    exaroton skill is there, not because this repo knows what exaroton is. Reached via the
+    <code>pc..</code> DM prefix or the <code>pc_task</code> capability.</p>
+    <table>
+      <tr><th>tool class</th><th>behaviour</th></tr>
+      <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code>, <code>WebFetch</code>, <code>WebSearch</code>, <code>TodoWrite</code>, …</td><td>runs immediately</td></tr>
+      <tr><td>anything else — writes, edits, shell commands, subagents</td><td>DMs you the <strong>full command</strong> (up to 1200 chars) and <strong>blocks</strong> until you answer</td></tr>
+      <tr><td>no answer within <code>permission_timeout_seconds</code> (300)</td><td><strong>denied</strong> — the session is told no and stops</td></tr>
+    </table>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>The allowlist is of reads, not writes.</strong> Anything unrecognised is treated
+    as a change and asks. When a future Claude Code version adds a tool this file has never
+    heard of, the failure mode is an unnecessary question — not an unreviewed write. Fail
+    closed, in the direction that merely annoys.</p>
+    <p><strong>The full command, because an approval you can't read isn't one.</strong> An
+    early version truncated the approval DM to 80 characters — which would have meant approving
+    commands you couldn't actually see. 1200 now.</p>
+    <p><strong>The workdir is not a sandbox, and secrets are readable — on purpose.</strong>
+    <code>Benhams-inbox/</code> is a starting point; the session can go anywhere. Reads are
+    free, so anyone who can DM Benham could ask it to read <code>environ.env</code>. The chosen
+    defence is not a block but a <em>trail</em>: every read of a credential-shaped path logs
+    loud as <code>SECRET-READ</code>. Two honest reasons: full file access is the feature being
+    bought, and the DM door is already owner-only — the log exists for the day that assumption
+    fails. Hardening to a flat deny is a one-line change to <code>_SECRET_RE</code>'s use,
+    documented in the code for exactly that day.</p>
+    <p><strong>Tightest origins in the registry.</strong> <code>{OWNER_DM, LOCAL_CLI}</code> +
+    <code>blocked_when_tainted</code>: reachable only from a direct DM or the local shell, and
+    not at all once the turn has read what other people wrote — see
+    <a href="taint.html">The taint model</a> for why that's a flat deny, not a confirm.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Every session writes a full JSONL transcript (Claude Code's own, under
+      <code>~/.claude/projects/&lt;encoded-cwd&gt;/</code>) — <code>python watch_pc.py</code>
+      follows it live; nothing was added to the bot to make this observable, the record
+      existed and just had no reader. Approval requests appear as DMs and as bot-log lines;
+      credential-path reads flag <code>SECRET-READ</code>. Billing per task shows in
+      <code>usage.py</code> (estimates; sessions currently bill the subscription).</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>
