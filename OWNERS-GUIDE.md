@@ -25,9 +25,17 @@ fire. A stray "yes" without the token does nothing, on purpose. Previews expire
 (`confirm.ttl_seconds`, currently 1h) — expired = cancelled, never assumed yes.
 
 **"Why is it asking approval for a normal send?"** The turn is *tainted* — Benham
-read something a non-owner wrote (a channel, a nickname, a forwarded message).
-Outward actions then need your yes. Not a bug. Want it free again? Ask in a fresh
-message that doesn't read stranger content first.
+read something a non-owner wrote (a channel, a nickname, a forwarded message, **or
+a web search result**). Outward actions then need your yes. Not a bug. Want it free
+again? Ask in a fresh message that doesn't read stranger content first.
+
+**Web search (yours).** Just ask for current info — it searches when it's actually
+needed. Queries land in `agent_searches.jsonl`. The trade-off worth knowing: **a
+turn that searched is tainted**, same as reading a channel, because a web page is
+text a stranger wrote (and cheaper to publish than a Discord message is to post).
+So "search then post it in #general" will ask you to confirm the post, and `pc_task`
+is blocked until a fresh message. Deliberate. `agent.web_search: false` in
+`control.json` turns search off if you'd rather have the ungated tool loop.
 
 **"Why did it refuse outright?"** Common ones:
 
@@ -122,7 +130,7 @@ only; zero client tools, zero Discord reach, zero PC reach.
 | `destructive_guilds` | where tier-3 may run AT ALL (hand-edit only) |
 | `agent_guilds` | where @mention drives the agent |
 | `post_guilds` / `post_channels` | hard cap on where content can be posted (channels wins if non-empty) |
-| `agent.*` | owner agent: model, max_tool_rounds, cooldown |
+| `agent.*` | owner agent: model, max_tool_rounds, cooldown, `web_search`, `searches_per_turn` |
 | `pc.*` | PC session: enabled, workdir, timeout, billing, `pc..` prefix |
 | `guest.*` | everything guest (see above) |
 | `confirm.ttl_seconds` | how long a parked confirmation lives |
@@ -140,7 +148,7 @@ stage lands this section gets unmarked and expanded.
 
 | stage | you get | your admin surface |
 |---|---|---|
-| 1 | **you** get web search in normal DMs (owner agent finally has it) | `agent.web_search`, owner queries → `agent_searches.jsonl` |
+| ~~1~~ | **SHIPPED** — owner web search (documented above, not planned any more) | — |
 | 2–3 | plumbing; guests unchanged | `guest.mode: "workspace"` becomes valid; `guest.capabilities` list appears (empty = today's behaviour) |
 | 4 | guests get files: create/read/upload (`ws_import`)/get-back, each confined to `guest_work/<their_id>/` + read-only `guest_work/commons/` you curate | quotas in `guest.workspace` (20MB/guest default); drop files in `commons/` to share with all guests; runnable files (.exe/.bat) refused everywhere |
 | 5 | guests can read channels **you list** | `guest.read_channels` — treat listing a channel as publishing it to every guest |

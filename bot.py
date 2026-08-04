@@ -1087,10 +1087,15 @@ async def on_ready():
     # --- control plane (identity.py / control.json) ---
     log(f"Owner(s): {sorted(identity.OWNER_IDS)} — Benham takes direction from these only")
     log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
-        f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)")
+        f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)"
+        f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
     log(f"Destructive actions allowed in guilds: {sorted(identity.DESTRUCTIVE_GUILDS) or 'NONE'}")
     if identity.guest_enabled():
-        log(f"Guest chat: ON ({guest.MODEL}, DM only, no tools) — "
+        # "no tools" was true when guests were pure conversation and became a lie
+        # the day server-side search shipped. The distinction that actually holds -
+        # and the one the security story rests on - is CLIENT tools: none, ever.
+        log(f"Guest chat: ON ({guest.MODEL}, DM only, no client tools"
+            f"{', web search on' if guest.WEB_SEARCH else ''}) — "
             f"{sorted(identity.GUEST_IDS) or 'nobody whitelisted'}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
     else:
