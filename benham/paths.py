@@ -27,9 +27,7 @@ import os
 # Repo root: this file sits at <root>/benham/paths.py.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# All four still point at the root - the flat layout is unchanged until the
-# physical moves land. Each flip below is Stage 5 of PLAN-src-reorg.md.
-CONFIG_DIR = ROOT    # will become: os.path.join(ROOT, "config")
-STATE_DIR = ROOT     # will become: os.path.join(ROOT, "state")
-PROMPTS_DIR = ROOT   # will become: os.path.join(ROOT, "prompts")
-LOG_DIR = ROOT       # will become: os.path.join(ROOT, "logs")
+CONFIG_DIR = os.path.join(ROOT, "config")
+STATE_DIR = os.path.join(ROOT, "state")
+PROMPTS_DIR = os.path.join(ROOT, "prompts")
+LOG_DIR = os.path.join(ROOT, "logs")

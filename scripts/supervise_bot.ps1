@@ -38,9 +38,10 @@ param(
     [int]$MaxDelaySeconds = 300
 )
 
-$Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# This script lives in scripts/; the bot and its logs are addressed from the repo root.
+$Dir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Dir
-$Log = Join-Path $Dir 'supervise.log'
+$Log = Join-Path $Dir 'logs\supervise.log'
 
 function Write-Log($msg) {
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ssZ')

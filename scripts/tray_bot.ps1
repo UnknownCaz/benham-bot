@@ -26,10 +26,11 @@ sitting in a tray menu.
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# This script lives in scripts/; everything it touches is addressed from the repo root.
+$Dir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Dir
-$Log = Join-Path $Dir 'supervise.log'
-$ControlFile = Join-Path $Dir 'control.json'
+$Log = Join-Path $Dir 'logs\supervise.log'
+$ControlFile = Join-Path $Dir 'config\control.json'
 $TaskName = 'benham-bot'
 
 # --- state readers (all read-only) ----------------------------------------
@@ -68,7 +69,7 @@ function Get-GuestUsage {
     # line reads as "how close to the wall", not a bare number. A stale date means
     # nobody has messaged today - that is 0, not an error.
     try {
-        $u = Get-Content (Join-Path $Dir 'guest_usage.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        $u = Get-Content (Join-Path $Dir 'state\guest_usage.json') -Raw -ErrorAction Stop | ConvertFrom-Json
         $caps = (Get-Content $ControlFile -Raw -ErrorAction Stop | ConvertFrom-Json).guest
         $today = (Get-Date).ToString('yyyy-MM-dd')
         $total = 0
@@ -84,7 +85,7 @@ function Get-DmCount {
     # viewer has shown to decide whether the tray badge lights up. Full-file scan,
     # but the file is small and this runs every 5s on a machine that won't notice.
     try {
-        $inbox = Join-Path $Dir 'inbox.jsonl'
+        $inbox = Join-Path $Dir 'state\inbox.jsonl'
         if (-not (Test-Path $inbox)) { return 0 }
         @(Select-String -Path $inbox -Pattern '"guild": null' -Encoding UTF8 |
             Where-Object { $_.Line -notmatch '"is_self": true' }).Count
@@ -211,7 +212,7 @@ $script:InboxForm = $null
 $script:InboxDmOnly = $false
 
 function Render-Inbox([System.Windows.Forms.RichTextBox]$rtb) {
-    $inbox = Join-Path $Dir 'inbox.jsonl'
+    $inbox = Join-Path $Dir 'state\inbox.jsonl'
     $rtb.Clear()
     if (-not (Test-Path $inbox)) {
         $rtb.AppendText("No inbox.jsonl yet - the bot logs incoming messages there once it sees one.")
@@ -314,7 +315,7 @@ function Show-InboxWindow {
 
     $btnRaw = New-Object System.Windows.Forms.Button
     $btnRaw.Text = 'Open raw file'
-    $btnRaw.add_Click({ Start-Process notepad.exe (Join-Path $Dir 'inbox.jsonl') })
+    $btnRaw.add_Click({ Start-Process notepad.exe (Join-Path $Dir 'state\inbox.jsonl') })
     $bar.Controls.Add($btnRaw)
     $bar.Controls.Add($chkDm)
 
@@ -607,7 +608,7 @@ New-SubItem $miGuestMenu "Disable guest chat + restart" {
 } | Out-Null
 
 New-SubItem $miGuestMenu "Open search log" {
-    $sl = Join-Path $Dir 'guest_searches.jsonl'
+    $sl = Join-Path $Dir 'state\guest_searches.jsonl'
     if (Test-Path $sl) { Start-Process notepad.exe $sl }
     else { $notify.ShowBalloonTip(3000, "Benham", "No guest searches logged yet.", 'Info') }
 } | Out-Null
