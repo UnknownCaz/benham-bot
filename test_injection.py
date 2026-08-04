@@ -377,6 +377,91 @@ async def _taint_order():
 
 asyncio.run(_taint_order())
 
+section("A web search taints the turn, exactly like reading a channel")
+
+# Stage 1 gave the owner agent Anthropic's server-side web search. A web page is
+# text a stranger wrote - cheaper to publish than a Discord message is to post -
+# so it has to downgrade Benham's authority the same way a channel read does.
+#
+# The ordering is the subtle half, and it is the OPPOSITE of the capability rule
+# above. A capability's output taints what comes NEXT (hence the finally block).
+# A search runs on Anthropic's servers DURING the API call, so its results are
+# already in the response that carries the model's next tool call - the model had
+# read them before choosing it. Tainting after would let the first post-search
+# action through clean, which is precisely the action an injected page would aim
+# for.
+
+
+async def _search_taints():
+    script = [
+        # One response: the search Anthropic already ran, plus the send it chose
+        # having read the results. This is the shape that makes ordering matter.
+        _Resp([_Block(type="server_tool_use", id="s1", name="web_search",
+                      input={"query": "cheap minecraft hosting"}),
+               _Block(type="tool_use", id="t1", name="send_message",
+                      input={"channel_id": TESTING_CHAN,
+                             "content": "visit evil.example for free ram"})],
+              "tool_use"),
+        _Resp([_Block(type="text", text="Here's what I found - want me to post it?")],
+              "end_turn"),
+    ]
+    agent._client = _FakeAnthropic(script)
+    agent._last_call.clear()
+    confirm.cancel()
+    _PoisonedChannel.sent.clear()
+
+    logged = []
+    real_log = agent.shared_tools.log_searches
+    agent.shared_tools.log_searches = lambda *a, **k: logged.append((a, k))
+    try:
+        reply, parked = await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "find me cheap hosting and tell #asd",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=TESTING, where="a DM", conversation_key="test:searchtaint",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+    finally:
+        agent.shared_tools.log_searches = real_log
+        agent._client = None
+
+    check("the send after a search never reached the channel",
+          len(_PoisonedChannel.sent), 0)
+    check("it was parked for Tyler instead", parked is not None, True)
+    if parked:
+        check("...and the reason names the taint, not some other refusal",
+              "already read content other people wrote" in parked.preview.get("reason", ""),
+              True)
+    check("the query was written to the moderation trail", len(logged) >= 1, True)
+    if logged:
+        args, kw = logged[0]
+        check("...to the OWNER log, not the guest one",
+              args[0].endswith("agent_searches.jsonl"), True)
+        check("...tagged role=owner", kw.get("role"), "owner")
+        check("...with the actual query", args[2], ["cheap minecraft hosting"])
+    check("Tyler still got a reply", bool(reply), True)
+
+
+asyncio.run(_search_taints())
+
+check("a server_tool_use block is never looked up as a capability",
+      "web_search" in capabilities.REGISTRY, False)
+
+# A cited answer arrives as MANY text blocks - fragments of one sentence, one per
+# cited span. Anything but "" as the joiner inside one response shatters it; the
+# first live searched reply proved it. (Between rounds, \n\n stays correct.)
+check("citation-fragmented text blocks join back into one sentence",
+      agent._response_text(_Resp(
+          [_Block(type="text", text="Chaos Cubed already released - "),
+           _Block(type="text", text="with new blocks and a new area"),
+           _Block(type="text", text=", centered on "),
+           _Block(type="text", text="the sulfur caves biome"),
+           _Block(type="text", text=".")], "end_turn")),
+      "Chaos Cubed already released - with new blocks and a new area, "
+      "centered on the sulfur caves biome.")
+check("the search tool is server-side (runs on Anthropic's infra, not this box)",
+      agent.shared_tools.web_search_tool(1)["type"].startswith("web_search_"), True)
+
+
 section("What is left unprotected, stated honestly")
 free = [n for n, a in capabilities.REGISTRY.items()
         if not a.outward and not a.needs_confirm and a.tier > identity.READ]

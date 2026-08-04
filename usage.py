@@ -183,11 +183,21 @@ def bar(label, value, total, width=28):
 
 
 def log_candidates():
-    """Every bot capture worth scanning, live ones and archived ones alike."""
+    """Every bot capture worth scanning, live ones and archived ones alike.
+
+    supervise.log is on the list because it is where the lines actually go now:
+    under the benham-bot logon task, the supervisor captures bot.py's stream, and
+    boot*.out stopped being written (the newest one here predates weeks of real
+    traffic). Before this line existed, the default pick was that stale boot file
+    and --today reported a running bot as all zeros.
+    """
     paths = []
     for d in (BASE_DIR, LOGS_DIR):
         paths += glob.glob(os.path.join(d, "*.out"))
         paths += glob.glob(os.path.join(d, "bot*.log"))
+    sup = os.path.join(BASE_DIR, "supervise.log")
+    if os.path.isfile(sup):
+        paths.append(sup)
     return paths
 
 
@@ -213,7 +223,11 @@ def main(argv):
         print("No bot logs found.", file=sys.stderr)
         return 1
 
-    day = time.strftime("%Y-%m-%d") if args.today else None
+    # UTC, because the log stamps are UTC ([2026-08-04 03:45:46Z]). Local date
+    # here meant every line written after 00:00 UTC - early evening in Tyler's
+    # timezone, exactly when the bot is busiest - failed the "today" filter and
+    # the report zeroed out while the bot was demonstrably chatting.
+    day = time.strftime("%Y-%m-%d", time.gmtime()) if args.today else None
     s = scan(paths, day)
 
     print("=" * 60)

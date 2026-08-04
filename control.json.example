@@ -20,9 +20,11 @@
     "max_tokens": 2048,
     "max_tool_rounds": 8,
     "history_turns": 20,
-    "cooldown_seconds": 1.5
+    "cooldown_seconds": 1.5,
+    "web_search": true,
+    "searches_per_turn": 3
   },
-  "_agent": "enabled=false makes Benham a pure relay (no API cost). model: claude-haiku-4-5 is cheap, claude-sonnet-5 is sharper for multi-step tool use. max_tool_rounds bounds one request's agent loop.",
+  "_agent": "enabled=false makes Benham a pure relay (no API cost). model: claude-haiku-4-5 is cheap, claude-sonnet-5 is sharper for multi-step tool use. max_tool_rounds bounds one request's agent loop. web_search adds Anthropic's SERVER-SIDE search (runs on their infrastructure, nothing fetched from this machine); queries are logged to agent_searches.jsonl. NOTE: a turn that searched is TAINTED, exactly as if Benham had read a channel - a web page is text a stranger wrote - so outward actions after a search ask for confirmation, and pc_task is blocked until a fresh message. That is the intended trade, not a bug; set web_search=false if you would rather have the un-gated tool loop than live information.",
 
   "pc": {
     "enabled": false,

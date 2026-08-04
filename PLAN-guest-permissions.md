@@ -457,8 +457,8 @@ never `parse_persona_directive`) carries over to guest_agent.py unchanged.
 
 | # | Ships | Risk added | Proves |
 |---|-------|-----------|--------|
-| 0 | `pathsafe.py` + `shared_tools.py` extractions; capabilities.py and guest.py re-import; zero behaviour change | none | extraction is faithful (existing tests still green) |
-| 1 | Owner web search in agent.py via shared_tools; `agent_searches.jsonl` | none (owner-only) | shared module works in production |
+| 0 | ~~`pathsafe.py` + `shared_tools.py` extractions~~ **SHIPPED** (a91a07f) | none | extraction is faithful (existing tests still green) |
+| 1 | ~~Owner web search in agent.py via shared_tools; `agent_searches.jsonl`~~ **SHIPPED**, live-tested 2026-08-03. Two decisions made during implementation: **a searched turn is tainted** (a web page is stranger-written text; taint set BEFORE that response's tool calls run, since server-side results arrive inside the response that chose them — proven by test_injection's search-taint case); and cited answers must be reassembled with `_response_text` ("" join within a response — the first live search came back as confetti without it) | none (owner-only) | shared module works in production |
 | 2 | policy: `rule_guest`, `rule_guest_never_confirms`, `Action.guest`, registration-time invariant, `identity.guest_capabilities()`; **config empty** | none (grants empty ⇒ behaviour identical; invariant tests prove it) | the gate exists and fails closed |
 | 3 | `guest_agent.py` loop, `"workspace"` in GUEST_MODES, bot.py mode routing; grants still empty | ~none | the loop, charging, routing, refunds |
 | 4 | `ws_*` capabilities (incl. `ws_import`) + quotas + reply-attachment path + `guest_persona.md` rewrite | disk-fill (capped), guest-uploaded inert bytes | the workspace |
