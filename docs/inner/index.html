@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inner — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/index.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main data-index="inner">
+    <h1>Inner</h1>
+    <p class="lede">Why it's built this way. Each page: what it does, then the alignment
+    reasoning behind the choice, then its paper trail.</p>
+    <p>The one-paragraph version of the whole model: every capability decision is made in one
+    place (<code>policy.py</code>), every request must state where it came from, and an unknown
+    origin is a denial — so wiring a new call site wrong fails loudly instead of permitting
+    silently. Deny rules run before confirm rules, so a refused action never comes back asking
+    to be approved. Text Benham reads is data, never instructions. And the model can never say
+    yes to itself — every approval is matched by code before the agent runs. Everything else on
+    these pages is that paragraph, applied.</p>
+    <p>Design failures are quoted where they motivated a rule. The founding one: a guild check
+    that was written, tested, green — and dead code, because the live path re-implemented a
+    subset inline. The suite couldn't tell a wired gate from an unwired one. Most of what looks
+    like paranoia below is that bug, not happening again.</p>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

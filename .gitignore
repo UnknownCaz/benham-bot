@@ -50,3 +50,11 @@ m[0-9].txt
 
 # Guest workspace (guest-refactor Stage 4) - guests' files, never committed
 guest_work/
+
+# Manual backup of inbox.jsonl - same private message content as the original;
+# .bak defeats both the *.jsonl and *.jsonl.1 patterns above.
+*.jsonl.bak
+# Task Scheduler exports embed the machine SID and account name - keep local.
+*.task.backup.xml
+# Claude session-local settings and worktrees.
+.claude/

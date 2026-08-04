@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benham Manual</title>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body data-root="" data-page="index.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="inner/index.html">Inner</a> · <a href="outer/index.html">Outer</a></noscript></nav>
+  <main>
+    <h1>Benham Manual</h1>
+    <p class="lede">Private, local, yours. Two doors: how Benham thinks, and how you drive it.</p>
+
+    <div class="doors">
+      <a class="door" href="inner/index.html">
+        <h2>Inner</h2>
+        <p>Why it's built this way — <span data-count="inner"></span> pages. Each functionality:
+        what it does, and the alignment reasoning behind the choice.</p>
+      </a>
+      <a class="door" href="outer/index.html">
+        <h2>Outer</h2>
+        <p>How to drive it — <span data-count="outer"></span> pages. Guests, agents, the tray icon,
+        every CLI shorthand, every config knob.</p>
+      </a>
+    </div>
+
+    <div class="status-strip">
+      <strong>Guest refactor status:</strong>
+      Stages 0–4 <span class="badge shipped">SHIPPED</span>
+      workspace grants <span class="badge off">EMPTY · OFF</span>
+      Stages 5–6 <span class="badge planned">PLANNED</span>
+      — the manual never claims something works that doesn't.
+    </div>
+  </main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

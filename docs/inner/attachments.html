@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attachments — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/attachments.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Attachments</h1>
+    <p class="lede">Files come in through quarantine and go out through a preview that names
+    them. Nothing is ever run.</p>
+
+    <h2 id="what">What it does</h2>
+    <p><strong>Reading:</strong> <code>read_attachments channel_id= message_id=</code>
+    downloads what one named message carries into <code>downloads/&lt;message_id&gt;/</code>
+    (gitignored — and NOT your Windows Downloads), returns name/size/type per file, inlines
+    text up to 20k chars. <code>save=false</code> looks without keeping; <code>max_bytes=</code>
+    raises the 8MB default. <strong>Sending:</strong> <code>send_file</code> /
+    <code>dm_user</code> take <code>path=</code>/<code>paths=</code>; Discord's 10-file / 25MB
+    limits are checked locally so a failure names the file instead of arriving as a bare
+    413.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>Reading is tier 0 because three properties make a mistaken call cost nothing —
+    and the tier only holds while all three do:</strong></p>
+    <ol>
+      <li><strong>No URL parameter.</strong> It fetches what a <em>named message</em> carries.
+      A general "download this URL" tool would be aimed by whatever text Benham last read —
+      the exact shape the injection defences refuse. (The guest workspace's
+      <code>ws_import</code> copies this rule: imports come from a message the guest authored,
+      or not at all.)</li>
+      <li><strong>Bytes land only under <code>downloads/</code>, under a rewritten name.</strong>
+      The uploader controls the filename and nothing else — <code>..\..\Windows\System32\evil.dll</code>
+      is a legal name for a Discord upload, and <code>CON.txt</code> is a device, not a file.
+      Rewrites are reported, not silent; a final <code>realpath</code> check refuses anything
+      still resolving outside the folder. (This hygiene now lives in <code>pathsafe.py</code>,
+      shared with the guest workspace — one implementation of "may this path exist", not two
+      drifting copies.)</li>
+      <li><strong>Nothing is ever run.</strong> Windows-runnable extensions are flagged
+      <code>executable: true</code> and written anyway — a blocklist would refuse ordinary work
+      (<code>.jar</code> mod files) while preventing nothing, since the file is only ever bytes
+      on disk. Guests get the stricter rule (refusal) because a guest has no legitimate reason
+      to author <code>.bat</code> onto your disk.</li>
+    </ol>
+    <p><strong>Outbound is where the gate sits:</strong> <code>send_file</code> is
+    <code>outward</code> + <code>posts</code> — in a <a href="taint.html">tainted turn</a> the
+    confirmation preview <em>names the files</em>, which is the only reason approving it means
+    anything. Everything read is <code>taints</code>-marked and wrapped in untrusted-data
+    markers before the model sees it: a crash log someone uploaded is information to report,
+    not instructions to follow.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Downloaded files sit in <code>downloads/&lt;message_id&gt;/</code>; each
+      <code>read_attachments</code> result (rewrites reported, <code>executable</code> flags)
+      is in its <code>outbox/sent/…_result.json</code>; sends log like any outward action.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

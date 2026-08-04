@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config reference — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="outer/config-reference.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Config reference</h1>
+    <p class="lede">One file runs the control plane: <code>control.json</code>. Everything here
+    assumes you know the three rules.</p>
+
+    <h2 id="rules">The rules</h2>
+    <ol>
+      <li><strong>Restart after ANY edit.</strong> The file is read once at import. This cuts both
+      ways — adding a guest and removing one both wait for the next boot. One answer to "who may
+      talk to Benham" beats a live-reload race.</li>
+      <li><strong>Missing config = most-restrictive defaults, always.</strong> A deleted key never
+      opens something up.</li>
+      <li><strong><code>control.json.example</code> documents every key</strong> in its
+      <code>_comment</code> twins — it's the reference the table below summarizes. No secrets in
+      either file; tokens live in <code>environ.env</code> (gitignored).</li>
+    </ol>
+
+    <h2 id="knobs">Every knob</h2>
+    <table>
+      <tr><th>key</th><th>is</th></tr>
+      <tr><td><code>owner_ids</code></td><td>who Benham obeys. Everything else flows from this. No guild-admin escape hatch, no role grants control.</td></tr>
+      <tr><td><code>destructive_guilds</code></td><td>where tier-3 (delete/purge/kick/ban) may run <em>at all</em>. Hand-edit only; no confirmation can unlock a guild that isn't listed.</td></tr>
+      <tr><td><code>agent_guilds</code></td><td>where @mention drives the agent. Owner DMs always work regardless.</td></tr>
+      <tr><td><code>post_guilds</code> / <code>post_channels</code></td><td>hard cap on where Benham may PUT content (channels wins if non-empty; both empty = no cap). Not a confirmation gate — a refusal here has no unlock. Reading is never restricted by it.</td></tr>
+      <tr><td><code>agent.*</code></td><td>owner agent: <code>enabled</code> (false = pure relay, no API cost), <code>model</code>, <code>max_tokens</code>, <code>max_tool_rounds</code>, <code>history_turns</code>, <code>cooldown_seconds</code>, <code>web_search</code>, <code>searches_per_turn</code></td></tr>
+      <tr><td><code>pc.*</code></td><td>PC session: <code>enabled</code>, <code>workdir</code> (a starting point, NOT a sandbox), <code>permission_timeout_seconds</code> (300 — no answer = denied), <code>max_turns</code>, <code>use_api_key</code> (billing: API vs subscription)</td></tr>
+      <tr><td><code>guest.*</code></td><td>everything guest: <code>enabled</code>, <code>mode</code> (chat / workspace; unrecognised = disabled rather than guessed), <code>ids</code>, <code>capabilities</code> (the config half of the three-part grant — typos can only turn things OFF), model + caps + cooldown, <code>workspace</code> quotas. Full procedures: <a href="guest-admin.html">Guest admin</a>.</td></tr>
+      <tr><td><code>confirm.ttl_seconds</code></td><td>how long a parked tier-3 confirmation lives (3600 = 1h). Expired = cancelled, never assumed yes.</td></tr>
+      <tr><td><code>intents.members</code></td><td>off = <code>find_user</code> is prefix-only — "caz" finds "caz6666" but never "UnknownCaz", and every result carries a note saying so. Turning it on needs the Dev Portal toggle too, or the bot refuses to log in.</td></tr>
+      <tr><td><code>presence.*</code></td><td>status + activity applied on login</td></tr>
+    </table>
+    <p>Adjacent config files: <code>exaroton_watch.json</code> (/server gating, watchdog,
+    <code>auto_reply_guilds</code>), <code>voices.json</code> (voice roster),
+    <code>webhooks.json</code> (webhook URLs, gitignored), <code>channels.json</code> (IDs,
+    rewritten each boot — read it, don't edit it).</p>
+
+    <h2 id="defaults">Most-restrictive defaults</h2>
+    <p>The philosophy, stated once: <strong>a typo can only turn things off.</strong> Missing
+    keys fall to the most restrictive value. <code>guest.capabilities</code> grants nothing
+    unless code also flags the capability for guests. Privileged intents default off because
+    requesting an ungranted intent bricks login on the next restart — the failure mode of "off"
+    is two capabilities that plainly say why they're unavailable, which beats a bot that won't
+    start. Unrecognised guest modes disable guest chat rather than guessing.</p>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tray, restart &amp; supervision — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="outer/tray-restart.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Tray, restart &amp; supervision</h1>
+    <p class="lede">Two logon Scheduled Tasks keep Benham alive and visible:
+    <code>benham-bot</code> (the supervisor) and <code>benham-bot-tray</code> (the icon).
+    Only one of them matters to the bot's survival.</p>
+
+    <h2 id="tray">The tray icon</h2>
+    <p><code>tray_bot.ps1</code> is a <strong>monitor, not the supervisor</strong> — it polls
+    every 5s and owns no state. Closing it changes nothing about whether the bot runs.</p>
+    <table>
+      <tr><th>icon</th><th>meaning</th></tr>
+      <tr><td>grey</td><td>supervisor not running — <strong>nothing will restart the bot</strong></td></tr>
+      <tr><td>green</td><td>supervisor running, bot up (tooltip shows pid + uptime)</td></tr>
+      <tr><td>red</td><td>supervisor running, bot down — a restart is presumably in flight</td></tr>
+    </table>
+    <p>Menu: restart bot (via the supervisor, so there's one restart path rather than two),
+    start/stop supervisor, open <code>supervise.log</code>, full status, hide the icon. The
+    guest-chat item is one-way: it can turn guest chat OFF (fail-safe, worth a panic button)
+    and cannot turn it ON — that stays a deliberate <code>control.json</code> edit.</p>
+    <p><strong>Windows 11 hides new tray icons</strong> — it lands in the overflow behind the
+    taskbar's <code>^</code> chevron; drag it onto the taskbar to pin it.</p>
+
+    <h2 id="restart">Restarting</h2>
+    <pre><code>Get-ScheduledTask benham-bot        # Ready = armed, Running = supervising now
+Start-ScheduledTask benham-bot      # start without waiting for a logon
+Stop-ScheduledTask  benham-bot      # stop supervising (does NOT stop a bot already up)</code></pre>
+    <p>Easiest full restart: tray icon → restart bot. To run in the foreground instead
+    (<code>python bot.py</code>), <strong>stop the task first</strong> — otherwise the supervisor
+    restarts the one you just stopped, or refuses to start alongside yours.</p>
+
+    <h2 id="supervise">Supervision</h2>
+    <p><code>supervise_bot.ps1</code> keeps exactly one <code>bot.py</code> alive
+    (<code>supervise_bot.bat</code> is the hand-run entry point for the same script). Four
+    behaviours worth knowing:</p>
+    <table>
+      <tr><td><strong>Runs windowless</strong></td><td>the task action is <code>conhost.exe --headless powershell.exe …</code> — the obvious <code>-WindowStyle Hidden</code> silently doesn't work on Win 11 (Windows Terminal ignores it and puts a window in Alt+Tab). Nothing is lost: every line goes to <code>supervise.log</code>, and the tray is the thing meant to be looked at.</td></tr>
+      <tr><td><strong>Gives up on a crash loop</strong></td><td>five consecutive exits each under 60s = a bot that <em>cannot start</em> (bad token, import error). Backs off 10s → 20s → 40s… to 5 min, then stops and says why. Restart the task (or log back in) to reset.</td></tr>
+      <tr><td><strong>Refuses to be the second instance</strong></td><td>one token with two gateways = duplicate replies and duplicate outbox actions. Named mutex against another supervisor, process check against a hand-started <code>bot.py</code> — either way it logs the conflict and exits rather than connecting.</td></tr>
+      <tr><td><strong>Its log rotates</strong></td><td><code>supervise.log</code> → <code>supervise.log.1</code> past 5MB, one generation.</td></tr>
+    </table>
+    <p>The limit it cannot cover: if the machine sleeps, the supervisor sleeps with it.</p>
+
+    <h2 id="boot">Boot logs</h2>
+    <p>Each boot writes <code>boot&lt;N&gt;.out</code> / <code>.err</code> in the repo root and
+    keeps the handle open for the life of the process — so the live pair stays in the root, and
+    older pairs get moved to <code>logs/</code>. <code>usage.py</code> and <code>status.py</code>
+    search both places, so archiving never hides history from a report; pruning
+    <code>logs/</code> is what actually discards it. Supervisor's own view, redacted:</p>
+    <div class="paper-trail">
+      <pre><code>[2026-07-28 05:04:27Z] [supervisor] bot.py is already running (pid 2…6), started outside this supervisor.
+[2026-07-28 05:04:27Z] [supervisor] Refusing to start a second - one token, two gateways means duplicate replies</code></pre>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

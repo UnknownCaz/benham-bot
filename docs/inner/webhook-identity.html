@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook identity — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/webhook-identity.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Webhook identity</h1>
+    <p class="lede">The one way of posting that isn't Benham at all — deliberately outside
+    every gate this manual describes, and worth understanding for exactly that reason.</p>
+
+    <h2 id="what">What it does</h2>
+    <p><code>webhook.py</code> posts via a saved webhook URL: no gateway, no bot token, no
+    <code>bot.py</code> — it works while the bot is stopped. The post wears the webhook's own
+    name and avatar (overridable per post with <code>--username</code>), configured per
+    channel in <code>webhooks.json</code>. It exists because Benham is only in Testing and
+    Chillbar, while the Isle of Berk changelog channel is in a server it was never invited
+    to — <code>send_message</code> physically cannot reach it; a webhook can. Usage:
+    <a href="../outer/cli.html#webhooks">Outer → CLI → Webhooks</a>.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>Why it's outside the chokepoint rather than wired through it:</strong> the
+    chokepoint's gates reason about Benham's capabilities in Benham's servers. A webhook is a
+    different thing — the URL <em>is</em> the credential, Discord-side, and anyone holding it
+    can post regardless of what <code>policy.py</code> thinks. Routing it through the policy
+    engine would dress a bare credential up as a governed capability — a gate that looks like
+    it decides something it can't actually stop. The honest design is the one that says: this
+    is a raw tool, treat the URL like a password (gitignored, <code>--list</code> never prints
+    it).</p>
+    <p><strong>The cost is a hole in the audit trail, accepted with eyes open.</strong> A
+    webhook post writes no log line anywhere — <code>bot.log</code> will not show it, no
+    outbox pair exists. The mitigations are structural instead: <em>nothing in the codebase
+    calls it</em> (it's a human-run script only), and the agent can't reach it — only a
+    <code>pc_task</code> shell command could, which needs a DM origin, an untainted turn, and
+    a per-command approval naming the full command. So the model never posts under a webhook
+    face without you reading the exact command that does it.</p>
+    <p><strong>The identity line it respects:</strong> a webhook face is still never
+    <em>you</em> — same rule as everywhere: Benham's surfaces are proxies with their own
+    names, not impersonation of your account. See
+    <a href="identity-persona.html">Identity &amp; persona</a>.</p>
+    <p>The exaroton watchdog is the other resident outside the walls, with a narrower excuse:
+    fixed, code-authored alert text with no model in the loop —
+    <a href="exaroton.html">Exaroton</a>.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Honestly: <strong>none, and that's the documented trade.</strong> The Discord channel
+      itself is the only record of a webhook post. <code>python webhook.py --list</code> shows
+      what's configured (names and labels, never URLs); <code>webhooks.json</code> is the
+      gitignored source of truth. If a post needs an audit trail, don't use this path — use
+      <code>send.py</code> into a channel Benham is actually in.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

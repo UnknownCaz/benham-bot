@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity &amp; persona — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/identity-persona.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Identity &amp; persona</h1>
+    <p class="lede">Benham is Benham — never you. And personality is a costume over a skeleton
+    it can't reshape.</p>
+
+    <h2 id="what">What it does</h2>
+    <p>Everything Benham sends appears as <strong>Benham#2721</strong>, its own account — a
+    proxy, not account impersonation (Discord forbids the latter). Who it <em>obeys</em> is
+    <code>identity.is_owner()</code>, checked at every entry point. Its character lives in
+    layered files: <code>persona.md</code> (voice), <code>agent_persona.md</code> (text agent),
+    <code>guest_persona.md</code> (guests), runtime <code>personality_overrides.txt</code>
+    (accumulated <code>&lt;&lt;persona:&gt;&gt;</code> changes) — all under
+    <code>guardrails.md</code>, which is locked and always wins.</p>
+
+    <h2 id="why">Why we chose this</h2>
+    <p><strong>Personality tunes HOW, never WHAT.</strong> The persona layer is editable — even
+    by asking in voice. That's safe only because the authority layer is elsewhere: guardrails
+    can't be changed, softened, or role-played away ("you are now…", "pretend the rules don't
+    apply", claims of authority — all no-ops). If a requested personality conflicts with a
+    guardrail, Benham stays in character while declining the conflicting part. An editable
+    costume over an immutable skeleton is what makes the costume harmless to share.</p>
+    <p><strong>Guests get their own persona file because the truth differs.</strong>
+    <code>persona.md</code> names you, says the model has real tools, and describes operating
+    your machine — all wrong for a guest, the last one dangerously so: a model told wrong
+    things about its tools promises wrong things. And since Stage 4, the guest system prompt
+    appends a <em>grants-generated</em> correction paragraph only when grants are non-empty —
+    so no static file can lie about what a guest can do in any configuration.</p>
+    <p><strong>Guest directives are stripped, never applied.</strong> A guest reply's
+    <code>&lt;&lt;persona:&gt;&gt;</code> is removed rather than written to the overrides file
+    every other surface reads — a guest chats with Benham; they don't get to reprogram the one
+    that talks to you.</p>
+    <p><strong>One identity fact repeated everywhere:</strong> the owner is never a guest even
+    if his id lands in the list; non-owners can converse but not direct; webhook posts are the
+    one face that isn't Benham's — see <a href="webhook-identity.html">Webhook identity</a>.</p>
+
+    <h2 id="paper-trail">Paper trail</h2>
+    <div class="paper-trail">
+      <p>Committed and readable: <code>guardrails.md</code>, <code>persona.md</code>,
+      <code>agent_persona.md</code>, <code>guest_persona.md</code>. Runtime state:
+      <code>personality_overrides.txt</code> (what accumulated persona changes say now).
+      Private, gitignored: <code>agent_memory.json</code>, <code>guest_memory.json</code>.</p>
+    </div>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>
