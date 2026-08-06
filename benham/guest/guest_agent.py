@@ -180,6 +180,19 @@ def _system_prompt():
         return base
     lines = "\n".join(f"- {name}: {act.summary}"
                       for name, act in sorted(grants.items()))
+    # Shared channel NAMES, when that capability is granted. Without this the
+    # model has to spend a tool call discovering them and then loses the answer
+    # at the turn boundary (memory keeps text pairs, not tool results) - which
+    # is exactly how it ended up telling a guest that a shared channel was not
+    # shared. Names only: the ids are the handler's business, and the model
+    # never needs one to call the tool.
+    if "read_shared_channel" in grants:
+        names = sorted(identity.guest_read_channel_names())
+        lines += ("\n  Channels shared with guests right now: "
+                  + (", ".join(names) if names else "none")
+                  + ". Pass the NAME to read_shared_channel. That list is the "
+                    "whole of what you can read - if someone asks for anything "
+                    "else, say it is not shared rather than guessing.")
     return (base + "\n\n## Correction: your workspace tools\n"
             "Unlike the text above says, on THIS surface you do have these "
             "tools, and only these:\n" + lines + "\n"

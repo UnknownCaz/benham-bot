@@ -1652,8 +1652,10 @@ async def _ws_import(ctx, p):
 @action("read_shared_channel", identity.READ,
         "Read recent messages from a channel the owner has shared with guests. "
         "Call with no channel_id to see which channels are shared.",
-        {"channel_id": {"type": "int",
-                        "desc": "A shared channel's id (omit to list what is shared)"},
+        {"channel": {"type": "str",
+                     "desc": "A shared channel's NAME (e.g. 'benham-beta') or its id. "
+                             "Omit to list what is shared."},
+         "channel_id": {"type": "int", "desc": "The id, if you have it"},
          "limit": {"type": "int", "desc": "How many messages (default 20, max 50)"}},
         origins={policy.Origin.GUEST_DM}, taints=True, guest=True)
 async def _read_shared_channel(ctx, p):
@@ -1665,17 +1667,42 @@ async def _read_shared_channel(ctx, p):
     if not shared:
         raise ActionError("no channels are shared with guests")
 
-    if not p.get("channel_id"):
+    def _named():
+        out = []
+        for c in sorted(shared):
+            ch = ctx.client.get_channel(int(c))
+            out.append({"channel_id": int(c),
+                        "name": getattr(ch, "name", None) or "(unavailable)"})
+        return out
+
+    asked = p.get("channel_id") or p.get("channel")
+    if not asked:
         # Discovery. Names only for channels already on the allowlist, so this
         # cannot be used to enumerate anything else Benham can see.
-        out = []
-        for cid in sorted(shared):
-            ch = ctx.client.get_channel(int(cid))
-            out.append({"channel_id": int(cid),
-                        "name": getattr(ch, "name", None) or "(unavailable)"})
+        out = _named()
         return {"count": len(out), "shared_channels": out}
 
-    cid = int(p["channel_id"])
+    # A NAME is accepted as well as an id, and resolved only against the
+    # allowlist - never against every channel Benham can see, which would turn
+    # this into the enumeration tool the whole capability exists not to be.
+    # Names matter because guest memory keeps text pairs and drops tool results
+    # (guest._remember, by design), so an id learned from a discovery call is
+    # gone by the next turn: Doom asked for a channel by name, the model no
+    # longer had the id, guessed, was refused, and then told him the channel
+    # was not shared at all. A name survives a turn boundary; an id does not.
+    cid = None
+    try:
+        cid = int(str(asked).strip())
+    except (TypeError, ValueError):
+        want = str(asked).strip().lstrip("#").lower()
+        for entry in _named():
+            if entry["name"].lower() == want:
+                cid = entry["channel_id"]
+                break
+        if cid is None:
+            raise ActionError(
+                f"no shared channel called {asked!r}. Shared right now: "
+                + (", ".join(e["name"] for e in _named()) or "(none)"))
     # Checked BEFORE the channel is resolved, and the refusal names no channel
     # but the one asked for. Same rule as rule_destructive_guild: reporting what
     # is inside a channel you may not read is itself the leak.
