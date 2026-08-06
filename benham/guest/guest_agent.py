@@ -41,6 +41,7 @@ plumbing gets proven in production before the first capability exists.
 """
 
 import os
+import re
 
 from benham.core import identity
 
@@ -100,6 +101,54 @@ def build_tools():
     return tools
 
 
+# A completed file action, as a reply would word one. Past tense only: "I can
+# delete that" and "want me to save it?" are offers, not claims, and branding
+# an offer a lie would be its own trust bug.
+_DID_IT_RE = re.compile(
+    r"\b(deleted|removed|saved|stored|kept|wrote|written|created|imported|"
+    r"uploaded|attached|sent it|it'?s gone|no longer (?:there|exists))\b",
+    re.IGNORECASE)
+# Phrases that mean the opposite - a refusal or an inability. A reply saying
+# "I can't save that as .bat" contains "save"-adjacent words and is honest.
+_NOT_A_CLAIM_RE = re.compile(
+    r"\b(can'?t|cannot|unable|won'?t|not allowed|refus|isn'?t allowed|"
+    r"couldn'?t|failed|no file|don'?t have|didn'?t)\b", re.IGNORECASE)
+
+
+def _verify_file_claims(reply, tools_ran, user_id, log=None):
+    """Refuse to relay a file action that never happened.
+
+    Found live on Stage 4's first real test. Doom typed "delete snacks.txt";
+    the model answered in five tokens that it was done and called no tool at
+    all. The file was still there. He only caught it because he asked again
+    later - which is the failure mode that matters: a silent lie about a
+    destructive action, believed.
+
+    The same shape as agent._verify_saved_claims, with a weaker instrument.
+    That one checks a PATH ON DISK, which is a hard fact; there is no such
+    fact here, because "deleted" is a claim about an absence. So this checks
+    the one thing that is certain: whether ANY workspace tool ran this turn.
+    If none did, no file changed, full stop - and a reply claiming otherwise
+    is corrected rather than delivered.
+
+    Deliberately narrow. It fires only when zero tools ran, so a turn that
+    called a tool is trusted completely (the result is in the model's context
+    and reporting it is the job). Refusal-shaped replies are skipped, because
+    "I can't save that" is honest and must not be branded a lie.
+    """
+    if not reply or tools_ran:
+        return reply
+    if _NOT_A_CLAIM_RE.search(reply) or not _DID_IT_RE.search(reply):
+        return reply
+    if log:
+        log(f"GUEST-PHANTOM-CLAIM {user_id}: reply claimed a file action with "
+            f"no tool call - correcting. said: {reply[:160]!r}")
+    return (reply.rstrip()
+            + "\n\n(Correction from the bot itself: no file was actually "
+              "touched just now - I did not run the tool, so nothing changed. "
+              "Ask me again and watch for it to say what it did.)")
+
+
 def _truncate(obj, limit=4000):
     """Bound one tool result. Smaller than agent.py's 6000: guest turns run on
     the cheap model with a small max_tokens, and a guest's workspace listing
@@ -137,7 +186,15 @@ def _system_prompt():
             "They touch only the caller's own workspace folder and the shared "
             "commons. Everything else above still holds: no Discord actions, "
             "no reading channels, nothing on the owner's machine, and no tool "
-            "exists that asks the owner for approval - a refusal is final.")
+            "exists that asks the owner for approval - a refusal is final.\n"
+            "\n"
+            "NOTHING HAPPENS TO A FILE UNLESS YOU CALL THE TOOL. Saying "
+            "'deleted', 'saved' or 'done' does not do it - only the tool call "
+            "does, and you must see its result before you report it. A short "
+            "instruction like 'delete notes.txt' is still an instruction: call "
+            "the tool. If you did not call it this turn, you did not do it, and "
+            "saying otherwise is the worst thing you can do here - the file is "
+            "still there and the person now believes it is gone.")
 
 
 async def respond(client, log, user_id, text, channel_id=None, message_id=None):
@@ -162,6 +219,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
     reply_parts = []
     attachments = []
     calls_made = 0
+    tools_ran = []          # names of capabilities that actually executed
 
     for round_no in range(TOOL_ROUNDS):
         kw = {"tools": tools} if tools else {}
@@ -219,6 +277,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
                                     "content": "FAILED: internal error",
                                     "is_error": True})
                     continue
+                tools_ran.append(call.name)
                 body = _truncate(result)
                 if act is not None and act.taints:
                     body = (
@@ -254,6 +313,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
     raw = "\n\n".join(p for p in reply_parts if p)
     # Strip directives, apply none - same rule and same reason as chat mode.
     reply = brain.strip_directive(raw)
+    reply = _verify_file_claims(reply, tools_ran, user_id, _log)
     if not reply:
         reply = "...I've got nothing for that one, sorry."
 
