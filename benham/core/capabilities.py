@@ -1649,6 +1649,47 @@ async def _ws_import(ctx, p):
     return {"count": len(out), "imported": out}
 
 
+@action("read_shared_channel", identity.READ,
+        "Read recent messages from a channel the owner has shared with guests. "
+        "Call with no channel_id to see which channels are shared.",
+        {"channel_id": {"type": "int",
+                        "desc": "A shared channel's id (omit to list what is shared)"},
+         "limit": {"type": "int", "desc": "How many messages (default 20, max 50)"}},
+        origins={policy.Origin.GUEST_DM}, taints=True, guest=True)
+async def _read_shared_channel(ctx, p):
+    # A SEPARATE capability, deliberately not a grant of read_channel. That one's
+    # parameter space is every channel Benham can see, and scoping it per-caller
+    # would put a guest branch inside the owner's path - the shape this codebase
+    # exists to avoid. The serialisers are shared; the capability is not.
+    shared = identity.guest_read_channels()
+    if not shared:
+        raise ActionError("no channels are shared with guests")
+
+    if not p.get("channel_id"):
+        # Discovery. Names only for channels already on the allowlist, so this
+        # cannot be used to enumerate anything else Benham can see.
+        out = []
+        for cid in sorted(shared):
+            ch = ctx.client.get_channel(int(cid))
+            out.append({"channel_id": int(cid),
+                        "name": getattr(ch, "name", None) or "(unavailable)"})
+        return {"count": len(out), "shared_channels": out}
+
+    cid = int(p["channel_id"])
+    # Checked BEFORE the channel is resolved, and the refusal names no channel
+    # but the one asked for. Same rule as rule_destructive_guild: reporting what
+    # is inside a channel you may not read is itself the leak.
+    if cid not in shared:
+        raise ActionError(f"channel {cid} is not shared with guests")
+
+    ch = await ctx.channel(cid)
+    limit = min(max(int(p.get("limit") or 20), 1), 50)
+    msgs = [msg_dict(m) async for m in ch.history(limit=limit)]
+    msgs.reverse()
+    return {"channel": str(ch), "channel_id": ch.id, "count": len(msgs),
+            "messages": msgs}
+
+
 @action("ws_attach", identity.MANAGE,
         "Attach one of your workspace files to my reply, so you receive it as "
         "a Discord upload.",

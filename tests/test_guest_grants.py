@@ -178,9 +178,10 @@ for label, kw in BAD:
 # exactly the six workspace ones; anything beyond that set appearing here means
 # someone flagged a capability without updating the suites that audit the set -
 # which is the drift this check exists to catch.
-check("the guest-flagged capabilities are exactly the Stage 4 six",
+check("the guest-flagged capabilities are exactly the expected set",
       sorted(n for n, a in capabilities.REGISTRY.items() if a.guest),
-      ["ws_attach", "ws_delete", "ws_import", "ws_list", "ws_read", "ws_write"])
+      ["read_shared_channel", "ws_attach", "ws_delete", "ws_import", "ws_list",
+       "ws_read", "ws_write"])
 
 
 # --------------------------------------------------------------------------
