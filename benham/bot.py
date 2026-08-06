@@ -1700,6 +1700,16 @@ async def handle_guest_dm(message):
             else:
                 reply = await asyncio.to_thread(
                     guest.respond, message.author.id, text, log)
+        # Log what Benham SAID, not only what it did. Every other guest line -
+        # the inbound message, the tool calls, the charges - was already here,
+        # and the reply was the one half missing: debugging Stage 4 twice ran
+        # aground on "the model declined, but in what words, and did it decline
+        # or ask a question?" - a distinction only the reply text settles.
+        # inbox.jsonl does not cover it either (it records what the bot SEES).
+        # Truncated hard: this is a debugging aid, not a transcript, and a
+        # guest's whole conversation does not belong in the ops log.
+        log(f"guest reply -> {message.author.id}: {(reply or '(nothing)')[:300]!r}"
+            + (f" [+{len(files)} file(s)]" if files else ""))
         if files:
             await message.channel.send(content=(reply or None)[:1900] if reply
                                        else None, files=files[:10])
