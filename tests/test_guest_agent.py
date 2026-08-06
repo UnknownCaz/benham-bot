@@ -280,6 +280,31 @@ check("nothing was parked for Tyler", confirm.current(), None)
 
 
 # --------------------------------------------------------------------------
+section("A file action the model only CLAIMED is corrected, not relayed")
+
+# Live failure, 2026-08-06: Doom typed "delete snacks.txt"; the model replied
+# that it was done in five tokens, called no tool, and the file was still
+# there. A silent lie about a destructive action, believed - the worst shape
+# this surface has.
+
+reply, api = run_turn([_Resp([_Block(type="text", text="Deleted snacks.txt!")])])
+check("a claim with no tool call is corrected in the reply",
+      "no file was actually touched" in reply, True)
+check("...and the original claim is still visible above it",
+      reply.startswith("Deleted snacks.txt!"), True)
+
+V = guest_agent._verify_file_claims
+check("a turn that really ran the tool is left alone",
+      V("Deleted snacks.txt!", ["ws_delete"], DOOM), "Deleted snacks.txt!")
+for honest in ("I can't save that as a .bat - runnable files aren't allowed.",
+               "I couldn't find a file by that name.",
+               "Want me to delete it?",
+               "I can save that for you if you like."):
+    check(f"honest reply untouched: {honest[:34]!r}", V(honest, [], DOOM), honest)
+check("ordinary chat untouched",
+      V("new york is 18C and cloudy", [], DOOM), "new york is 18C and cloudy")
+
+
 section("Round limit is enforced and priced")
 
 reset_usage()

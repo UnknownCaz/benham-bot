@@ -409,6 +409,10 @@ class _Msg:
         self.guild = None          # a DM
         self.channel = _Channel()
         self.mentions = []
+        # Real Messages always carry these; the guest workspace path reads
+        # both (attachment note + ws_import's source message).
+        self.attachments = []
+        self.id = 999000111
         # Every real Message carries a reference (None when it isn't a reply); the
         # pc.. branch reads it, and an owner message driven through deliver() can
         # reach that branch.

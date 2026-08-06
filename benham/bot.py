@@ -1478,6 +1478,30 @@ def attachment_note(message):
             f"returns, so do not claim they are saved without it.]")
 
 
+def guest_attachment_note(message):
+    """The guest-lane twin of attachment_note, for the same blindfold.
+
+    Found live on Stage 4's first real test: Doom attached a file, said "keep
+    this for me" four times, and the model answered as chat every time -
+    ws_import was in its tool list, but nothing in its context said a file
+    existed, so it never occurred to it to try. The loop hands the model text,
+    not a Message; this line is the difference between an attachment existing
+    and not.
+
+    The differences from the owner note are the point. It names ws_import, not
+    read_attachments. It gives NO channel id (ws_import refuses to take one)
+    and no message id (ws_import already defaults to this very message), so
+    there is nothing here for a crafted filename to redirect. Workspace mode
+    only: telling chat mode about files it can never touch would make that
+    model promise the impossible.
+    """
+    bits = ", ".join(f"{a.filename} ({a.size} bytes)"
+                     for a in getattr(message, "attachments", []))
+    return (f"[Attached to this message: {bits}. Calling ws_import with no "
+            "arguments saves them into your workspace; nothing is saved until "
+            "it runs.]")
+
+
 async def resolve_reply(message):
     """The message this one replies to, or the reason it can't be read.
 
@@ -1630,7 +1654,13 @@ async def handle_guest_dm(message):
     invites them to go find out who can add them.
     """
     text = strip_mention(message)
-    if not text:
+    _atts = getattr(message, "attachments", [])
+    _workspace = str(identity.GUEST.get("mode", "chat")) == "workspace"
+    # A file with no caption is still a message - the owner path learned this
+    # once already (dropping a screenshot and waiting is the classic first test
+    # of "can you see my attachment?"). Only workspace mode can DO anything
+    # with one, so only workspace mode treats a bare attachment as a turn.
+    if not text and not (_workspace and _atts):
         return
 
     decision = guest.check(message.author.id, message.channel.id)
@@ -1647,9 +1677,12 @@ async def handle_guest_dm(message):
     try:
         files = []
         async with message.channel.typing():
-            if str(identity.GUEST.get("mode", "chat")) == "workspace":
+            if _workspace:
                 # On the event loop, not a worker thread: the loop awaits
                 # capabilities.run, which needs the running loop and the client.
+                if _atts:
+                    text = ((text or "(sent a file with no message)")
+                            + "\n" + guest_attachment_note(message))
                 reply, want_attached = await guest_agent.respond(
                     client, log, message.author.id, text, message.channel.id,
                     message.id)
