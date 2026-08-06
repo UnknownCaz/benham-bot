@@ -163,6 +163,31 @@ def guest_read_channels():
     return frozenset(out)
 
 
+def guest_read_channel_names():
+    """Names of the shared channels, for the guest system prompt.
+
+    Read from channels.json, which bot.py rewrites every boot - so a renamed
+    channel corrects itself on the next restart, the same cadence as every
+    other control-plane fact. An id with no known name is simply omitted:
+    naming it "(unknown)" in a prompt would invite the model to describe a
+    channel it cannot see.
+    """
+    ids = guest_read_channels()
+    if not ids:
+        return []
+    try:
+        data = jsonio.read_json(os.path.join(paths.STATE_DIR, "channels.json"),
+                                default=[])
+    except Exception:  # noqa: BLE001 - a prompt hint must never break a turn
+        return []
+    out = []
+    for guild in (data if isinstance(data, list) else []):
+        for ch in guild.get("text_channels", []):
+            if int(ch.get("id", 0)) in ids and ch.get("name"):
+                out.append(str(ch["name"]))
+    return out
+
+
 def guest_capabilities():
     """Capability names control.json grants to guests. Config half of the grant.
 

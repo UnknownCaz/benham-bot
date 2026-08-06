@@ -405,6 +405,25 @@ check("a shared channel reads", out["count"], 1)
 check("...and returns the message text",
       out["messages"][0]["content"], "hello from the beta channel")
 
+out, e = run_rsc({"channel": "benham-beta"})
+check("a shared channel reads BY NAME (ids die at the turn boundary)",
+      out["count"], 1)
+out, e = run_rsc({"channel": "#benham-beta"})
+check("...with or without the hash", out["count"], 1)
+out, e = run_rsc({"channel": "BENHAM-BETA"})
+check("...case-insensitively", out["count"], 1)
+
+# The non-enumeration property, stated as the only test that can prove it: a
+# channel that EXISTS but is not shared must be indistinguishable from one that
+# was never real. If the two answers differed, the difference IS the oracle -
+# ask for a thousand names and learn which servers Benham sits in.
+real_but_private = run_rsc({"channel": "rules-n-shit"})[1]
+pure_fiction = run_rsc({"channel": "channel-that-never-existed"})[1]
+check("a real-but-private channel is refused", real_but_private is not None, True)
+check("...identically to one that never existed (no enumeration oracle)",
+      real_but_private.replace("rules-n-shit", "X")
+      == pure_fiction.replace("channel-that-never-existed", "X"), True)
+
 out, e = run_rsc({"channel_id": SECRET})
 check("a NON-shared channel is refused", e is not None, True)
 check("...and the refusal names no name, no contents, nothing but the id asked for",
