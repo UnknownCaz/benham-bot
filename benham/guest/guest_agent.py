@@ -68,7 +68,7 @@ def _get_client():
     return _client
 
 
-def build_tools():
+def build_tools(user_id=None):
     """Tool schemas for exactly what a guest may reach, plus server-side search.
 
     Compiled from capabilities.guest_grants() - the one computation of the
@@ -98,7 +98,23 @@ def build_tools():
                                        "required": required}})
     if guest.WEB_SEARCH:
         tools.append(shared_tools.web_search_tool(guest.SEARCHES_PER_TURN))
+    if guest.CODE_EXECUTION and _runs_left(user_id) > 0:
+        # Withheld rather than refused when the cap is spent: a tool the model
+        # does not have produces "I can't run code right now" in its own words,
+        # where a tool that always errors produces a retry loop the guest pays
+        # for. The cap is checked per TURN, so a run that pushes past it mid
+        # turn is honoured and settles on the next one - same shape as the
+        # message caps.
+        tools.append(shared_tools.code_execution_tool())
     return tools
+
+
+def _runs_left(user_id):
+    """Code runs this guest has left today. Unknown user = the full cap, since
+    build_tools is also called without one (tests, introspection)."""
+    if user_id is None:
+        return guest.RUNS_PER_DAY
+    return max(0, guest.RUNS_PER_DAY - guest.runs_today(user_id))
 
 
 # A completed file action, as a reply would word one. Past tense only: "I can
@@ -176,7 +192,7 @@ def _system_prompt():
     """
     base = guest._system_prompt()
     grants = capabilities.guest_grants()
-    if not grants:
+    if not grants and not guest.CODE_EXECUTION:
         return base
     lines = "\n".join(f"- {name}: {act.summary}"
                       for name, act in sorted(grants.items()))
@@ -186,6 +202,14 @@ def _system_prompt():
     # is exactly how it ended up telling a guest that a shared channel was not
     # shared. Names only: the ids are the handler's business, and the model
     # never needs one to call the tool.
+    if guest.CODE_EXECUTION:
+        lines += ("\n- code execution: you can run Python and shell commands in a "
+                  "sandboxed container on Anthropic's servers. It has no internet "
+                  "and cannot see the owner's machine, the guest workspace, or "
+                  "anything in Discord - it starts empty every time and is thrown "
+                  "away after. Files you make there do NOT appear in the "
+                  "workspace; paste the output into a ws_write if it should be "
+                  "kept.")
     if "read_shared_channel" in grants:
         names = sorted(identity.guest_read_channel_names())
         lines += ("\n  Channels shared with guests right now: "
@@ -227,7 +251,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
     turns.append({"role": "user", "content": text})
 
     api = _get_client()
-    tools = build_tools()
+    tools = build_tools(user_id)
     system = _system_prompt()
     reply_parts = []
     attachments = []
@@ -252,6 +276,17 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
             guest.charge_search(user_id)   # a searched round counts double
             _log(f"guest search [{user_id}]: " + "; ".join(repr(q) for q in queries))
 
+        # Code execution ran on Anthropic's side during this call - the results
+        # are already in resp. Logged and charged the same way searches are;
+        # the container itself is unreachable from here by design, so there is
+        # nothing to gate, only to record and bill.
+        runs = shared_tools.code_runs(resp) if guest.CODE_EXECUTION else []
+        if runs:
+            guest.log_runs(user_id, runs)
+            guest.charge_run(user_id, len(runs))
+            _log(f"guest code run [{user_id}] x{len(runs)}: "
+                 + "; ".join(r[:80] for r in runs))
+
         part = shared_tools.response_text(resp)
         if part:
             reply_parts.append(part)
@@ -259,6 +294,18 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
         # `tool_use` only - server_tool_use is Anthropic's own search, already
         # executed on their side, never to be looked up in the registry.
         tool_calls = [b for b in resp.content if b.type == "tool_use"]
+
+        # pause_turn: the API stopped a long-running turn part-way (code
+        # execution is the case that produces it) and expects the response
+        # handed straight back to continue. Without this the loop would read it
+        # as "finished", stop, and hand the guest a truncated half-answer with
+        # no sign anything was cut. Costs a round, which the charge below
+        # already counts.
+        if getattr(resp, "stop_reason", None) == "pause_turn" and not tool_calls:
+            turns.append({"role": "assistant",
+                          "content": [b.model_dump() for b in resp.content]})
+            continue
+
         if resp.stop_reason != "tool_use" or not tool_calls:
             break
 
