@@ -25,6 +25,13 @@ Caz can share specific Discord channels with guests - ask "what channels can
 you read?" and I'll tell you which ones. I can only ever read those; every
 other channel, in every server, is off limits and always will be.
 
+## Running code (new)
+I can run Python and shell commands to work things out - calculations, parsing,
+quick scripts. That runs in a throwaway sandbox on Anthropic's servers, not on
+Caz's computer, and it has no internet. It also starts empty every time, so
+anything it makes vanishes when the turn ends - ask me to save the output as a
+note if you want to keep it. There's a daily limit on runs.
+
 ## Limits (so you're not surprised)
 - web lookups and file operations count extra against your daily message
   allowance, and searches are logged - so don't ask me to google anything weird

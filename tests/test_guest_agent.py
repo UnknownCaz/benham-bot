@@ -25,6 +25,7 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -68,6 +69,7 @@ _tmp = tempfile.mkdtemp(prefix="benham-guestagent-test-")
 guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
 guest.USAGE_FILE = os.path.join(_tmp, "guest_usage.json")
 guest.SEARCH_LOG = os.path.join(_tmp, "guest_searches.jsonl")
+guest.RUN_LOG = os.path.join(_tmp, "guest_runs.jsonl")
 guest.COOLDOWN = 0
 
 
@@ -118,6 +120,9 @@ def run_turn(script, text="hi", caps=()):
 def reset_usage():
     from benham.core import jsonio
     jsonio.write_json(guest.USAGE_FILE, {})
+    for f in (guest.SEARCH_LOG, guest.RUN_LOG):
+        if os.path.exists(f):
+            os.remove(f)
 
 
 # --------------------------------------------------------------------------
@@ -172,7 +177,7 @@ reply, _ = run_turn([_Resp([_Block(type="server_tool_use", id="s1",
                                    name="web_search", input={"query": "news"}),
                             _Block(type="text", text="here's the news")])])
 check("search charged one extra message", guest.spent_today(DOOM)[0], 1)
-import json  # noqa: E402
+
 lines = [json.loads(x) for x in open(guest.SEARCH_LOG, encoding="utf-8")]
 check("query logged", lines[-1]["query"], "news")
 check("...tagged role=guest", lines[-1]["role"], "guest")
@@ -280,6 +285,80 @@ check("nothing was parked for Tyler", confirm.current(), None)
 
 
 # --------------------------------------------------------------------------
+section("Code execution: server-side only, logged, charged, capped")
+
+_saved = (guest.CODE_EXECUTION, guest.RUNS_PER_DAY)
+guest.CODE_EXECUTION = True
+guest.RUNS_PER_DAY = 3
+try:
+    set_guest()
+    types_ = [t.get("type") for t in guest_agent.build_tools(DOOM)]
+    check("the code tool is offered when enabled",
+          shared_tools.CODE_EXECUTION_TYPE in types_, True)
+    check("...alongside search, not instead of it",
+          shared_tools.WEB_SEARCH_TYPE in types_, True)
+
+    reset_usage()
+    script = [_Resp([
+        _Block(type="server_tool_use", id="s1", name="bash_code_execution",
+               input={"command": "python -c 'print(6*7)'"}),
+        _Block(type="server_tool_use", id="s2", name="text_editor_code_execution",
+               input={"command": "create", "path": "calc.py"}),
+        _Block(type="text", text="42")])]
+    reply, api = run_turn(script)
+    check("the reply came through", reply, "42")
+    check("both sub-tool calls charged as runs", guest.runs_today(DOOM), 2)
+    check("...and against messages too", guest.spent_today(DOOM)[0], 2)
+    runs = [json.loads(x) for x in open(guest.RUN_LOG, encoding="utf-8")]
+    check("both landed in the run trail", len(runs), 2)
+    check("...with the command, not the file contents",
+          runs[0]["ran"].startswith("bash: python -c"), True)
+
+    check("a code run is NOT logged as a search",
+          os.path.getsize(guest.SEARCH_LOG) if os.path.exists(guest.SEARCH_LOG) else 0,
+          0)
+
+    # Cap: spend the remaining run, then the tool disappears.
+    guest.charge_run(DOOM, 1)
+    check("run cap spent", guest.runs_today(DOOM), 3)
+    check("the tool is withheld rather than left to error",
+          shared_tools.CODE_EXECUTION_TYPE
+          in [t.get("type") for t in guest_agent.build_tools(DOOM)], False)
+    check("...while search survives the run cap",
+          shared_tools.WEB_SEARCH_TYPE
+          in [t.get("type") for t in guest_agent.build_tools(DOOM)], True)
+
+    check("the prompt tells the model the container is isolated",
+          "cannot see the owner's machine" in guest_agent._system_prompt(), True)
+    check("...and that its files do not reach the workspace",
+          "do NOT appear in the workspace" in guest_agent._system_prompt(), True)
+
+    guest.CODE_EXECUTION = False
+    check("disabled -> the tool is gone entirely",
+          shared_tools.CODE_EXECUTION_TYPE
+          in [t.get("type") for t in guest_agent.build_tools(DOOM)], False)
+finally:
+    guest.CODE_EXECUTION, guest.RUNS_PER_DAY = _saved
+    reset_usage()
+
+
+section("pause_turn is continued, not mistaken for a finished answer")
+
+guest.CODE_EXECUTION = True
+try:
+    reset_usage()
+    reply, api = run_turn([
+        _Resp([_Block(type="text", text="working on it")], "pause_turn"),
+        _Resp([_Block(type="text", text="the answer is 42")]),
+    ])
+    check("the loop continued instead of stopping short", api.calls, 2)
+    check("...and both halves reached the guest",
+          reply, "working on it\n\nthe answer is 42")
+finally:
+    guest.CODE_EXECUTION = _saved[0]
+    reset_usage()
+
+
 section("A file action the model only CLAIMED is corrected, not relayed")
 
 # Live failure, 2026-08-06: Doom typed "delete snacks.txt"; the model replied

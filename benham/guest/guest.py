@@ -74,6 +74,10 @@ GLOBAL_CAP = int(_CFG.get("global_daily_cap", 400))
 WEB_SEARCH = bool(_CFG.get("web_search", True))
 SEARCHES_PER_TURN = int(_CFG.get("searches_per_turn", 2))
 TOOL_ROUND_COST = int(_CFG.get("tool_round_cost", 1))
+_CODE = _CFG.get("code_execution") or {}
+CODE_EXECUTION = bool(_CODE.get("enabled", False))
+RUNS_PER_DAY = int(_CODE.get("runs_per_day", 10))
+RUN_LOG = os.path.join(paths.STATE_DIR, "guest_runs.jsonl")
 
 _client = None
 _persona_cache = None
@@ -181,6 +185,58 @@ def charge_search(user_id):
         u["users"][uid] = int(u["users"].get(uid, 0)) + 1
         u["global"] = int(u.get("global", 0)) + 1
         jsonio.write_json(USAGE_FILE, u)
+
+
+def runs_today(user_id):
+    """How many code-execution calls this guest has spent today. Read-only.
+
+    Kept in the same usage file as messages, under its own key, so one date
+    rollover resets both and there is one file to look at when someone asks
+    "what has this person spent".
+    """
+    u = _usage()
+    return int((u.get("runs") or {}).get(str(int(user_id)), 0))
+
+
+def charge_run(user_id, n=1):
+    """Spend N code runs against the daily run cap, and N messages.
+
+    Both, because a run costs Tyler twice over: Anthropic bills container time,
+    and the round that carried it is an API call like any other. Same
+    after-the-fact, never-refuses shape as charge_search - the run already
+    happened, and an honest ledger matters more than a cap held to the letter.
+    """
+    n = int(n)
+    if n <= 0:
+        return
+    with _quota_lock:
+        u = _usage()
+        uid = str(int(user_id))
+        u.setdefault("runs", {})
+        u["runs"][uid] = int(u["runs"].get(uid, 0)) + n
+        u["users"][uid] = int(u["users"].get(uid, 0)) + n
+        u["global"] = int(u.get("global", 0)) + n
+        jsonio.write_json(USAGE_FILE, u)
+
+
+def log_runs(user_id, entries):
+    """Append what the container was asked to do - the run trail.
+
+    Its own file, guest_runs.jsonl, for the same reason searches have one:
+    a moderation pass over code runs should not have to be sifted out of
+    everything else. Same swallow-OSError rule - a full disk costs the log
+    line, not the turn.
+    """
+    import json
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(RUN_LOG, "a", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps({"ts": ts, "user_id": int(user_id),
+                                    "ran": str(e)}) + "\n")
+    except OSError:
+        pass
 
 
 def charge_rounds(user_id, extra_rounds):
