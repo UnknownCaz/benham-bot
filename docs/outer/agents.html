@@ -17,7 +17,7 @@
     <h2 id="three">The three agents (and a half)</h2>
     <table>
       <tr><th>agent</th><th>file</th><th>model</th><th>can reach</th></tr>
-      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all 56 capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
+      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all 57 capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
       <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code> (chat) / <code>guest_agent.py</code> (workspace <span class="badge off">OFF BY DEFAULT</span>)</td><td><code>guest.model</code> (claude-haiku-4-5)</td><td>chat mode: <em>no client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only. Workspace mode adds exactly the granted <code>ws_*</code> capabilities.</td></tr>
       <tr><td><strong>PC session</strong> — the machine itself</td><td><code>codesession.py</code></td><td>the real Claude Code CLI (your subscription or API key per <code>pc.use_api_key</code>)</td><td>your actual PC, with your own Claude Code skills loaded — reads free, changes ask first</td></tr>
       <tr><td><strong>Voice brain</strong> (the half)</td><td><code>brain.py</code></td><td>Anthropic API, only when <code>BENHAM_AUTO_REPLY=1</code></td><td>answering wake-word utterances by voice; gated to <code>auto_reply_guilds</code>, no tools</td></tr>

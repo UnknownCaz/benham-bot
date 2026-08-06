@@ -34,9 +34,9 @@
     The tray icon menu can also turn guest chat OFF entirely (panic button) — it deliberately
     cannot turn it back ON; that stays a hand-edit to <code>control.json</code>.</p>
 
-    <h2 id="flip">Workspace flip <span class="badge off">CODE SHIPPED · OFF</span></h2>
-    <p>Stage 4 of the <a href="../index.html">guest refactor</a>: guests get files. The code is
-    in; nothing is granted until you flip it. The procedure, in order:</p>
+    <h2 id="flip">Workspace flip <span class="badge shipped">LIVE</span></h2>
+    <p>Stage 4 of the <a href="../index.html">guest refactor</a>: guests get files. Live since
+    6 Aug 2026 with all six granted. The procedure, for reference or for re-doing it:</p>
     <ol>
       <li>Set <code>guest.mode: "workspace"</code> with <code>capabilities: []</code> and soak it
       a while — behaves exactly like chat, proves the plumbing.</li>
@@ -49,6 +49,24 @@
     <p>What they get: <code>guest_work/&lt;their_id&gt;/</code> each (20MB, 100 files, flat names,
     nothing runnable) plus read-only <code>guest_work/commons/</code> that you fill by hand —
     drop files in anytime, no restart needed, files are read live.</p>
+
+    <h2 id="shared-channels">Shared channels <span class="badge off">CODE SHIPPED · OFF</span></h2>
+    <p>Stage 5: guests can read Discord channels <em>you</em> list, through
+    <code>read_shared_channel</code> — a separate capability, never a grant of the owner's
+    <code>read_channel</code>. <strong>Two independent switches, both yours</strong>, and either
+    one empty means nothing is readable:</p>
+    <ol>
+      <li>Grant <code>read_shared_channel</code> in <code>guest.capabilities</code>.</li>
+      <li>List channel ids in <code>guest.read_channels</code>.</li>
+    </ol>
+    <p>Guests can ask what's shared and get back only the ids already on the list — the
+    capability refuses anything else <em>before</em> it resolves the channel, so it cannot be
+    used to discover what other channels exist, and a refusal names nothing but the id that
+    was asked for.</p>
+    <p class="stub-note"><strong>Listing a channel publishes it.</strong> Everything in it, past and
+    future, becomes readable on demand by every guest on the allowlist — and the people posting
+    there won't know. Testing Server channels are the safe choice; a friend-server channel is a
+    consent question before it is a config one.</p>
 
     <h2 id="caps">Caps &amp; spend</h2>
     <table>

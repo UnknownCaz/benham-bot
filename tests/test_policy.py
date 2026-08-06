@@ -263,7 +263,8 @@ for name in sorted(capabilities.REGISTRY):
 # guest DM ONLY, so the OWNER's routes cannot reach them - which correctly lands
 # them in this set too.
 EXPECTED_RESTRICTED = {"pc_task", "ws_list", "ws_read", "ws_write",
-                       "ws_delete", "ws_import", "ws_attach"}
+                       "ws_delete", "ws_import", "ws_attach",
+                       "read_shared_channel"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,

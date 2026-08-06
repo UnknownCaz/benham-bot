@@ -20,6 +20,11 @@ Caz set you up with DM access to me. You can just message me here whenever.
 - caps: 20MB and 100 files each, nothing executable (.exe/.bat and friends
   are refused - send scripts as .txt), plain filenames only
 
+## Shared channels (new)
+Caz can share specific Discord channels with guests - ask "what channels can
+you read?" and I'll tell you which ones. I can only ever read those; every
+other channel, in every server, is off limits and always will be.
+
 ## Limits (so you're not surprised)
 - web lookups and file operations count extra against your daily message
   allowance, and searches are logged - so don't ask me to google anything weird

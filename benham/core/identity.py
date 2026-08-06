@@ -146,6 +146,23 @@ def guest_config():
     return dict(GUEST)
 
 
+def guest_read_channels():
+    """Channel ids guests may read, from guest.read_channels. (Stage 5.)
+
+    Empty unless set, which is the whole safety of the feature: the capability
+    can be granted in guest.capabilities and still reach nothing, because this
+    list is a second, separate decision. Treat adding an id here as publishing
+    that channel's contents - past and future - to every guest on the list.
+    """
+    out = set()
+    for c in (GUEST.get("read_channels") or []):
+        try:
+            out.add(int(c))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(out)
+
+
 def guest_capabilities():
     """Capability names control.json grants to guests. Config half of the grant.
 

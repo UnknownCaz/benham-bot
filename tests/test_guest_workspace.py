@@ -291,7 +291,8 @@ check("a deleted file stops verifying", ws.verify_outgoing(DOOM, good), None)
 # --------------------------------------------------------------------------
 section("Registry: the six, exactly, with exactly the guest shape")
 
-WS = {"ws_list", "ws_read", "ws_write", "ws_delete", "ws_import", "ws_attach"}
+WS = {"ws_list", "ws_read", "ws_write", "ws_delete", "ws_import", "ws_attach",
+      "read_shared_channel"}
 flagged = {n for n, a in capabilities.REGISTRY.items() if a.guest}
 check("the guest-flagged capabilities are exactly the six", flagged, WS)
 for n in sorted(WS):
@@ -304,7 +305,7 @@ for n in sorted(WS):
 identity.GUEST = {"enabled": True, "mode": "workspace", "ids": [DOOM],
                   "capabilities": sorted(WS)}
 identity.GUEST_IDS = {DOOM}
-check("granting all six in config grants exactly six",
+check("granting them all in config grants exactly them",
       set(capabilities.guest_grants()), WS)
 gctx = policy.CallContext.guest_dm(DOOM, 111)
 check("caller rules allow a granted ws capability",
@@ -317,6 +318,107 @@ check("the owner still cannot reach it",
       "origin_allowed")
 check("pc_task is still unreachable beside them",
       policy.authorize(capabilities.REGISTRY["pc_task"], gctx).allowed, False)
+
+
+# --------------------------------------------------------------------------
+section("read_shared_channel: two decisions, and the refusal names nothing")
+
+SHARED = 1531594114099970121      # Testing #benham-beta
+# A channel Benham CAN see and a guest must never read: Chillbar's rules
+# channel. Deliberately a real id from a real friend server - the case this
+# capability exists to refuse is not a made-up number.
+SECRET = 1491485791661330576
+
+
+class _RCMsg:
+    def __init__(self, text):
+        import datetime
+        self.id = 5
+        self.created_at = datetime.datetime(2026, 8, 6)
+        self.author = type("A", (), {"id": 1, "__str__": lambda s: "someone"})()
+        self.content = text
+        self.channel = type("C", (), {"id": SHARED})()
+        self.attachments, self.embeds, self.reactions = [], [], []
+        self.pinned, self.reference = False, None
+
+
+class _RCChan:
+    id = SHARED
+    name = "benham-beta"
+
+    def history(self, limit=None):
+        class _It:
+            def __aiter__(s):
+                return s
+
+            def __anext__(s):
+                if not hasattr(s, "done"):
+                    s.done = True
+                    async def _v():
+                        return _RCMsg("hello from the beta channel")
+                    return _v()
+                raise StopAsyncIteration
+        # history() must be an async iterator of messages
+        class _Real:
+            def __aiter__(s):
+                s.sent = False
+                return s
+
+            async def __anext__(s):
+                if s.sent:
+                    raise StopAsyncIteration
+                s.sent = True
+                return _RCMsg("hello from the beta channel")
+        return _Real()
+
+    def __str__(self):
+        return "benham-beta"
+
+
+class _RCClient:
+    def get_channel(self, cid):
+        return _RCChan() if int(cid) == SHARED else None
+
+
+def run_rsc(params, shared=(SHARED,)):
+    identity.GUEST = {"enabled": True, "mode": "workspace", "ids": [DOOM],
+                      "capabilities": ["read_shared_channel"],
+                      "read_channels": list(shared)}
+    identity.GUEST_IDS = {DOOM}
+    ctx = capabilities.Ctx(_RCClient(), lambda *_: None, actor_id=DOOM)
+    h = capabilities.REGISTRY["read_shared_channel"].handler
+    try:
+        return asyncio.run(h(ctx, params)), None
+    except capabilities.ActionError as e:
+        return None, str(e)
+
+
+out, e = run_rsc({}, shared=())
+check("no shared channels -> nothing to read", "no channels are shared" in (e or ""), True)
+
+out, e = run_rsc({})
+check("discovery lists only shared channels",
+      [c["channel_id"] for c in out["shared_channels"]], [SHARED])
+
+out, e = run_rsc({"channel_id": SHARED, "limit": 5})
+check("a shared channel reads", out["count"], 1)
+check("...and returns the message text",
+      out["messages"][0]["content"], "hello from the beta channel")
+
+out, e = run_rsc({"channel_id": SECRET})
+check("a NON-shared channel is refused", e is not None, True)
+check("...and the refusal names no name, no contents, nothing but the id asked for",
+      e, f"channel {SECRET} is not shared with guests")
+
+check("read_channel (the owner's) is still unreachable by a guest",
+      policy.authorize(capabilities.REGISTRY["read_channel"],
+                       policy.CallContext.guest_dm(DOOM, 111)).allowed, False)
+
+identity.GUEST = {"enabled": True, "mode": "workspace", "ids": [DOOM],
+                  "capabilities": sorted(WS)}
+identity.GUEST_IDS = {DOOM}
+check("granted but with an empty channel list, it reaches nothing",
+      run_rsc({"channel_id": SHARED}, shared=())[1] is not None, True)
 
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
 sys.exit(1 if _fails else 0)
