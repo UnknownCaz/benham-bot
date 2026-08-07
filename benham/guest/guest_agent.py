@@ -180,7 +180,7 @@ def _truncate(obj, limit=4000):
     return s[:limit] + f"\n... [truncated, {len(s)} chars total]"
 
 
-def _system_prompt():
+def _system_prompt(user_id=None):
     """guest_persona.md plus, when grants exist, the truth about them.
 
     The persona file says the guest path has no tools, which stays true for
@@ -202,7 +202,24 @@ def _system_prompt():
     # is exactly how it ended up telling a guest that a shared channel was not
     # shared. Names only: the ids are the handler's business, and the model
     # never needs one to call the tool.
-    if guest.CODE_EXECUTION:
+    if guest.CODE_EXECUTION and _runs_left(user_id) <= 0:
+        # The cap is spent, so build_tools withheld the tool - and a model that
+        # simply lacks a tool does not know it ever had one. Found live: Doom
+        # hit the cap and asked for the 100460th prime; instead of saying it
+        # could not run code, Benham answered 1,299,709 from memory. The real
+        # answer is 1,306,181. Confidently wrong, with nothing to tell him
+        # apart from the two correct answers either side of it. Withholding the
+        # tool was right; leaving the model unaware of WHY is what produced a
+        # guess dressed as a computation.
+        lines += ("\n- code execution: NOT AVAILABLE for the rest of today - this "
+                  "guest has used their daily runs. If they ask you to run, "
+                  "compute or calculate something, say plainly that you are out "
+                  "of code runs until tomorrow. Do NOT work the answer out "
+                  "yourself and present it as if you had run it: a wrong number "
+                  "delivered confidently is worse than no number. Saying a "
+                  "well-known fact you genuinely know is fine, but say that is "
+                  "what you are doing.")
+    elif guest.CODE_EXECUTION:
         lines += ("\n- code execution: you can run Python and shell commands in a "
                   "sandboxed container on Anthropic's servers. It has no internet "
                   "and cannot see the owner's machine, the guest workspace, or "
@@ -252,7 +269,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
 
     api = _get_client()
     tools = build_tools(user_id)
-    system = _system_prompt()
+    system = _system_prompt(user_id)
     reply_parts = []
     attachments = []
     calls_made = 0
