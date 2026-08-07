@@ -328,10 +328,24 @@ try:
           shared_tools.WEB_SEARCH_TYPE
           in [t.get("type") for t in guest_agent.build_tools(DOOM)], True)
 
+    # A guest with runs left - DOOM has spent his by this point in the file.
+    FRESH = 999000999000999000
     check("the prompt tells the model the container is isolated",
-          "cannot see the owner's machine" in guest_agent._system_prompt(), True)
+          "cannot see the owner's machine" in guest_agent._system_prompt(FRESH), True)
     check("...and that its files do not reach the workspace",
-          "do NOT appear in the workspace" in guest_agent._system_prompt(), True)
+          "do NOT appear in the workspace" in guest_agent._system_prompt(FRESH), True)
+
+    # Live 2026-08-07: with the cap spent the tool is withheld, and a model
+    # that simply lacks a tool has no idea it ever had one - so Benham answered
+    # "the 100460th prime is 1,299,709" from memory. It is 1,306,181. The cap
+    # held perfectly; the model just narrated a guess as a computation.
+    spent = guest_agent._system_prompt(DOOM)
+    check("cap spent: the prompt says code execution is NOT AVAILABLE",
+          "NOT AVAILABLE for the rest of today" in spent, True)
+    check("...and forbids working the answer out instead",
+          "Do NOT work the answer out yourself" in spent, True)
+    check("...while a guest WITH runs left sees the normal blurb",
+          "NOT AVAILABLE" in guest_agent._system_prompt(FRESH), False)
 
     guest.CODE_EXECUTION = False
     check("disabled -> the tool is gone entirely",
