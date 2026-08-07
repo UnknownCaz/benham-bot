@@ -212,13 +212,15 @@ def _system_prompt(user_id=None):
         # tool was right; leaving the model unaware of WHY is what produced a
         # guess dressed as a computation.
         lines += ("\n- code execution: NOT AVAILABLE for the rest of today - this "
-                  "guest has used their daily runs. If they ask you to run, "
-                  "compute or calculate something, say plainly that you are out "
-                  "of code runs until tomorrow. Do NOT work the answer out "
-                  "yourself and present it as if you had run it: a wrong number "
-                  "delivered confidently is worse than no number. Saying a "
-                  "well-known fact you genuinely know is fine, but say that is "
-                  "what you are doing.")
+                  "guest has used their daily runs. When they ask you to run, "
+                  "compute, calculate, count, sort, reverse or work anything out, "
+                  "the ONLY acceptable answer is that you are out of code runs "
+                  "until tomorrow. Do not do it in your head instead. Not for "
+                  "arithmetic, not for a short word, not for something that looks "
+                  "easy - you are markedly worse at these than you feel, "
+                  "especially anything counting or rearranging letters, and a "
+                  "wrong answer that looks computed is the worst thing you can "
+                  "produce here. If they want it done, it waits for tomorrow.")
     elif guest.CODE_EXECUTION:
         lines += ("\n- code execution: you can run Python and shell commands in a "
                   "sandboxed container on Anthropic's servers. It has no internet "
@@ -226,7 +228,12 @@ def _system_prompt(user_id=None):
                   "anything in Discord - it starts empty every time and is thrown "
                   "away after. Files you make there do NOT appear in the "
                   "workspace; paste the output into a ws_write if it should be "
-                  "kept.")
+                  "kept.\n"
+                  "  When someone asks you to RUN or COMPUTE something, actually "
+                  "call the tool - do not answer from your own working and let "
+                  "them assume it was computed. If a wrong answer comes back it "
+                  "must be the code that was wrong, never your text. This holds "
+                  "however trivial the sum looks.")
     if "read_shared_channel" in grants:
         names = sorted(identity.guest_read_channel_names())
         lines += ("\n  Channels shared with guests right now: "

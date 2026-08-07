@@ -342,8 +342,21 @@ try:
     spent = guest_agent._system_prompt(DOOM)
     check("cap spent: the prompt says code execution is NOT AVAILABLE",
           "NOT AVAILABLE for the rest of today" in spent, True)
-    check("...and forbids working the answer out instead",
-          "Do NOT work the answer out yourself" in spent, True)
+    check("...and leaves no room to do it in its head instead",
+          "Do not do it in your head instead" in spent, True)
+    # The first version of this fix let it answer "a well-known fact you
+    # genuinely know". Thirty seconds after shipping, it used that clause to
+    # reverse "benham" as "mahben" (it is "mahneb") and sort its letters as
+    # "abehmnm" (it is "abehmn") - character work being exactly where a model's
+    # sense of what it knows is least reliable. Tyler's rule: a wrong answer is
+    # only acceptable from code that ran, never from text generation.
+    check("...with no escape hatch for things it thinks it knows",
+          "well-known fact" in spent, False)
+    check("...and it is told letter-counting is where it is worst",
+          "rearranging letters" in spent, True)
+    check("runs available: told to actually call the tool, not substitute",
+          "do not answer from your own working" in guest_agent._system_prompt(FRESH),
+          True)
     check("...while a guest WITH runs left sees the normal blurb",
           "NOT AVAILABLE" in guest_agent._system_prompt(FRESH), False)
 
