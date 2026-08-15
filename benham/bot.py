@@ -934,6 +934,9 @@ async def server_status(interaction: discord.Interaction, server: str):
     who = ""
     if d.get("status") == 1:
         who = f" — {players.get('count', 0)}/{players.get('max', '?')} online"
+        names = players.get("list") or []
+        if names:
+            who += ": " + ", ".join(f"`{n}`" for n in sorted(names, key=str.lower))
     await interaction.followup.send(f"**{d.get('name', _server_label(server))}**: {st}{who}")
 
 
@@ -1653,6 +1656,17 @@ async def handle_guest_dm(message):
     list is not: telling a stranger that an allowlist exists and they are not on it
     invites them to go find out who can add them.
     """
+    # Outreach quiet: while Claude is talking to this person through the dm
+    # pipeline, the brain stays out of the conversation entirely. Silence, not
+    # a refusal message - the human IS being answered, just not by this code
+    # path. The message already hit inbox.jsonl in on_message, which is where
+    # the outreach watcher reads it.
+    _quiet_until = guest.quiet_until(message.author.id)
+    if _quiet_until:
+        log(f"guest quiet: brain sitting out {message.author} "
+            f"({message.author.id}), {int(_quiet_until - time.time())}s left")
+        return
+
     text = strip_mention(message)
     _atts = getattr(message, "attachments", [])
     _workspace = str(identity.GUEST.get("mode", "chat")) == "workspace"
