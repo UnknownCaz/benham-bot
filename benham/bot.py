@@ -55,6 +55,7 @@ from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.guest import guest_agent
 from benham.guest import guest_workspace
+from benham.core import ideas
 from benham.core import identity
 from benham.core import jsonio
 from benham.core import policy
@@ -1656,6 +1657,24 @@ async def handle_guest_dm(message):
     list is not: telling a stranger that an allowlist exists and they are not on it
     invites them to go find out who can add them.
     """
+    # `idea..` filing - checked BEFORE the outreach quiet on purpose: an idea
+    # filed mid-conversation should still bank (Claude sees it live through the
+    # inbox watch; the DM ping reaches Tyler either way). Never routed through
+    # the brain: filing is deterministic, free, and doesn't spend guest quota.
+    _idea = ideas.extract(message.content)
+    if _idea is not None:
+        ok, reply = ideas.file_idea(message.author.id, message.author.name, _idea)
+        log(f"guest idea from {message.author} ({message.author.id}) "
+            f"{'FILED' if ok else 'refused'}: {_idea[:150]!r}")
+        await reply_in(message.channel, reply)
+        if ok:
+            try:
+                await ask_owner_dm(f"💡 idea from {message.author.name}: {_idea}")
+            except Exception as e:  # noqa: BLE001 - the filing already succeeded
+                log(f"guest idea: owner DM ping failed ({e}) - idea is safe in "
+                    "guest_ideas.jsonl, sweep will surface it")
+        return
+
     # Outreach quiet: while Claude is talking to this person through the dm
     # pipeline, the brain stays out of the conversation entirely. Silence, not
     # a refusal message - the human IS being answered, just not by this code
