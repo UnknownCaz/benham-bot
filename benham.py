@@ -45,6 +45,7 @@ COMMANDS = {
     "watch_pc":     ("benham.cli.watch_pc",     "watch, live, what Benham is doing on the PC"),
     "webhook":      ("benham.cli.webhook",      "post via a saved webhook / manage webhooks"),
     "guest":        ("benham.guest.guest",      "guest chat admin: status | forget <user_id> | forget-all"),
+    "ideas":        ("benham.cli.ideas",        "guest ideas inbox: new since sweep | --all | --sweep"),
 }
 
 
