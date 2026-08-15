@@ -83,6 +83,55 @@ _client = None
 _persona_cache = None
 _last_call = {}          # user_id -> monotonic timestamp of last accepted message
 
+# --------------------------------------------------------------------------
+# Outreach quiet: a temporary mute of the guest brain for one user, so that
+# while Claude is holding a real conversation with someone through Benham
+# (discord-outreach), the autonomous brain does not talk over it - two Claudes
+# answering in one DM confuses the human and bills two API calls per turn.
+#
+# Deliberately IN-MEMORY with a deadline, not a config flag: control.json is
+# read once at import (see identity.guest_enabled) and quiet is a
+# per-conversation state, not an identity question. The TTL is the safety
+# property - a session that crashes mid-outreach cannot leave someone
+# permanently unable to talk to Benham, because the mute expires on its own.
+# A bot restart clears it for the same reason, and that is fine.
+# --------------------------------------------------------------------------
+
+QUIET_DEFAULT_MINUTES = 60
+QUIET_MAX_MINUTES = 240
+
+_quiet = {}              # user_id -> time.time() deadline
+_quiet_lock = threading.Lock()
+
+
+def quiet(user_id, minutes=QUIET_DEFAULT_MINUTES):
+    """Silence the guest brain for this user; returns the epoch deadline."""
+    minutes = max(1, min(int(minutes), QUIET_MAX_MINUTES))
+    until = time.time() + minutes * 60
+    with _quiet_lock:
+        _quiet[int(user_id)] = until
+    return until
+
+
+def wake(user_id):
+    """Lift a quiet early. Returns True if one was actually in effect."""
+    with _quiet_lock:
+        return _quiet.pop(int(user_id), None) is not None
+
+
+def quiet_until(user_id):
+    """The active quiet deadline for this user, or None. Prunes on read, so an
+    expired entry can never linger and shadow a later is-quiet question."""
+    now = time.time()
+    with _quiet_lock:
+        until = _quiet.get(int(user_id))
+        if until is None:
+            return None
+        if until <= now:
+            del _quiet[int(user_id)]
+            return None
+        return until
+
 
 def _key(user_id):
     """Conversation key. Namespaced as well as separately filed - belt and braces,

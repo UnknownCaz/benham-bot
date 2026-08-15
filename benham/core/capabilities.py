@@ -1470,6 +1470,42 @@ async def _set_presence(ctx, p):
             "activity": f"{kind} {p.get('activity_name')}" if activity else None}
 
 
+@action("guest_quiet", identity.MANAGE,
+        "Temporarily silence the guest brain for one user, so Claude can hold an "
+        "outreach conversation through the dm pipeline without the autonomous brain "
+        "talking over it. The mute expires on its own (default 60 min, max 240); the "
+        "user's messages still reach inbox.jsonl, they just get no brain reply. Not "
+        "outward in the registry's sense: nothing is posted and nobody's access "
+        "changes - the person is being answered, by Claude instead of the brain.",
+        {"user_id": {"type": "int", "required": True, "desc": "Guest to quiet"},
+         "minutes": {"type": "int", "desc": "How long (default 60, max 240)"}})
+async def _guest_quiet(ctx, p):
+    # Imported here, not at module top: guest.py sits above this file's import
+    # position in bot.py's order, and a top-level import would be the first
+    # capabilities -> guest edge - one refactor away from a cycle.
+    from benham.guest import guest as guest_mod
+    uid = int(p["user_id"])
+    if not guest_mod.is_known_guest(uid):
+        # Quieting a stranger would "work" (a no-op mute nobody consults), which
+        # is exactly how a typo'd id looks like success. Refuse instead.
+        raise ActionError(f"user {uid} is not an enabled guest - nothing to quiet")
+    minutes = int(p.get("minutes") or guest_mod.QUIET_DEFAULT_MINUTES)
+    until = guest_mod.quiet(uid, minutes)
+    return {"status": "quieted", "user_id": uid,
+            "minutes": max(1, min(minutes, guest_mod.QUIET_MAX_MINUTES)),
+            "quiet_until": datetime.fromtimestamp(until, timezone.utc).isoformat()}
+
+
+@action("guest_wake", identity.MANAGE,
+        "Lift a guest_quiet early - the guest brain resumes replying to that user.",
+        {"user_id": {"type": "int", "required": True, "desc": "Guest to unmute"}})
+async def _guest_wake(ctx, p):
+    from benham.guest import guest as guest_mod
+    uid = int(p["user_id"])
+    was_quiet = guest_mod.wake(uid)
+    return {"status": "woken" if was_quiet else "was_not_quiet", "user_id": uid}
+
+
 @action("set_bot_nickname", identity.MANAGE, "Change Benham's own nickname in a server.",
         {"guild_id": {"type": "int", "required": True},
          "nickname": {"type": "str", "desc": "Blank resets to 'Benham'"}}, needs_guild=True, taints=True)
