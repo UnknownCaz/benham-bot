@@ -287,8 +287,16 @@ who the counterparty is.
    applies to Tyler too.
 9. **Conversations with a collaborator** (the loop that never closes, §3.5). Project inference:
    Benham works out which project a report belongs to. No syntax for the collaborator to learn —
-   that is why `idea..` works. The four beats — filed / started / fixed / declined — delivered
-   without Tyler doing anything. Silence must never be the message.
+   that is why `idea..` works.
+
+   **Beats: terminal states only** (revised 2026-08-16 after asking Doom — see §6). *Fixed* and
+   *declined/not-a-bug* are delivered without Tyler doing anything. **No "someone is looking at
+   it" ping** — the only participant explicitly does not want progress updates. Silence must
+   never be the message, but *progress* is not the message either. This is also the cheaper
+   build: "started" was the beat needing something to detect that work had begun.
+
+   **No visible backlog.** The reporter needs to know the report is tracked, not to be able to
+   read the list. The existing intake ack already satisfies this.
 10. **Conversations with Tyler** (the reverse channel, §3.2). Sessions register themselves so
     Benham can deliver into a **running** session and route the reply back — Benham-spawned,
     self-started, and scheduled/background. Not cloud. This retires `discord-outreach` Rule 1
@@ -373,3 +381,46 @@ All from Tyler, 2026-08-16.
   crashing. Nothing else in the tree is outstanding — the persona/prompt edits landed in
   `6832db2`, and `whitelist-usernames.txt` is now ignored rather than committed (it tables four
   friends' Discord ids and ends in a question to Tyler).
+
+---
+
+## 6. What the participant actually said
+
+Asked 2026-08-16 via the `discord-outreach` flow, because stage 3 is built entirely around one
+person and nobody had ever asked him. He answered every question in under two minutes; the whole
+exchange took five.
+
+**Q: What did you picture happening when you filed those reports?**
+> "looking for it to be put in a list"
+
+His model is *an item entering a backlog*, not *a message reaching Tyler*. On follow-up — does he
+want to see that list?
+> "knowing that its getting tracked"
+
+**No visible backlog is needed.** The intake ack already does this job. An idea neither Tyler nor
+Claude had questioned died here before it was built.
+
+**Q: Does hearing back matter, and at which beat?**
+> "sorta i kinda want to know when it gets solved"
+
+Only the terminal beat. On follow-up — is a wont-fix or not-a-bug worth hearing?
+> "ild like the secod thing where youll tell me if its a wont-fix or a not a bug"
+
+**This contradicted decision #12** (all four beats: filed / started / fixed / declined). The rule
+that satisfies both: **terminal states are reported, intermediate states are not.** *Fixed* and
+*declined* both answer "is this over?"; *started* is progress, and progress is precisely what he
+did not ask for.
+
+**Q: Anything you have not reported because it felt like too much hassle?**
+> "not really"
+
+**Intake is not the problem.** `idea..` is doing its job — the failure is entirely downstream, in
+everything that was supposed to happen after the ack. That closes off the hidden-friction theory
+and concentrates all of stage 3 on the return path.
+
+### The finding behind the findings
+
+Every answer moved the design in the same direction: **less than was planned.** Four beats became
+two, and a backlog view was cancelled. The one person the feature exists for wanted a smaller
+feature than either its owner or its builder had specified — which is an argument for asking the
+participant before the build, not after it.
