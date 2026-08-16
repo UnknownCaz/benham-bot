@@ -222,73 +222,12 @@ async def main():
                                   guild=testing))
     check("un-addressed owner message ignored too", len(agent_calls), 0)
 
-    print("\nVoice: a stranger says the wake word")
-    reset()
-    spoke = []
-    shortcuts = []
-    # Registered with the REGISTRY, not just patched onto bot. Voice speech now
-    # reaches the speaker through capabilities.run, so stubbing bot.speak_in_channel
-    # alone would leave this measuring a function nothing calls - the same shape of
-    # mistake the whole policy refactor exists to prevent.
-    async def _record_speech(ch, t):
-        spoke.append(t)
-    bot.speak_in_channel = _record_speech
-    capabilities.set_voice_speaker(_record_speech)
-    bot.stop_listening = lambda g: shortcuts.append("stop") or asyncio.sleep(0)
-    bot.reset_overrides = lambda: shortcuts.append("persona_reset") or True
-    brain_calls = []
-    bot.brain.respond = lambda conv: (brain_calls.append(conv) or ("hi", None))
-    vc = _Channel(777, "voice")
-    vc.guild = testing
-    bot.client.channels[777] = vc
+    # The voice section that stood here (wake words, AUTO_REPLY gating, speech through
+    # the chokepoint, the continuous-conversation window) went with voice on 2026-08-16.
+    # See archive/voice/. Its finding survives the feature: the owner gate has to sit
+    # ABOVE the free local shortcuts too, not merely above the API call, because a
+    # shortcut is cheap without being harmless - "go to sleep" disconnected the bot.
 
-    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER, "benham what's up")
-    check("stranger got no spoken reply", len(spoke), 0)
-    check("stranger did not reach the brain", len(brain_calls), 0)
-
-    # The local shortcuts are free of API cost but not free of consequence, so the
-    # gate has to sit above them too - not merely above the API call.
-    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER, "benham go to sleep")
-    check("stranger cannot disconnect Benham", "stop" in shortcuts, False)
-    await bot.handle_auto_reply(testing, vc, "stranger", STRANGER,
-                                "benham reset your personality")
-    check("stranger cannot reset the personality", "persona_reset" in shortcuts, False)
-
-    print("\nVoice: Tyler says the wake word")
-    reset()
-    spoke.clear(); brain_calls.clear()
-    # A shortcut phrase answers locally and never calls the API - that is the point
-    # of the shortcuts, so assert the free path stays free.
-    await bot.handle_auto_reply(testing, vc, "caz6666", TYLER, "benham you there")
-    check("Tyler gets a local reply", len(spoke) >= 1, True)
-    check("...with no API call", len(brain_calls), 0)
-
-    spoke.clear(); brain_calls.clear()
-    await bot.handle_auto_reply(testing, vc, "caz6666", TYLER,
-                                "benham what do you make of this modpack")
-    check("Tyler's real question DID reach the brain", len(brain_calls), 1)
-
-    print("\nVoice: speech itself now passes the chokepoint")
-    # OWNER_VOICE was a declared origin with no production caller until now: voice
-    # was the one outward action that never reached policy. Its owner gate was
-    # sound, but it was sound because handle_auto_reply remembered to check - the
-    # arrangement this refactor exists to eliminate.
-    spoke.clear()
-    await bot.say(vc, "hello from Tyler", TYLER)
-    check("Tyler's speech reaches the speaker", len(spoke), 1)
-    spoke.clear()
-    await bot.say(vc, "hello from a stranger", STRANGER)
-    check("a stranger's speech is refused by policy itself", len(spoke), 0)
-    check("speak_in_voice is a registered capability",
-          "speak_in_voice" in capabilities.REGISTRY, True)
-    check("...and is marked outward", capabilities.REGISTRY["speak_in_voice"].outward, True)
-
-    print("\nVoice: the continuous-conversation window is keyed on user id")
-    bot._convo_until.clear(); bot._convo_speaker.clear()
-    bot._open_convo(TESTING, TYLER)
-    check("Tyler's window is open", bot.convo_active(TESTING, TYLER), True)
-    check("a stranger cannot ride Tyler's open window",
-          bot.convo_active(TESTING, STRANGER), False)
 
     print("\nThe pc.. prefix - zero API calls is the entire point")
     reset()

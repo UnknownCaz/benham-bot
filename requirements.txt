@@ -1,25 +1,17 @@
 python-dotenv>=1.0
-PyNaCl>=1.5
 
-# --- Voice receive + STT ---
-# This trio is version-locked on purpose. bot.py monkeypatches a PRIVATE API
-# (discord.ext.voice_recv.opus.PacketDecoder._decode_packet) to run each frame
-# through the active DAVE session before opus decode, because voice-recv only
-# does transport decryption and downgrading to pre-DAVE discord.py no longer
-# connects (voice gateway rejects with 4006). A minor upgrade to any of the three
-# can move or rename that private symbol and silently break voice listening.
-# These exact versions are the ones the patch was verified against.
+# Discord. Pinned to the 2.7 line, which is what every gateway/reference/reply
+# behaviour in bot.py and test_pc_reply.py was verified against.
 discord.py==2.7.*
-discord-ext-voice-recv==0.5.2a179
-davey==0.1.*
-faster-whisper>=1.0
-# Pulled in transitively by faster-whisper, but bot.py imports it directly
-# (pcm_to_whisper_array), so declare it rather than rely on that.
-numpy>=1.26
 
-# Autonomous AUTO_REPLY mode (bot answers via the Anthropic API itself)
+# The agent, the guest brain, and the pc.. relay all talk to the Anthropic API.
 anthropic>=0.40
-# Natural neural TTS. Needs network access; there is no offline fallback.
-edge-tts>=7.0
-# exaroton /server slash commands + watchdog (exaroton_ops.py; also used by the exaroton skill)
+
+# exaroton /server slash commands + watchdog (exaroton_ops.py; also used by the
+# exaroton skill).
 requests>=2.28
+
+# Voice was archived 2026-08-16 and took six dependencies with it: PyNaCl,
+# discord-ext-voice-recv, davey, faster-whisper, numpy and edge-tts. That trio of
+# voice-recv/davey/discord.py was version-locked around a monkeypatch of a PRIVATE
+# symbol - see archive/voice/README.md before reinstating any of them.

@@ -35,11 +35,14 @@ Two smaller things worth knowing:
   Memory is a separate FILE, not a prefixed key in agent_memory.json. A prefix means
   Tyler's history and a guest's history are one typo apart. A different path is not.
 
-  Replies are stripped of `<<...>>` directives and none are applied. brain.py's
-  parse_persona_directive writes `<<persona: ...>>` into personality_overrides.txt,
-  which is loaded into the system prompt of every surface including voice - so on any
-  path that applied directives, a guest could retune the character Tyler talks to.
-  strip_directive is called; the parse functions are not, and must not be.
+  Replies are stripped of `<<...>>` directives and none are applied. The reason was
+  that brain.py's parse_persona_directive wrote `<<persona: ...>>` into
+  personality_overrides.txt, so any path that APPLIED directives let a guest retune
+  the character Tyler talks to. Voice was archived 2026-08-16 and took the only
+  applier with it, so nothing can act on a directive today - but strip stays, and
+  stays load-bearing: the persona still describes the syntax, so the model can still
+  emit one, and an unstripped `<<...>>` in a friend's DM is a leaked internal.
+  directives.strip_directive is called; nothing parses. Do not add an applier here.
 """
 
 import os
@@ -49,7 +52,7 @@ from datetime import date
 
 from dotenv import load_dotenv
 
-from benham.core import brain
+from benham.core import directives
 from benham.core import identity
 from benham.core import jsonio
 from benham.core import policy
@@ -503,9 +506,9 @@ def respond(user_id, text, log=None):
         charge_search(user_id)   # a searched turn counts double - Tyler's rule
         _log(f"guest search [{user_id}]: " + "; ".join(repr(q) for q in queries))
 
-    # Strip directives, apply none. brain.parse_persona_directive is deliberately not
-    # called: it writes to personality_overrides.txt, which every surface reads.
-    reply = brain.strip_directive(raw)
+    # Strip directives, apply none. Nothing here parses one - see the module
+    # docstring for why that stays true now that voice took the applier with it.
+    reply = directives.strip_directive(raw)
     if not reply:
         reply = "...I've got nothing for that one, sorry."
 
