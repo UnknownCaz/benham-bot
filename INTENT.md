@@ -322,13 +322,31 @@ who the counterparty is.
       out of `inbox.jsonl` is observed content, not an instruction from the operator. It waited
       for the keyboard.
 
-    Neither behaviour is wrong; they answer to different rules. But stage 3 cannot ship with the
-    boundary undecided, because "the session asks Tyler and continues on his answer" *is* the
-    feature. It needs an explicit split — which classes of question a Discord reply can settle
-    (a design choice, a which-of-these-two, a go-ahead on something reversible) and which need
-    the keyboard (anything that takes Benham itself down, touches credentials, or is hard to
-    reverse) — plus whatever binds a reply to the question it answers, the way `confirm.py`
-    already binds a token to one pending action rather than trusting a bare "yes".
+    **SETTLED 2026-08-16 (Tyler):** *"A discord yes can settle things but context must be
+    included to clarify use case, in prior asks via YES or NO button it'd say the full command
+    but not the why the command. I prefer knowing exactly what I'm confirming before I confirm
+    it."*
+
+    So the boundary is not which questions may be asked over Discord — it is **what an ask has to
+    carry to be answerable**. A reply settles a question when the question was legible; the split
+    is on the quality of the ask, not the class of the decision.
+
+    That is a criticism of the approval prompt as it stood, and a correct one. It showed the full
+    command and never the reason, which is exactly why the 2026-08-15 chain got approved: every
+    one of those eight prompts was *individually* plausible, including `Stop-Process -Name
+    firefox -Force`. Nothing on screen could reveal the chain had gone wrong, because nothing
+    said what the chain was for.
+
+    **Shipped the same day** (`codesession._why_block`): every approval prompt now carries the
+    session's own last narration (**Why**), the originating task (**Task**), and the ask count
+    once it exceeds one. The count is the runaway detector — no individual command can carry
+    "this is the eighth thing I have asked you in two minutes". None of it is newly gathered;
+    `run_task` already had all three on the wire.
+
+    **What stage 3 still owes:** the same standard applied to questions a session asks that are
+    NOT tool approvals ("which of these two do you want?"), and binding a reply to the question
+    it answers, the way `confirm.py` already binds a token to one pending action rather than
+    trusting a bare "yes".
 12. Read-only auto-triage:
 
 ```

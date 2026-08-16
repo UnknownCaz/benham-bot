@@ -72,6 +72,21 @@ _client = None
 _log = None
 _ask_owner = None            # async fn(prompt_text) -> None, set by bot.py
 _pending = {}                # request_id -> asyncio.Future[bool]
+
+# What the CURRENT task is doing, so an approval prompt can say WHY, not only
+# WHAT. Tyler's requirement, 2026-08-16: "context must be included to clarify use
+# case ... I prefer knowing exactly what I'm confirming before I confirm it."
+#
+# The 2026-08-15 Gmail run is the case for it. Eight prompts in two minutes, each
+# individually plausible - including `Stop-Process -Name firefox -Force`, which
+# reads fine until you know the session was brute-forcing its way to Gmail because
+# it could not find a mail API. No single prompt could reveal that the CHAIN had
+# gone wrong, because none of them said what the chain was for.
+#
+# Every field here is already produced by run_task; none of it is newly gathered.
+# `asks` is the runaway detector: "request 8 for this task" is the signal no
+# individual command can carry.
+_task_ctx = {"task": None, "narration": None, "asks": 0}
 _seq = [0]
 
 
@@ -118,6 +133,30 @@ def _describe(tool_name, tool_input):
         return f"kill a running shell (`{inp.get('shell_id', '?')}`)"
     detail = ", ".join(f"{k}={str(v)[:80]}" for k, v in list(inp.items())[:3])
     return f"use **{tool_name}**" + (f" ({detail})" if detail else "")
+
+
+def _why_block():
+    """The context under an approval prompt: why this step, and how many so far.
+
+    Ordered why-then-what-for on purpose. The session's own last words are the most
+    useful thing on the screen - they are the step being justified - and the task is
+    the frame it has to fit inside. A step that reads sensibly but does not serve
+    the task is exactly the failure this exists to make visible.
+
+    The count is last and unadorned. It says nothing on ask 1 and everything on
+    ask 8.
+    """
+    lines = []
+    narration = (_task_ctx.get("narration") or "").strip()
+    if narration:
+        lines.append(f"**Why:** {' '.join(narration.split())[:400]}")
+    task = (_task_ctx.get("task") or "").strip()
+    if task:
+        lines.append(f"**Task:** {' '.join(task.split())[:220]}")
+    asks = int(_task_ctx.get("asks") or 0)
+    if asks > 1:
+        lines.append(f"_Request {asks} for this task._")
+    return ("\n" + "\n".join(lines)) if lines else ""
 
 
 def _progress_label(block):
@@ -182,13 +221,19 @@ async def _can_use_tool(tool_name, tool_input, context):
     _pending[rid] = fut
 
     what = _describe(tool_name, tool_input)
-    log(f"PC-PERMISSION-ASK [{rid}] {tool_name}: {str(tool_input)[:300]}")
+    _task_ctx["asks"] += 1
+    log(f"PC-PERMISSION-ASK [{rid}] {tool_name} (ask #{_task_ctx['asks']}): "
+        f"{str(tool_input)[:300]}")
     try:
         # The request id rides along so the prompt can carry Approve/Deny buttons
         # that resolve THIS request. The buttons and the typed reply both land in
         # answer(), which is idempotent - first decision wins, the rest no-op.
         await _ask_owner(
-            f"**Benham wants to {what}**\n\n"
+            # No bold around {what}: _describe already bolds the tool name and may
+            # return a fenced code block, and wrapping a fence in ** leaves a stray
+            # pair of asterisks hanging off the end on mobile.
+            f"Benham wants to {what}\n"
+            f"{_why_block()}\n"
             f"Tap a button, or reply **yes** / **no**. "
             f"(expires in {PERMISSION_TIMEOUT // 60}m)",
             rid,
@@ -326,6 +371,7 @@ async def run_task(prompt, on_progress=None):
                 "and restart me.")
 
     parts, tools_used = [], []
+    _task_ctx.update(task=str(prompt), narration=None, asks=0)
     async with ClaudeSDKClient(options=_options()) as session:
         await session.query(prompt)
         async for msg in session.receive_response():
@@ -333,6 +379,11 @@ async def run_task(prompt, on_progress=None):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         parts.append(block.text.strip())
+                        # Kept for the NEXT approval prompt: the session explaining
+                        # itself, in its own words, immediately before it asks to do
+                        # something. That is the "why", and it costs nothing - it is
+                        # already on the wire.
+                        _task_ctx["narration"] = block.text.strip()
                         # The session's own narration between steps. Reported as
                         # progress too, because "what is it thinking" is most of
                         # what makes a long task bearable to wait through - the
