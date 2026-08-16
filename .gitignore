@@ -62,3 +62,8 @@ guest_work/
 # Bot-written voice defaults (was mistakenly tracked until the src reorg;
 # it lives in state/ now, with the rest of what the bot mutates).
 voice_settings.json
+
+# Scratch answers written to the repo root by a session (whitelist-usernames.txt
+# tables friends' Discord ids + usernames, and ends in a question to Tyler).
+# Same privacy class as read_full*/stats.tsv above: real people, private servers.
+whitelist-usernames.txt
