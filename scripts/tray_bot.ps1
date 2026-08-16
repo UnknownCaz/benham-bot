@@ -203,6 +203,59 @@ $script:DmSeen = Get-DmCount
 # the supervisor is off. Cleared whenever the supervisor is seen running again.
 $script:StoppedByTray = $false
 
+# --- viewer theme ---------------------------------------------------------
+# The inbox and supervise.log windows: neutral charcoal, deliberately NOT the
+# menu's plum - long reads want a quiet terminal, not a brand statement. One
+# accent color per line, everything else stays in the cream/grey family.
+# Fonts are built once here instead of per-AppendText like the old renderers.
+
+Add-Type -Namespace Benham -Name Dark -MemberDefinition @'
+[DllImport("dwmapi.dll")]
+public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+[DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+public static extern int SetWindowTheme(IntPtr hWnd, string appName, string subIdList);
+'@
+
+$VwBack = [System.Drawing.Color]::FromArgb(30, 30, 30)      # window + text bg
+$VwBar = [System.Drawing.Color]::FromArgb(38, 38, 38)       # bottom button bar
+$VwBtn = [System.Drawing.Color]::FromArgb(45, 45, 45)       # button face
+$VwEdge = [System.Drawing.Color]::FromArgb(58, 58, 58)      # button border
+$VwText = [System.Drawing.Color]::FromArgb(214, 210, 204)   # body cream
+$VwMuted = [System.Drawing.Color]::FromArgb(138, 134, 128)  # timestamps, self
+$VwBand = [System.Drawing.Color]::FromArgb(45, 42, 40)      # day-header band
+$VwHeader = [System.Drawing.Color]::FromArgb(232, 201, 168) # day-header text
+$VwOrange = [System.Drawing.Color]::FromArgb(221, 122, 47)  # DM tag
+$VwTeal = [System.Drawing.Color]::FromArgb(93, 202, 165)    # guild tag
+$VwRed = [System.Drawing.Color]::FromArgb(226, 75, 74)      # log errors
+$VwGreen = [System.Drawing.Color]::FromArgb(151, 196, 89)   # log starts
+
+$VwFontMeta = New-Object System.Drawing.Font('Consolas', 10)
+$VwFontBody = New-Object System.Drawing.Font('Segoe UI', 10.5)
+$VwFontBodyBold = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
+$VwFontHeader = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$VwFontSpacer = New-Object System.Drawing.Font('Segoe UI', 4)
+
+function Set-DarkChrome($form, $rtb) {
+    # Win11 niceties: dark title bar (DWM attribute 20) and dark scrollbars on
+    # the text control. Both fail harmlessly on older builds.
+    try {
+        $v = 1
+        [Benham.Dark]::DwmSetWindowAttribute($form.Handle, 20, [ref]$v, 4) | Out-Null
+        [Benham.Dark]::SetWindowTheme($rtb.Handle, 'DarkMode_Explorer', $null) | Out-Null
+    } catch {}
+}
+
+function New-ViewerButton($text, $action) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $text
+    $b.FlatStyle = 'Flat'
+    $b.FlatAppearance.BorderColor = $VwEdge
+    $b.BackColor = $VwBtn
+    $b.ForeColor = $VwText
+    $b.add_Click($action)
+    return $b
+}
+
 # --- inbox viewer ---------------------------------------------------------
 # A read-only window over inbox.jsonl: one line of JSON per message, rendered as
 # a conversation instead of raw JSON. Reads the file fresh on open and on
@@ -214,7 +267,12 @@ $script:InboxDmOnly = $false
 function Render-Inbox([System.Windows.Forms.RichTextBox]$rtb) {
     $inbox = Join-Path $Dir 'state\inbox.jsonl'
     $rtb.Clear()
+    # A small gutter so text does not hug the window edge.
+    $rtb.SelectionIndent = 10
+    $rtb.SelectionRightIndent = 10
     if (-not (Test-Path $inbox)) {
+        $rtb.SelectionColor = $VwMuted
+        $rtb.SelectionFont = $VwFontBody
         $rtb.AppendText("No inbox.jsonl yet - the bot logs incoming messages there once it sees one.")
         return
     }
@@ -230,44 +288,60 @@ function Render-Inbox([System.Windows.Forms.RichTextBox]$rtb) {
 
         if ($ts -and $ts.ToString('yyyy-MM-dd') -ne $lastDay) {
             $lastDay = $ts.ToString('yyyy-MM-dd')
-            $rtb.SelectionColor = [System.Drawing.Color]::Gray
-            $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-            $rtb.AppendText("--- $($ts.ToString('ddd yyyy-MM-dd')) ---`n")
+            # Day band: a padded highlight row the eye can find mid-scroll.
+            $rtb.SelectionFont = $VwFontSpacer
+            $rtb.AppendText("`n")
+            $rtb.SelectionBackColor = $VwBand
+            $rtb.SelectionColor = $VwHeader
+            $rtb.SelectionFont = $VwFontHeader
+            $rtb.AppendText("  $($ts.ToString('ddd  yyyy-MM-dd'))  ")
+            $rtb.SelectionBackColor = $VwBack
+            $rtb.SelectionFont = $VwFontSpacer
+            $rtb.AppendText("`n`n")
         }
 
-        $rtb.SelectionColor = [System.Drawing.Color]::Gray
-        $rtb.SelectionFont = New-Object System.Drawing.Font('Consolas', 9)
+        $rtb.SelectionBackColor = $VwBack
+        $rtb.SelectionColor = $VwMuted
+        $rtb.SelectionFont = $VwFontMeta
         $when = if ($ts) { $ts.ToString('HH:mm') } else { '??:??' }
         $rtb.AppendText("$when  ")
 
-        # Where: DMs stand out in orange, guild channels in teal.
+        # Where: one accent per line - DMs orange, guild channels teal. The
+        # channel field is "Direct Message with <user>", which names the
+        # counterpart - exactly what a DM line needs, since author alone is
+        # ambiguous when it's Benham doing the sending.
         if ($null -eq $m.guild) {
-            $rtb.SelectionColor = [System.Drawing.Color]::DarkOrange
-            # The channel field is "Direct Message with <user>", which names the
-            # counterpart - exactly what a DM line needs, since author alone is
-            # ambiguous when it's Benham doing the sending.
+            $rtb.SelectionColor = $VwOrange
             $who = "$($m.channel)" -replace '^Direct Message with ', ''
-            $rtb.AppendText("[DM w/ $who] ")
+            $rtb.AppendText("DM $who  ")
         } else {
-            $rtb.SelectionColor = [System.Drawing.Color]::Teal
-            $rtb.AppendText("[$($m.guild) #$($m.channel)] ")
+            $rtb.SelectionColor = $VwTeal
+            $rtb.AppendText("$($m.guild) #$($m.channel)  ")
         }
 
         # Who: Benham's own messages dim so the humans pop.
-        if ($m.is_self) {
-            $rtb.SelectionColor = [System.Drawing.Color]::DarkGray
-        } else {
-            $rtb.SelectionColor = [System.Drawing.Color]::Black
-        }
-        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
-        $rtb.AppendText("$($m.author): ")
+        if ($m.is_self) { $authorColor = $VwMuted } else { $authorColor = $VwText }
+        $rtb.SelectionColor = $authorColor
+        $rtb.SelectionFont = $VwFontBodyBold
+        $rtb.AppendText("$($m.author)  ")
 
-        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5)
-        $content = if ([string]::IsNullOrEmpty($m.content)) { '(no text - attachment/embed only)' } else { $m.content }
-        if ([string]::IsNullOrEmpty($m.content)) { $rtb.SelectionColor = [System.Drawing.Color]::Gray }
-        $rtb.AppendText("$content`n")
+        $rtb.SelectionFont = $VwFontBody
+        if ([string]::IsNullOrEmpty($m.content)) {
+            $rtb.SelectionColor = $VwMuted
+            $rtb.AppendText("(no text - attachment/embed only)`n")
+        } else {
+            $rtb.SelectionColor = $authorColor
+            $rtb.AppendText("$($m.content)`n")
+        }
+        # Breathing room between messages.
+        $rtb.SelectionFont = $VwFontSpacer
+        $rtb.AppendText("`n")
     }
-    if ($rtb.TextLength -eq 0) { $rtb.AppendText('inbox.jsonl is empty.') }
+    if ($rtb.TextLength -eq 0) {
+        $rtb.SelectionColor = $VwMuted
+        $rtb.SelectionFont = $VwFontBody
+        $rtb.AppendText('inbox.jsonl is empty.')
+    }
     $rtb.SelectionStart = $rtb.TextLength
     $rtb.ScrollToCaret()
     # Opening (or refreshing) the viewer is what "read" means here - clear the badge.
@@ -284,44 +358,42 @@ function Show-InboxWindow {
     }
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Benham inbox (last 300 messages)'
-    $form.Size = New-Object System.Drawing.Size(820, 560)
+    $form.Size = New-Object System.Drawing.Size(860, 600)
     $form.StartPosition = 'CenterScreen'
+    $form.BackColor = $VwBack
 
     $rtb = New-Object System.Windows.Forms.RichTextBox
     $rtb.Name = 'rtb'
     $rtb.ReadOnly = $true
     $rtb.DetectUrls = $false
-    $rtb.BackColor = [System.Drawing.Color]::White
+    $rtb.BackColor = $VwBack
+    $rtb.ForeColor = $VwText
     $rtb.BorderStyle = 'None'
     $rtb.Dock = 'Fill'
 
     $bar = New-Object System.Windows.Forms.FlowLayoutPanel
     $bar.Dock = 'Bottom'
-    $bar.Height = 34
+    $bar.Height = 38
     $bar.FlowDirection = 'RightToLeft'
+    $bar.BackColor = $VwBar
 
     $chkDm = New-Object System.Windows.Forms.CheckBox
     $chkDm.Text = 'DMs only'
+    $chkDm.ForeColor = $VwText
     $chkDm.Checked = [bool]$script:InboxDmOnly
     $chkDm.add_CheckedChanged({
         $script:InboxDmOnly = $this.Checked
         Render-Inbox $script:InboxForm.Controls['rtb']
     })
 
-    $btnRefresh = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text = 'Refresh'
-    $btnRefresh.add_Click({ Render-Inbox $script:InboxForm.Controls['rtb'] })
-    $bar.Controls.Add($btnRefresh)
-
-    $btnRaw = New-Object System.Windows.Forms.Button
-    $btnRaw.Text = 'Open raw file'
-    $btnRaw.add_Click({ Start-Process notepad.exe (Join-Path $Dir 'state\inbox.jsonl') })
-    $bar.Controls.Add($btnRaw)
+    $bar.Controls.Add((New-ViewerButton 'Refresh' { Render-Inbox $script:InboxForm.Controls['rtb'] }))
+    $bar.Controls.Add((New-ViewerButton 'Open raw file' { Start-Process notepad.exe (Join-Path $Dir 'state\inbox.jsonl') }))
     $bar.Controls.Add($chkDm)
 
     $form.Controls.Add($rtb)
     $form.Controls.Add($bar)
     $script:InboxForm = $form
+    Set-DarkChrome $form $rtb
     Render-Inbox $rtb
     $form.Show()
 }
@@ -335,7 +407,11 @@ $script:LogForm = $null
 
 function Render-Log([System.Windows.Forms.RichTextBox]$rtb) {
     $rtb.Clear()
+    $rtb.SelectionIndent = 10
+    $rtb.SelectionRightIndent = 10
     if (-not (Test-Path $Log)) {
+        $rtb.SelectionColor = $VwMuted
+        $rtb.SelectionFont = $VwFontBody
         $rtb.AppendText("No supervise.log yet.")
         return
     }
@@ -344,22 +420,33 @@ function Render-Log([System.Windows.Forms.RichTextBox]$rtb) {
     foreach ($line in $lines) {
         $body = $line
         if ($line -match $reTs) {
-            $rtb.SelectionColor = [System.Drawing.Color]::Gray
-            $rtb.SelectionFont = New-Object System.Drawing.Font('Consolas', 9)
-            $rtb.AppendText("[$($Matches[1])] ")
+            $rtb.SelectionColor = $VwMuted
+            $rtb.SelectionFont = $VwFontMeta
+            $rtb.AppendText("$($Matches[1])  ")
             $body = $Matches[2]
         }
+        # Only trouble and starts get color - routine lines stay cream so the
+        # exceptions are the things that glow. Errors also go bold.
         if ($body -match 'error|fail|exception|traceback|died|locked') {
-            $rtb.SelectionColor = [System.Drawing.Color]::Firebrick
+            $rtb.SelectionColor = $VwRed
+            $rtb.SelectionFont = $VwFontBodyBold
         } elseif ($body -match 'start|restart|logged in|launch') {
-            $rtb.SelectionColor = [System.Drawing.Color]::SeaGreen
+            $rtb.SelectionColor = $VwGreen
+            $rtb.SelectionFont = $VwFontBody
         } else {
-            $rtb.SelectionColor = [System.Drawing.Color]::Black
+            $rtb.SelectionColor = $VwText
+            $rtb.SelectionFont = $VwFontBody
         }
-        $rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9.5)
         $rtb.AppendText("$body`n")
+        # Breathing room between entries.
+        $rtb.SelectionFont = $VwFontSpacer
+        $rtb.AppendText("`n")
     }
-    if ($rtb.TextLength -eq 0) { $rtb.AppendText('supervise.log is empty.') }
+    if ($rtb.TextLength -eq 0) {
+        $rtb.SelectionColor = $VwMuted
+        $rtb.SelectionFont = $VwFontBody
+        $rtb.AppendText('supervise.log is empty.')
+    }
     $rtb.SelectionStart = $rtb.TextLength
     $rtb.ScrollToCaret()
 }
@@ -372,35 +459,32 @@ function Show-LogWindow {
     }
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Benham supervise.log (last 500 lines)'
-    $form.Size = New-Object System.Drawing.Size(820, 560)
+    $form.Size = New-Object System.Drawing.Size(860, 600)
     $form.StartPosition = 'CenterScreen'
+    $form.BackColor = $VwBack
 
     $rtb = New-Object System.Windows.Forms.RichTextBox
     $rtb.Name = 'rtb'
     $rtb.ReadOnly = $true
     $rtb.DetectUrls = $false
-    $rtb.BackColor = [System.Drawing.Color]::White
+    $rtb.BackColor = $VwBack
+    $rtb.ForeColor = $VwText
     $rtb.BorderStyle = 'None'
     $rtb.Dock = 'Fill'
 
     $bar = New-Object System.Windows.Forms.FlowLayoutPanel
     $bar.Dock = 'Bottom'
-    $bar.Height = 34
+    $bar.Height = 38
     $bar.FlowDirection = 'RightToLeft'
+    $bar.BackColor = $VwBar
 
-    $btnRefresh = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text = 'Refresh'
-    $btnRefresh.add_Click({ Render-Log $script:LogForm.Controls['rtb'] })
-    $bar.Controls.Add($btnRefresh)
-
-    $btnRaw = New-Object System.Windows.Forms.Button
-    $btnRaw.Text = 'Open raw file'
-    $btnRaw.add_Click({ Start-Process notepad.exe $Log })
-    $bar.Controls.Add($btnRaw)
+    $bar.Controls.Add((New-ViewerButton 'Refresh' { Render-Log $script:LogForm.Controls['rtb'] }))
+    $bar.Controls.Add((New-ViewerButton 'Open raw file' { Start-Process notepad.exe $Log }))
 
     $form.Controls.Add($rtb)
     $form.Controls.Add($bar)
     $script:LogForm = $form
+    Set-DarkChrome $form $rtb
     Render-Log $rtb
     $form.Show()
 }
@@ -710,6 +794,16 @@ $notify.ShowBalloonTip(4000, "Benham tray",
 
 try {
     [System.Windows.Forms.Application]::Run($appContext)
+} catch {
+    # Crash net: a hidden-window launch gives errors nowhere to go, so write
+    # the full story to a file and say so out loud before dying.
+    $crash = "$(Get-Date -Format o)`n$($_.Exception)`n$($_.InvocationInfo.PositionMessage)`n$($_.ScriptStackTrace)"
+    try { $crash | Set-Content (Join-Path $Dir 'logs\tray-crash.log') -Encoding utf8 } catch {}
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            "The tray crashed - details in logs\tray-crash.log`n`n$($_.Exception.Message)",
+            "Benham tray - crashed", 'OK', 'Error') | Out-Null
+    } catch {}
 } finally {
     $timer.Stop()
     $notify.Visible = $false
