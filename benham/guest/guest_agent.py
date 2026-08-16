@@ -45,7 +45,7 @@ import re
 
 from benham.core import identity
 
-from benham.core import brain
+from benham.core import directives
 from benham.core import capabilities
 from benham.guest import guest
 from benham.core import policy
@@ -400,7 +400,7 @@ async def respond(client, log, user_id, text, channel_id=None, message_id=None):
 
     raw = "\n\n".join(p for p in reply_parts if p)
     # Strip directives, apply none - same rule and same reason as chat mode.
-    reply = brain.strip_directive(raw)
+    reply = directives.strip_directive(raw)
     reply = _verify_file_claims(reply, tools_ran, user_id, _log)
     if not reply:
         reply = "...I've got nothing for that one, sorry."

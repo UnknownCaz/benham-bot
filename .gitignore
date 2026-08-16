@@ -71,3 +71,8 @@ whitelist-usernames.txt
 # The guest-ideas sweep marker: bot-written progress state, same class as
 # everything else in state/, but ".cursor" is matched by none of the rules above.
 *.cursor
+
+# Any .bak of bot state - repair_memory.py writes agent_memory.json.pre-repair.bak,
+# which is Tyler's whole DM history. The *.jsonl.bak rule above did not cover it:
+# ".json.pre-repair.bak" is neither *.jsonl nor *.jsonl.bak. Match the suffix itself.
+*.bak

@@ -49,6 +49,11 @@ class Origin:
 
     OWNER_DM = "owner_dm"        # private DM with the bot
     OWNER_GUILD = "owner_guild"  # @mention in a guild channel
+    # DORMANT since 2026-08-16: voice was archived, so nothing constructs this any
+    # more. Kept rather than deleted because test_policy's matrix asserts exactly
+    # which capabilities each origin may reach, and an origin no capability can be
+    # called from is the strongest possible statement of that - deleting it would
+    # weaken the matrix to save one enum member. See archive/voice/.
     OWNER_VOICE = "owner_voice"  # spoken in a voice channel
     LOCAL_CLI = "local_cli"      # outbox/do.py - the caller already has the machine
     SYSTEM = "system"            # startup, watchdog, scheduled work; no human behind it
@@ -284,9 +289,10 @@ def rule_guest(action, ctx):
 def rule_owner(action, ctx):
     """A request carrying a human actor must carry Tyler.
 
-    Stage 2. The check already existed at the entry points - on_message and
-    handle_auto_reply both refuse a non-owner before anything else happens - and
-    those stay exactly where they are. This is not a replacement for them; it is the
+    Stage 2. The check already existed at the entry points - on_message refuses a
+    non-owner before anything else happens (as did handle_auto_reply, until voice
+    was archived) - and those stay exactly where they are. This is not a
+    replacement for them; it is the
     same rule stated once more at the point where a capability is actually about to
     run, so that a future entry point that forgets the early check still cannot get
     past here.
