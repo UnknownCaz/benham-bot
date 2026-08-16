@@ -90,7 +90,7 @@ check("every registered capability denies a guest", reachable, [])
 # because this file's enable_guests() grants nothing in guest.capabilities -
 # the config half of the grant is missing, which is its own denial
 # (test_guest_grants.py takes that machinery apart properly).
-check("...and that is all 57 of them", len(capabilities.REGISTRY), 57)
+check("...and that is all 50 of them", len(capabilities.REGISTRY), 50)
 
 # Both denials are asserted separately: either alone would secure this, and the
 # point of having two is that a future edit to one is survivable. Since Stage 2
@@ -137,13 +137,15 @@ check("enabled=false disables a listed guest", identity.guest_enabled(), False)
 check("...and may_chat_as_guest refuses them",
       policy.may_chat_as_guest(CallContext.guest_dm(DOOM)).rule, "guest_disabled")
 
-# "workspace" became a real mode in guest-refactor Stage 3, so the
-# unknown-mode check now uses a genuinely unknown word - the property under
-# test (a config from a NEWER build than the code disables rather than
-# guesses) is unchanged.
+# "workspace" was a real mode until it was archived 2026-08-16, and the removal
+# deliberately did NOT leave it in GUEST_MODES. So the interesting case is now
+# the reverse of what it used to be: a control.json still asking for the archived
+# mode must switch guests OFF, not quietly run them through chat - because chat
+# cannot do what that config was written to ask for. Same property as the
+# unknown-mode check below (never guess), tested from the other side.
 enable_guests(mode="workspace")
-check("workspace is a recognised mode now (Stage 3)",
-      identity.guest_enabled(), True)
+check("the archived workspace mode disables guests rather than falling back",
+      identity.guest_enabled(), False)
 enable_guests(mode="hologram")
 check("an unrecognised mode disables rather than guessing",
       identity.guest_enabled(), False)

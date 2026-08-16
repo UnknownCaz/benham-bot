@@ -97,11 +97,14 @@ GUEST_IDS = set(int(u) for u in (GUEST.get("ids") or []))
 # Modes this build knows how to run. An unrecognised mode disables guest chat
 # rather than falling back to one, because the failure being guarded against is a
 # config written for a newer build than the code - where guessing which mode was
-# meant is exactly the wrong instinct. "workspace" arrived with guest-refactor
-# Stage 3: same gate, same quotas, but guest turns run guest_agent.py's tool
-# loop over whatever capabilities.guest_grants() allows (nothing, until Stage 4
-# flags capabilities and control.json lists them).
-GUEST_MODES = frozenset({"chat", "workspace"})
+# meant is exactly the wrong instinct.
+#
+# "workspace" was the second mode: guest turns ran a tool loop over whatever
+# capabilities.guest_grants() allowed. Archived 2026-08-16 (archive/guest-tools/)
+# and deliberately NOT left in this set, so a control.json still saying
+# mode: "workspace" now switches guests OFF instead of quietly running them
+# through a chat path that cannot do what that config asked for.
+GUEST_MODES = frozenset({"chat"})
 
 
 def guest_enabled():
@@ -146,46 +149,8 @@ def guest_config():
     return dict(GUEST)
 
 
-def guest_read_channels():
-    """Channel ids guests may read, from guest.read_channels. (Stage 5.)
-
-    Empty unless set, which is the whole safety of the feature: the capability
-    can be granted in guest.capabilities and still reach nothing, because this
-    list is a second, separate decision. Treat adding an id here as publishing
-    that channel's contents - past and future - to every guest on the list.
-    """
-    out = set()
-    for c in (GUEST.get("read_channels") or []):
-        try:
-            out.add(int(c))
-        except (TypeError, ValueError):
-            continue
-    return frozenset(out)
 
 
-def guest_read_channel_names():
-    """Names of the shared channels, for the guest system prompt.
-
-    Read from channels.json, which bot.py rewrites every boot - so a renamed
-    channel corrects itself on the next restart, the same cadence as every
-    other control-plane fact. An id with no known name is simply omitted:
-    naming it "(unknown)" in a prompt would invite the model to describe a
-    channel it cannot see.
-    """
-    ids = guest_read_channels()
-    if not ids:
-        return []
-    try:
-        data = jsonio.read_json(os.path.join(paths.STATE_DIR, "channels.json"),
-                                default=[])
-    except Exception:  # noqa: BLE001 - a prompt hint must never break a turn
-        return []
-    out = []
-    for guild in (data if isinstance(data, list) else []):
-        for ch in guild.get("text_channels", []):
-            if int(ch.get("id", 0)) in ids and ch.get("name"):
-                out.append(str(ch["name"]))
-    return out
 
 
 def guest_capabilities():

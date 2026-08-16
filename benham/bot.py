@@ -45,8 +45,6 @@ from benham.core import codesession
 from benham.core import confirm
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
-from benham.guest import guest_agent
-from benham.guest import guest_workspace
 from benham.core import ideas
 from benham.core import identity
 from benham.core import jsonio
@@ -450,18 +448,14 @@ async def on_ready():
         # "no tools" was true when guests were pure conversation and became a lie
         # the day server-side search shipped. The distinction that actually holds -
         # and the one the security story rests on - is CLIENT tools: none, ever.
-        # The banner names the mode's actual tool surface: chat mode's absence
-        # of client tools is its security property and worth stating; workspace
-        # mode's property is that its grants are exactly guest_grants(), so the
-        # banner prints them - an unexpectedly non-empty list at boot is the
-        # kind of thing this line exists to make loud.
-        _gmode = str(identity.GUEST.get("mode", "chat"))
-        if _gmode == "workspace":
-            _grants = sorted(capabilities.guest_grants())
-            _surface = "tool grants: " + (", ".join(_grants) if _grants else "NONE")
-        else:
-            _surface = "no client tools"
-        log(f"Guest chat: ON ({guest.MODEL}, mode={_gmode}, DM only, {_surface}"
+        # Since the tool loop was archived (2026-08-16) that is unconditional
+        # again, so the banner states it flatly. guest_grants() is still printed
+        # because it must stay EMPTY: a non-empty list at boot means something
+        # re-declared guest=True, and this line is where that gets noticed.
+        _grants = sorted(capabilities.guest_grants())
+        _surface = ("no client tools" if not _grants
+                    else f"UNEXPECTED GUEST GRANTS: {', '.join(_grants)}")
+        log(f"Guest chat: ON ({guest.MODEL}, DM only, {_surface}"
             f"{', web search on' if guest.WEB_SEARCH else ''}) — "
             f"{sorted(identity.GUEST_IDS) or 'nobody whitelisted'}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
@@ -826,30 +820,6 @@ def attachment_note(message):
             f"returns, so do not claim they are saved without it.]")
 
 
-def guest_attachment_note(message):
-    """The guest-lane twin of attachment_note, for the same blindfold.
-
-    Found live on Stage 4's first real test: Doom attached a file, said "keep
-    this for me" four times, and the model answered as chat every time -
-    ws_import was in its tool list, but nothing in its context said a file
-    existed, so it never occurred to it to try. The loop hands the model text,
-    not a Message; this line is the difference between an attachment existing
-    and not.
-
-    The differences from the owner note are the point. It names ws_import, not
-    read_attachments. It gives NO channel id (ws_import refuses to take one)
-    and no message id (ws_import already defaults to this very message), so
-    there is nothing here for a crafted filename to redirect. Workspace mode
-    only: telling chat mode about files it can never touch would make that
-    model promise the impossible.
-    """
-    bits = ", ".join(f"{a.filename} ({a.size} bytes)"
-                     for a in getattr(message, "attachments", []))
-    return (f"[Attached to this message: {bits}. Calling ws_import with no "
-            "arguments saves them into your workspace; nothing is saved until "
-            "it runs.]")
-
-
 async def resolve_reply(message):
     """The message this one replies to, or the reason it can't be read.
 
@@ -989,12 +959,13 @@ async def handle_guest_dm(message):
     it - the reply target is `message.channel` and there is no code path that
     changes it.
 
-    Two modes share everything but the engine (guest-refactor Stage 3). "chat"
-    is guest.py: a plain conversation, no client tools ever. "workspace" is
-    guest_agent.py: a tool loop over capabilities.guest_grants(), every call of
-    which goes through capabilities.run with a guest context - so what it may do
-    is policy.py's decision, not this function's. The check/refund contract is
-    identical for both, which is what makes the routing a two-line if.
+    One engine: guest.py, a plain conversation with NO client tools, ever. The
+    "workspace" mode that used to sit beside it - a tool loop over
+    capabilities.guest_grants() - was archived 2026-08-16 (see
+    archive/guest-tools/) after fifteen code runs, all of them on the two days it
+    was built, and three files. Guests get conversation, server-side web search
+    and `idea..` filing; nothing here holds a client tool, which is the whole of
+    guest.py's security story rather than a configuration of it.
 
     The refusal wording splits on the rule for a reason. Being over quota is worth
     saying out loud, because the guest can act on it by waiting. Not being on the
@@ -1031,13 +1002,10 @@ async def handle_guest_dm(message):
         return
 
     text = strip_mention(message)
-    _atts = getattr(message, "attachments", [])
-    _workspace = str(identity.GUEST.get("mode", "chat")) == "workspace"
-    # A file with no caption is still a message - the owner path learned this
-    # once already (dropping a screenshot and waiting is the classic first test
-    # of "can you see my attachment?"). Only workspace mode can DO anything
-    # with one, so only workspace mode treats a bare attachment as a turn.
-    if not text and not (_workspace and _atts):
+    # A bare attachment is no longer a turn: nothing on this path can open a
+    # file now that the workspace is archived, so treating one as a message
+    # would spend a guest's quota to answer "I can't do anything with that".
+    if not text:
         return
 
     decision = guest.check(message.author.id, message.channel.id)
@@ -1054,29 +1022,8 @@ async def handle_guest_dm(message):
     try:
         files = []
         async with message.channel.typing():
-            if _workspace:
-                # On the event loop, not a worker thread: the loop awaits
-                # capabilities.run, which needs the running loop and the client.
-                if _atts:
-                    text = ((text or "(sent a file with no message)")
-                            + "\n" + guest_attachment_note(message))
-                reply, want_attached = await guest_agent.respond(
-                    client, log, message.author.id, text, message.channel.id,
-                    message.id)
-                # Check twice: every path the loop hands back is re-verified
-                # against THIS guest's own folder before a byte leaves. A path
-                # that fails verification is dropped and logged, never sent -
-                # a bug upstream should cost an attachment, not ship a file.
-                for p in want_attached:
-                    ok = guest_workspace.verify_outgoing(message.author.id, p)
-                    if ok:
-                        files.append(discord.File(ok))
-                    else:
-                        log(f"GUEST-ATTACH-REFUSED {message.author.id}: {p!r} "
-                            "failed re-verification")
-            else:
-                reply = await asyncio.to_thread(
-                    guest.respond, message.author.id, text, log)
+            reply = await asyncio.to_thread(
+                guest.respond, message.author.id, text, log)
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran
