@@ -43,6 +43,7 @@ from benham.core import agent
 from benham.core import capabilities
 from benham.core import codesession
 from benham.core import confirm
+from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.core import ideas
@@ -488,6 +489,8 @@ async def on_ready():
     dump_channels()
     if not poll_outbox.is_running():
         poll_outbox.start()
+    if not tick_conversations.is_running():
+        tick_conversations.start()
     # Register /server to each command guild. The group is added GLOBALLY (tree.add_command), so we
     # copy globals into each guild and sync that guild — guild-scoped syncs appear instantly, and
     # (unlike the old code, which synced the empty guild scope) this actually registers the commands.
@@ -1298,6 +1301,48 @@ async def on_message(message):
         await send_with_view(channel, confirm.describe(parked), view,
                              reference=message)
     await react(message, "✅")
+
+
+@tasks.loop(seconds=60)
+async def tick_conversations():
+    """Fire the nudges and banks that have come due.
+
+    Stage 3, item 8. This is the loop that makes a conversation close without a
+    session running - the whole point of the primitive. Everything it decides is
+    already decided: conversations.due() reads the clock and the nudge budget and
+    says nudge-or-bank, and this only delivers.
+
+    Runs every 60s against a 15-minute policy, which is deliberately far finer than
+    it needs to be. The cost is one file read a minute; the benefit is that a nudge
+    lands within a minute of being due rather than up to fifteen late.
+
+    SYSTEM origin, and advance_conversation is the only outward action that origin
+    can reach. It cannot choose a recipient or compose a message - both come from a
+    conversation a human opened.
+    """
+    try:
+        pending = conversations.due()
+    except Exception:  # noqa: BLE001 - a bad store must not kill the loop
+        log("conversation tick failed to read the store:\n" + traceback.format_exc())
+        return
+    for conv, what in pending:
+        try:
+            res, _ = await capabilities.run(
+                client, log, "advance_conversation", {"id": conv["id"]},
+                force=True, call_ctx=policy.CallContext.system())
+            log(f"conversation {conv['id']}: {res.get('status')} "
+                f"(counterparty {conv['counterparty']})")
+        except Exception as e:  # noqa: BLE001 - one bad conversation, not all of them
+            # Bank rather than retry forever. A conversation whose counterparty has
+            # blocked DMs would otherwise be attempted every 60 seconds for as long
+            # as the bot runs, and the honest state for "cannot reach them" is the
+            # same as for "they never answered".
+            log(f"conversation {conv['id']} could not be advanced ({e}) - banking it")
+            try:
+                conversations.bank(conv["id"], reason=f"could not deliver: {e}")
+            except Exception:  # noqa: BLE001
+                log(f"conversation {conv['id']} could not even be banked:\n"
+                    + traceback.format_exc())
 
 
 @tasks.loop(seconds=2)

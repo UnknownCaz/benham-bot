@@ -272,7 +272,22 @@ restricted = {n for n, row in matrix.items()
 check("exactly the expected capabilities are origin-restricted",
       restricted, EXPECTED_RESTRICTED)
 
-EXPECTED_SYSTEM = {"set_presence"}
+# The most security-relevant line in this file. SYSTEM is what a timer gets, and a
+# timer has no human to refuse anything - so every name here is a thing the machine
+# may do while nobody is watching.
+#
+#   set_presence         - cosmetic, applied on login by on_ready.
+#   advance_conversation - added for stage 3 item 8, and the ONLY outward action
+#                          SYSTEM can reach. It is safe to grant because it cannot
+#                          CHOOSE anything: it takes a conversation id, and both the
+#                          recipient and the words come from a record a human
+#                          opened. The nudge count is capped in conversations.py and
+#                          the 15-minute clock rate-limits it. Granting dm_user to
+#                          SYSTEM would have been the lazy version and would have
+#                          handed a loop the ability to message anyone anything.
+#
+# A third name appearing here without a deliberate decision is what this asserts on.
+EXPECTED_SYSTEM = {"set_presence", "advance_conversation"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)

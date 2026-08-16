@@ -32,7 +32,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from benham.core import conversations as C
+from benham.core import capabilities, conversations as C, identity, policy
 
 DOOM = 1097631170788851815
 TYLER = 273967061619965952
@@ -177,6 +177,76 @@ def main():
         check("it opens without an injected clock", wall["state"], C.OPEN)
         check("opened_at is a real timestamp", bool(wall["opened_at"]), True)
         check("and a deadline was still set", bool(wall["due_at"]), True)
+        C.forget()
+
+        section("advance_conversation - the beat, driven through the real chokepoint")
+        # Through capabilities.run, not the handler directly. The repo already
+        # learned this the expensive way: a gate that is written but not wired is
+        # indistinguishable, from a test, from one that works.
+        sent = []
+
+        class _DM:
+            def __init__(self, uid):
+                self.uid = uid
+
+            async def send(self, content=None, **kw):
+                sent.append((self.uid, content))
+
+        class _User:
+            def __init__(self, uid):
+                self.id = uid
+                self.dm_channel = _DM(uid)
+
+        class _Client:
+            def get_user(self, uid):
+                return _User(int(uid))
+
+        C.forget()
+        conv = C.open_conversation(DOOM, "check the fix", "does the lore button work?",
+                                   now=NOW)
+
+        async def advance(cid):
+            res, _ = await capabilities.run(
+                _Client(), lambda *a: None, "advance_conversation", {"id": cid},
+                force=True, call_ctx=policy.CallContext.system())
+            return res
+
+        import asyncio
+        r = asyncio.run(advance(conv["id"]))
+        check("a due conversation nudges", r["status"], "nudged")
+        check("the nudge went to the counterparty", sent[-1][0], DOOM)
+        check("...and quotes the question verbatim rather than rephrasing it",
+              "does the lore button work?" in sent[-1][1], True)
+
+        asyncio.run(advance(conv["id"]))          # second nudge
+        sent.clear()
+        r = asyncio.run(advance(conv["id"]))      # budget spent -> bank
+        check("once the budget is spent it banks", r["status"], "banked")
+        check("state on disk agrees", C.get(conv["id"])["state"], C.BANKED)
+        check("the owner is told a collaborator went quiet", r["owner_told"], True)
+        owner_id = sorted(identity.OWNER_IDS)[0]
+        check("...and that report went to the owner", sent[-1][0], owner_id)
+
+        try:
+            asyncio.run(advance(conv["id"]))
+            advanced_dead = True
+        except Exception:
+            advanced_dead = False
+        check("a banked conversation cannot be advanced again", advanced_dead, False)
+
+        section("No third message when the owner is the one who went quiet")
+        C.forget()
+        sent.clear()
+        own = C.open_conversation(owner_id, "which way", "A or B?", now=NOW)
+        asyncio.run(advance(own["id"]))
+        asyncio.run(advance(own["id"]))
+        sent.clear()
+        r = asyncio.run(advance(own["id"]))
+        check("it still banks", r["status"], "banked")
+        # He has had the question twice already; a third message telling him he did
+        # not reply to himself is noise, and the banked question stays readable.
+        check("but he is not told he failed to answer himself", r["owner_told"], False)
+        check("...so nothing was sent", sent, [])
         C.forget()
 
         section("It outlives the process that opened it")

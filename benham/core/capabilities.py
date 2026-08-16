@@ -867,6 +867,62 @@ async def _what_i_did(ctx, p):
     return out
 
 
+@action("advance_conversation", identity.SPEAK,
+        "Move one waiting conversation to its next beat: send the nudge that is "
+        "due, or - once its nudge budget is spent - bank it and tell the owner it "
+        "went unanswered. Takes only a conversation id; the recipient and the words "
+        "both come from the stored record.",
+        {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"}},
+        # SYSTEM, because the whole point of stage 3 is that a loop closes with no
+        # session running. This is the ONLY outward action an automated caller can
+        # reach, and it is safe to grant precisely because it cannot choose anything:
+        # the counterparty and the question come from a conversation a human opened,
+        # the nudge count is capped in conversations.py, and the 15-minute clock
+        # rate-limits it. Granting dm_user to SYSTEM would have been the lazy version
+        # of this and would have handed a timer the ability to message anyone
+        # anything.
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
+        outward=True)
+async def _advance_conversation(ctx, p):
+    from benham.core import conversations
+    conv = conversations.get(str(p["id"]))
+    if conv is None:
+        raise ActionError(f"no conversation {p['id']!r}")
+    if conv.get("state") not in conversations.LIVE_STATES:
+        raise ActionError(f"{conv['id']} is {conv['state']} - nobody is being waited on")
+
+    who = int(conv["counterparty"])
+    user = await ctx.user(who)
+    ch = user.dm_channel or await user.create_dm()
+
+    if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
+        # Quote the question rather than paraphrasing it. A nudge that restates the
+        # ask in new words reads as a second, different question.
+        await ch.send("still after this one when you get a sec:\n\n"
+                      f"> {conv['question']}")
+        conversations.nudge(conv["id"])
+        return {"status": "nudged", "id": conv["id"],
+                "nudges": int(conv["nudges"]) + 1, "counterparty": who}
+
+    conversations.bank(conv["id"])
+    told_owner = False
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    # No report when the owner IS the person who did not answer. He has already had
+    # the question twice; a third message telling him he did not reply to himself is
+    # noise, and the banked question stays readable either way.
+    if who != owner_id:
+        owner = await ctx.user(owner_id)
+        och = owner.dm_channel or await owner.create_dm()
+        await och.send(
+            f"no answer from <@{who}> after {conversations.MAX_NUDGES} nudges - "
+            "banked it.\n\n"
+            f"> {conv['question']}\n\n"
+            f"({conv['id']}, asked for: {conv['purpose']})")
+        told_owner = True
+    return {"status": "banked", "id": conv["id"], "counterparty": who,
+            "owner_told": told_owner}
+
+
 @action("guild_info", identity.READ, "Overview of one server.",
         {"guild_id": {"type": "int", "required": True}},
         taints=True)
