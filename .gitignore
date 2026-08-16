@@ -67,3 +67,7 @@ voice_settings.json
 # tables friends' Discord ids + usernames, and ends in a question to Tyler).
 # Same privacy class as read_full*/stats.tsv above: real people, private servers.
 whitelist-usernames.txt
+
+# The guest-ideas sweep marker: bot-written progress state, same class as
+# everything else in state/, but ".cursor" is matched by none of the rules above.
+*.cursor
