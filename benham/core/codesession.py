@@ -86,7 +86,7 @@ _pending = {}                # request_id -> asyncio.Future[bool]
 # Every field here is already produced by run_task; none of it is newly gathered.
 # `asks` is the runaway detector: "request 8 for this task" is the signal no
 # individual command can carry.
-_task_ctx = {"task": None, "narration": None, "asks": 0}
+_task_ctx = {"task": None, "narration": None, "asks": 0, "last_why": None}
 _seq = [0]
 
 
@@ -147,9 +147,19 @@ def _why_block():
     ask 8.
     """
     lines = []
-    narration = (_task_ctx.get("narration") or "").strip()
+    narration = " ".join((_task_ctx.get("narration") or "").split())[:400]
     if narration:
-        lines.append(f"**Why:** {' '.join(narration.split())[:400]}")
+        # Only when it has CHANGED. A session can fire several tool calls without
+        # narrating between them, and the first version of this repeated the same
+        # 400 characters under four different commands - which is worse than
+        # omitting it, because identical reasoning under changing commands reads as
+        # a claim that they share a reason. Caught in Tyler's first real test.
+        if narration == _task_ctx.get("last_why"):
+            lines.append("**Why:** _same reasoning as the last ask - it has not "
+                         "said anything new since._")
+        else:
+            lines.append(f"**Why:** {narration}")
+            _task_ctx["last_why"] = narration
     task = (_task_ctx.get("task") or "").strip()
     if task:
         lines.append(f"**Task:** {' '.join(task.split())[:220]}")
@@ -347,6 +357,28 @@ on his phone, away from the PC, and is reading your output as chat messages.
   to the same effect - tell him and stop.
 - Your working directory is Benhams-inbox. Put scratch files there rather than
   scattering them across his workspace.
+
+## This machine (so you do not spend his approvals finding out)
+
+Every approval is a phone notification and a wait. Guessing at the environment is
+the most expensive way to learn it, and on 2026-08-16 a single "run the test
+suite" cost him SIX approvals - four of them probing for a Python. So:
+
+- `python` is the right interpreter. It is Python 3.12 and it has the installed
+  packages (discord.py, anthropic, requests).
+- `py -3` and `py -3.x` resolve to a Windows Store Python with NOTHING installed.
+  Never reach for them; a ModuleNotFoundError from one means the launcher, not a
+  missing dependency.
+- **pytest is not installed.** benham-bot's tests are standalone scripts:
+  `python tests/test_policy.py`, one file at a time. Running the lot is a shell
+  loop over `tests/test_*.py`, and `python scripts/gen_readme.py --check` verifies
+  the README's generated blocks.
+- If you do not know something about this machine, READ for it (Read/Glob/Grep are
+  free) or say you do not know. Do not run a command to find out - that is the one
+  case where the shell costs him something and returns nothing he asked for.
+- Plan the whole shell sequence before the first one. Several commands in a row,
+  each discovered by the last, is the pattern that turns one task into six
+  notifications.
 """
 
 
@@ -371,7 +403,7 @@ async def run_task(prompt, on_progress=None):
                 "and restart me.")
 
     parts, tools_used = [], []
-    _task_ctx.update(task=str(prompt), narration=None, asks=0)
+    _task_ctx.update(task=str(prompt), narration=None, asks=0, last_why=None)
     async with ClaudeSDKClient(options=_options()) as session:
         await session.query(prompt)
         async for msg in session.receive_response():
