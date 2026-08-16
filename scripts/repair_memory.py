@@ -30,6 +30,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from benham import paths  # noqa: E402
+from benham.core import agent  # noqa: E402
 
 MEMORY_FILE = os.path.join(paths.STATE_DIR, "agent_memory.json")
 DISPOSABLE = ("test:", "repro", "tokcmp:")
@@ -54,8 +55,11 @@ def main():
         clean = []
         for i in range(0, len(turns) - 1, 2):
             u, a = turns[i], turns[i + 1]
-            if (u.get("role") == "user" and a.get("role") == "assistant"
-                    and u.get("content") == a.get("content")):
+            # agent.is_echo_pair, not a local copy: the first pass of this script
+            # tested equality only and left the multi-round variant (where the
+            # user turn is the TAIL of the assembled reply) sitting in the live
+            # thread, looking repaired.
+            if agent.is_echo_pair(u, a):
                 dropped_pairs += 1
                 continue
             clean += [u, a]

@@ -131,6 +131,30 @@ def _remember(key, user_text, assistant_text):
     jsonio.write_json(MEMORY_FILE, mem)
 
 
+def is_echo_pair(user_turn, assistant_turn):
+    """True if this stored pair is f06b79b damage - Benham's reply as Tyler's message.
+
+    Two shapes, because the reply is assembled and the clobbered variable was not:
+
+    - **Exact.** One round produced text, so `reply` is that single part and the
+      overwritten `text` is the same string. user == assistant.
+    - **Suffix.** Several rounds produced text, so `reply` is
+      `"\\n\\n".join(parts)` while `text` holds only the LAST part. The user turn
+      is then the tail of the assistant turn, and equality misses it entirely -
+      which it did, on the first pass of the repair.
+
+    Matching the join boundary rather than a bare `endswith` is deliberate: a real
+    message can coincidentally end with a short reply ("ok", "yes"), and dropping
+    a genuine exchange to be thorough would be its own corruption.
+    """
+    if not (user_turn.get("role") == "user" and assistant_turn.get("role") == "assistant"):
+        return False
+    u, a = user_turn.get("content"), assistant_turn.get("content")
+    if not isinstance(u, str) or not isinstance(a, str) or not u.strip():
+        return False
+    return a == u or a.endswith("\n\n" + u)
+
+
 def forget(key=None):
     """Drop conversation history (one conversation, or all)."""
     mem = _load_memory()
