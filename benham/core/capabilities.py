@@ -867,6 +867,36 @@ async def _what_i_did(ctx, p):
     return out
 
 
+@action("answer_conversation", identity.MANAGE,
+        "Record that the message you were just sent ANSWERS the open question. Use "
+        "it only when there is an open question and this really does answer it - "
+        "and when you use it, SAY SO in your reply, in your own words. Tyler chose "
+        "this deliberately: a reply to the question binds by itself and needs no "
+        "tool, but anything else is your judgement, and a judgement that is not "
+        "announced is indistinguishable from swallowing what he said. If you are "
+        "unsure, do not call this - ask him whether he meant it as the answer.",
+        {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"},
+         "answer": {"type": "str", "required": True,
+                    "desc": "What he said, as he said it - do not summarise"}},
+        origins={policy.Origin.OWNER_DM, policy.Origin.LOCAL_CLI})
+async def _answer_conversation(ctx, p):
+    from benham.core import conversations
+    conv = conversations.get(str(p["id"]))
+    if conv is None:
+        raise ActionError(f"no conversation {p['id']!r}")
+    if conv.get("state") not in conversations.LIVE_STATES:
+        raise ActionError(f"{conv['id']} is {conv['state']} - it is not waiting on an answer")
+    if int(conv["counterparty"]) != int(ctx.actor_id or 0):
+        # The one open question belongs to whoever was asked. Recording someone
+        # else's answer against it would put words in their mouth on the record.
+        raise ActionError(f"{conv['id']} is waiting on someone else, not you")
+    conversations.answer(conv["id"], str(p["answer"]), bound_by="judged")
+    return {"status": "answered", "id": conv["id"], "bound_by": "judged",
+            "question": conv["question"],
+            "note": "Tell him you took this as the answer - a judged binding that "
+                    "is not announced is the failure mode this exists to avoid."}
+
+
 @action("advance_conversation", identity.SPEAK,
         "Move one waiting conversation to its next beat: send the nudge that is "
         "due, or - once its nudge budget is spent - bank it and tell the owner it "
@@ -898,8 +928,12 @@ async def _advance_conversation(ctx, p):
     if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
         # Quote the question rather than paraphrasing it. A nudge that restates the
         # ask in new words reads as a second, different question.
-        await ch.send("still after this one when you get a sec:\n\n"
-                      f"> {conv['question']}")
+        sent = await ch.send("still after this one when you get a sec:\n\n"
+                             f"> {conv['question']}")
+        # Record the nudge as a thing a reply can bind to. Replying to the message
+        # that just arrived is the most natural way anyone answers, and without this
+        # the certain half of binding would fail exactly then.
+        conversations.record_ask_message(conv["id"], sent.id)
         conversations.nudge(conv["id"])
         return {"status": "nudged", "id": conv["id"],
                 "nudges": int(conv["nudges"]) + 1, "counterparty": who}

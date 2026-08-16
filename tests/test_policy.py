@@ -264,7 +264,13 @@ for name in sorted(capabilities.REGISTRY):
 # owner's own routes could not reach them) were archived 2026-08-16; see
 # archive/guest-tools/. A guest capability reappearing here without a deliberate
 # decision is exactly what this assertion is for.
-EXPECTED_RESTRICTED = {"pc_task"}
+# answer_conversation joins it for stage 3 item 10: {OWNER_DM, LOCAL_CLI}, the same
+# pair as pc_task and for a related reason. It writes words into the record as
+# TYLER'S ANSWER, so it must not be reachable from a room other people can write in
+# - a guild message that talked the model into calling it would be putting words in
+# his mouth on a record other decisions are then made from. SYSTEM is excluded for
+# the sharper version of the same thing: a timer must never answer on his behalf.
+EXPECTED_RESTRICTED = {"pc_task", "answer_conversation"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,

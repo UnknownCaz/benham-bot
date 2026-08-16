@@ -185,12 +185,27 @@ def main():
         # indistinguishable, from a test, from one that works.
         sent = []
 
+        class _Sent:
+            """What discord's channel.send actually returns: a Message with an id.
+
+            The first version of this stub returned None, and advance_conversation
+            reads .id off it to make the nudge repliable - so the stub being looser
+            than the real API hid a real code path. Same class of gap as a test that
+            asserts against a helper instead of the live one.
+            """
+            _next = [7000]
+
+            def __init__(self):
+                self.id = _Sent._next[0]
+                _Sent._next[0] += 1
+
         class _DM:
             def __init__(self, uid):
                 self.uid = uid
 
             async def send(self, content=None, **kw):
                 sent.append((self.uid, content))
+                return _Sent()
 
         class _User:
             def __init__(self, uid):
@@ -217,6 +232,8 @@ def main():
         check("the nudge went to the counterparty", sent[-1][0], DOOM)
         check("...and quotes the question verbatim rather than rephrasing it",
               "does the lore button work?" in sent[-1][1], True)
+        check("the nudge itself becomes repliable",
+              len(C.get(conv["id"])["ask_message_ids"]), 1)
 
         asyncio.run(advance(conv["id"]))          # second nudge
         sent.clear()
@@ -247,6 +264,35 @@ def main():
         # not reply to himself is noise, and the banked question stays readable.
         check("but he is not told he failed to answer himself", r["owner_told"], False)
         check("...so nothing was sent", sent, [])
+        C.forget()
+
+        section("Binding: a reply is certain, everything else is judged")
+        # Tyler's rule, 2026-08-16: "both, reply binds and the model judges and
+        # tells me." The two halves are asserted separately because they are not
+        # equally trustworthy, and the record has to say which one happened.
+        C.forget()
+        conv = C.open_conversation(DOOM, "check the fix", "does the lore button work?",
+                                   now=NOW)
+        C.record_ask_message(conv["id"], 5001)
+        check("the ask message is remembered", C.get(conv["id"])["ask_message_ids"], [5001])
+        check("a reply to it finds the question", C.by_ask_message(5001)["id"], conv["id"])
+        check("a reply to some OTHER message finds nothing - not a fallback",
+              C.by_ask_message(9999), None)
+
+        # A nudge is answerable too. Replying to the message that just arrived is
+        # the most natural way anyone answers.
+        C.record_ask_message(conv["id"], 5002)
+        check("a nudge is bindable as well as the original",
+              C.by_ask_message(5002)["id"], conv["id"])
+
+        C.answer(conv["id"], "yeah works now", bound_by="reply")
+        check("the record says HOW it bound", C.get(conv["id"])["log"][-1]["detail"], "via reply")
+        check("an answered question is no longer bindable", C.by_ask_message(5001), None)
+
+        judged = C.open_conversation(TYLER, "which way", "A or B?", now=NOW)
+        C.answer(judged["id"], "B, and restart the server after", bound_by="judged")
+        check("a judged binding is recorded as judged, not laundered as certain",
+              C.get(judged["id"])["log"][-1]["detail"], "via judged")
         C.forget()
 
         section("It outlives the process that opened it")

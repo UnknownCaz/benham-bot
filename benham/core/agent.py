@@ -239,7 +239,7 @@ def _system_prompt(where, actor_name):
     return static + "\n\n" + volatile
 
 
-def _system_blocks(where, actor_name):
+def _system_blocks(where, actor_name, conversation=None, already_bound=False):
     """Split the prompt into (static, volatile).
 
     The split exists purely so the static half can be cached. Anything that varies
@@ -297,6 +297,30 @@ it deliberately instead.
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     volatile = (f"## Right now\nYou are talking to {actor_name}, who is your owner "
                 f"Tyler (caz6666). Location: {where}. Current time: {now}.")
+
+    # An open question goes in the VOLATILE block, after the cache breakpoint, for
+    # the same reason the clock does: it changes between turns, and putting it above
+    # the breakpoint would bust a ~7.4k-token cached prefix every time a
+    # conversation opened or closed.
+    if conversation:
+        q = str(conversation.get("question", ""))[:600]
+        cid = conversation.get("id")
+        if already_bound:
+            volatile += (
+                f"\n\n## An open question, already answered\n"
+                f"He was being waited on for an answer to `{cid}`:\n> {q}\n"
+                f"He has just REPLIED to it, and that is already recorded - a reply "
+                f"binds by itself. Do NOT call answer_conversation. Just respond to "
+                f"what he actually said.")
+        else:
+            volatile += (
+                f"\n\n## An open question\n"
+                f"He is being waited on for an answer to `{cid}`:\n> {q}\n"
+                f"If his message answers it, call `answer_conversation` with id "
+                f"`{cid}` and his words, and then SAY in your reply that you took it "
+                f"as the answer. If it is unrelated, ignore this section entirely and "
+                f"answer him normally - do not mention the open question, and do not "
+                f"call the tool. If you genuinely cannot tell, ask him which he meant.")
     return static, volatile
 
 
@@ -305,7 +329,8 @@ it deliberately instead.
 # --------------------------------------------------------------------------
 
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
-                  where, conversation_key, call_ctx=None):
+                  where, conversation_key, call_ctx=None, conversation=None,
+                  already_bound=False):
     """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
 
     `reply_text` is what Benham should say. The pending confirmation, if any, has
@@ -336,7 +361,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # Worth contrasting with brain.py, where caching was measured and rejected: the
     # voice prefix sits under the 4096-token minimum and would never have hit. This
     # one clears it comfortably.
-    _static, _volatile = _system_blocks(where, actor_name)
+    _static, _volatile = _system_blocks(where, actor_name, conversation, already_bound)
     system = [
         {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _volatile},   # after the breakpoint, so it stays free to vary

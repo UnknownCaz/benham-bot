@@ -1258,6 +1258,30 @@ async def on_message(message):
     if message.attachments:
         text = (text + "\n\n" + attachment_note(message)).strip()
 
+    # --- binding, the certain half (stage 3 item 10) -------------------------
+    # Tyler's rule: "both, reply binds and the model judges and tells me." This is
+    # the reply half, and it runs BEFORE the model sees anything - a real Discord
+    # message reference pointing at the question is not a judgement call, so no
+    # model is asked to make one. The judged half is answer_conversation, which the
+    # model may call and must announce.
+    #
+    # Deliberately only when the reference points at a message that actually
+    # carried the ask (by_ask_message, which includes nudges). Replying to some
+    # other Benham message is not an answer, and treating it as one would swallow
+    # exactly the thing this design exists to protect.
+    bound_conv = None
+    if is_dm:
+        ref = message.reference
+        ref_id = getattr(ref, "message_id", None) if ref is not None else None
+        if ref_id:
+            hit = conversations.by_ask_message(ref_id)
+            if hit and int(hit["counterparty"]) == message.author.id:
+                conversations.answer(hit["id"], text, bound_by="reply")
+                bound_conv = hit
+                log(f"conversation {hit['id']}: answered by reply "
+                    f"(msg {ref_id}) - {text[:120]!r}")
+                await react(message, "✅")
+
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
     await react(message, "👀")
@@ -1268,7 +1292,15 @@ async def on_message(message):
                 actor_id=message.author.id, actor_name=str(message.author),
                 channel_id=message.channel.id,
                 guild_id=message.guild.id if message.guild else None,
-                where=where, conversation_key=key, call_ctx=call_ctx)
+                where=where, conversation_key=key, call_ctx=call_ctx,
+                # Either the one he was just bound to by replying, or the one still
+                # waiting on him. Looked up here rather than inside agent.py so the
+                # agent stays a model loop that is TOLD things, not one that reaches
+                # into the conversation store on its own.
+                conversation=(bound_conv if bound_conv
+                              else (conversations.live_for(message.author.id)
+                                    if is_dm else None)),
+                already_bound=bool(bound_conv))
     except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
         log(f"agent failed:\n{traceback.format_exc()}")
         await react(message, "⚠️")
