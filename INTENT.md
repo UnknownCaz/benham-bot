@@ -373,14 +373,22 @@ All from Tyler, 2026-08-16.
 | 20 | **Code owns timing, the model owns meaning.** The state machine is code so the loop closes with no session running; judgment stays with the model |
 | 21 | **Participants: Doom only.** The other three whitelisted guests can talk to Benham; guest access is not project participation |
 
-### Open — needs Tyler
-- **The tray restyle is unverified.** `scripts/tray_bot.ps1` carries 151 lines of dark-theme
-  rework (~2026-08-05) and its own crash-hunting harness never produced output —
-  `logs/tray-test.log` does not exist and `logs/tray-run.log` is two bytes containing a Ctrl-C.
-  Tyler is testing it; land it plus the harness cleanup once he confirms the viewer opens without
-  crashing. Nothing else in the tree is outstanding — the persona/prompt edits landed in
-  `6832db2`, and `whitelist-usernames.txt` is now ignored rather than committed (it tables four
-  friends' Discord ids and ends in a question to Tyler).
+### Baseline — clean as of 2026-08-16
+
+The refactor starts from a clean tree. Everything that was mid-flight is resolved:
+
+| Commit | What |
+|---|---|
+| `6832db2` | volunteer-the-tool persona/prompt edits; `whitelist-usernames.txt` ignored rather than committed |
+| `0c6a65d` | this document |
+| `c96bd33` | §6 — the participant interview, and the spec it shrank |
+| `36fc90c` | tray dark viewer chrome, human-tested by Tyler; three throwaway harness scripts removed |
+| `900f459` | ignore `*.cursor` (the ideas-sweep marker had no rule) |
+
+**Not part of this refactor, tracked elsewhere:** Doom's two open Storyizier bugs (spoke another
+language / skipped the soldier's line). Tyler's read is that both are TTS timeouts; a separate
+session is investigating. Benham has promised Doom an answer either way, so that loop is
+outstanding until it closes.
 
 ---
 
