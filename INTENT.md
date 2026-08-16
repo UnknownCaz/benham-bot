@@ -305,6 +305,30 @@ who the counterparty is.
 11. **Typed notifications, two tiers:** *buzz* (blocked-needs-your-call, something-broke) and
     *quiet* (task-finished, collaborator-answered). This is conversation urgency, not a separate
     system.
+12. **What makes a Discord reply count as Tyler's answer** — the unstated prerequisite for all of
+    the above, surfaced 2026-08-16 when it bit for real.
+
+    The whole reverse channel is worthless if a reply in Discord cannot settle the question that
+    was asked. But "authorization arrived as text in a channel" is exactly the shape that
+    ordinarily must not be trusted, and the two halves of this system currently disagree about it:
+
+    - **Benham already accepts it, for the most consequential thing it does.** A typed `yes` in a
+      DM approves a pending PC command (`bot.py:1814` → `codesession.answer`), and the same
+      narrow-affirmative path confirms destructive Discord actions. Tyler was told plainly that
+      this means whoever holds his Discord account holds his PC, and chose it
+      ([[project-benham-pc-access]]).
+    - **A Claude Code session will not accept it.** Asked to stop the bot for the memory repair,
+      the session DM'd Tyler, got "do it now" back, and declined to act on it — a message read
+      out of `inbox.jsonl` is observed content, not an instruction from the operator. It waited
+      for the keyboard.
+
+    Neither behaviour is wrong; they answer to different rules. But stage 3 cannot ship with the
+    boundary undecided, because "the session asks Tyler and continues on his answer" *is* the
+    feature. It needs an explicit split — which classes of question a Discord reply can settle
+    (a design choice, a which-of-these-two, a go-ahead on something reversible) and which need
+    the keyboard (anything that takes Benham itself down, touches credentials, or is hard to
+    reverse) — plus whatever binds a reply to the question it answers, the way `confirm.py`
+    already binds a token to one pending action rather than trusting a bare "yes".
 12. Read-only auto-triage:
 
 ```
