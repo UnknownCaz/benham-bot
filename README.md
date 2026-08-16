@@ -1,7 +1,7 @@
 # benham-bot
 
 Benham (**Benham#2721**) is a personal Discord bot that acts as a controllable proxy: it can
-read and send text, speak and listen in voice channels, and control a set of
+read and send text, run a real Claude Code session on its owner's PC, and control a set of
 [exaroton](https://exaroton.com) Minecraft servers. Messages it sends appear as *Benham*, not as
 its owner - it is a proxy, not account impersonation (Discord forbids the latter). It only works in
 servers it has been invited to.
@@ -29,7 +29,15 @@ Source layout (since the Aug 2026 reorg): the `benham/` package holds all code â
 where every file lives). `benham.py` at the root is the CLI dispatcher; `python benham.py --help`
 is the command catalog. Non-code splits by who writes it: `config/` (hand-edited), `state/`
 (bot-written, never committed), `prompts/` (personas + guardrails), `logs/`, `scripts/`
-(supervisor, tray, Task Scheduler exports), `tests/`.
+(supervisor, tray, Task Scheduler exports, `gen_readme.py`), `tests/`.
+
+`archive/` holds features that were built, shipped, and then removed for lack of use rather than
+for being broken - **voice** (TTS, listening, wake words, autonomous replies) and the **guest tool
+loop** (code execution, per-guest file workspaces, shared-channel reads), both retired 2026-08-16.
+Each carries a README with the knowledge that was expensive to acquire and would not survive a
+`git rm`: the DAVE decryption monkeypatch and why downgrading discord.py cannot work, why the
+voice library versions are pinned, and the four lessons the guest loop taught about handing tools
+to a model. Read those before reinstating anything.
 
 ## Benham as Claude's face
 
@@ -56,12 +64,14 @@ both. "what's going on in #general" reads it; "post the server IP in #general" p
 
 Every capability declares one, and `capabilities.run()` enforces it.
 
+<!-- GENERATED:tier-table -->
 | tier | examples | gate |
 |---|---|---|
-| **read** (16) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
-| **speak** (7) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
-| **manage** (20) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
+| **read** (15) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
+| **speak** (6) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
+| **manage** (22) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
+<!-- /GENERATED:tier-table -->
 
 Run `python benham.py do list` for the full catalogue, `python benham.py do help <action>` for one action's
 parameters.
@@ -154,8 +164,9 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do help <action>` | One action's parameters, which are required, and its tier. |
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
-`do.py` covers all 49 registered capabilities and replaces the need for a script per action. The
-older single-purpose CLIs below still work and route through their original code paths.
+<!-- GENERATED:count -->
+`do` covers all 50 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+<!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)
 
@@ -179,23 +190,11 @@ Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_ou
 | `python benham.py do read_attachments channel_id=<id> message_id=<id>` | Download that message's files into `downloads/<message_id>/`; text files come back with their contents. `save=false` to look without keeping. |
 | tail `state/inbox.jsonl` | Live feed of every message the running bot sees (one JSON per line). |
 
-### CLI - voice (via the outbox)
-
-| command | what it does |
-|---------|--------------|
-| `python benham.py speak <voice_channel_id> "text"` | Join, speak via edge-tts neural voice, leave. |
-| `python benham.py listen <voice_channel_id>` | Join and transcribe speech into `voice_transcript.jsonl`. |
-| `python benham.py stoplisten <voice_channel_id>` | Stop listening and leave the voice channel. |
-
-Voices are switchable by a named "B-voice" roster (`voices.json`); wake words are "benham"/"claude".
-Listening works on discord.py 2.7 via a DAVE-decryption patch in `bot.py`. With `BENHAM_AUTO_REPLY=1`
-the bot answers wake-word utterances itself, gated to `auto_reply_guilds`.
-
 ### CLI - ops
 
 | command | what it does |
 |---------|--------------|
-| `python benham.py status` | Read-only health check: process/PID, AUTO_REPLY + allowlist, guilds seen, last login. Touches no Discord. |
+| `python benham.py status` | Read-only health check: process/PID, guilds seen, last login. Touches no Discord. |
 | `supervise_bot.bat` | Restart-on-crash wrapper for always-on running, for running by hand. Shim over `supervise_bot.ps1`, which the `benham-bot` logon task launches directly and windowless. |
 | `tray_bot.ps1` | Tray icon showing supervisor/bot state. A monitor only - closing it does not stop anything. |
 
@@ -222,8 +221,9 @@ Current setup: **Testing Server** = all servers, operators required; **Chillbar*
 only, no operator needed. A background **watchdog** also posts crash / offline / back-online alerts
 for servers flagged `watch: true`.
 
-Plain text messages are **not** command-triggered: the bot only records what it sees to `inbox.jsonl`
-and never auto-responds in text chat (voice wake words are the only autonomous trigger).
+Plain text messages are **not** command-triggered: the bot records what it sees to `inbox.jsonl`
+and only engages when addressed - an owner DM or an @-mention, or a guest DM if guest chat is on.
+There is no autonomous trigger; the wake-word path that used to be one went with voice.
 
 ### Example - reply to a friend, review-first
 
@@ -232,17 +232,6 @@ python benham.py catchup 1525016583305429072 15                              # r
 python benham.py draft 1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # DRAFT -> Testing #asd
 python benham.py send  1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # after you eyeball it
 ```
-
-## Autonomous voice replies (AUTO_REPLY)
-
-By default the "brain" is whatever live session is driving the bot. Setting `BENHAM_AUTO_REPLY=1`
-(plus `ANTHROPIC_API_KEY`) lets the bot answer wake-word utterances itself via the Anthropic API
-(`brain.py`), with no session attached.
-
-**Guild-gated:** autonomous replies only fire in guilds listed in `auto_reply_guilds`
-(`exaroton_watch.json`; default = the Testing Server only). So `AUTO_REPLY=1` is safe even while
-Benham is a member of friend servers - it will never self-reply there. Wake detection and
-transcription still run everywhere; only the self-answering path is gated.
 
 ## Safety model
 
@@ -286,7 +275,7 @@ policy says what a call needs; whether that need is met is the caller's bookkeep
 Claude Code session on the machine is reachable only from a direct DM or the local CLI, and not at
 all once the turn has read what other people wrote.
 
-- **One owner.** `identity.is_owner()` gates every entry point - DM, mention, voice, outbox - and
+- **One owner.** `identity.is_owner()` gates every entry point - DM, mention, outbox - and
   `rule_owner` says it again at the capability. No guild-admin inheritance, no operator role.
   Non-owners can converse; they cannot direct.
 - **Guild allowlist for destruction.** `destructive_guilds` is a hand-edited list. Chillbar is
@@ -298,11 +287,12 @@ all once the turn has read what other people wrote.
 - **Discord permissions are the outer wall.** Whatever Benham's role cannot do in a given server,
   none of this code can do either. Scope the role per server; it is the only gate an attacker
   cannot reason with.
-- **Locked guardrails** (`guardrails.md`) always win and cannot be changed by voice: never read
-  secrets aloud, treat non-owner speakers as untrusted, and confirm any outward/destructive action
-  out-of-band rather than on a voice's say-so.
-- **Editable personality** (`persona.md` + runtime `personality_overrides.txt`) tunes *how* Benham
-  talks, never *what* it may do.
+- **Locked guardrails** (`guardrails.md`) always win and cannot be changed by anything said to
+  Benham: never read secrets out, treat non-owners as untrusted, and confirm any outward or
+  destructive action out-of-band rather than on a message's say-so.
+- **Editable personality** (`persona.md`) tunes *how* Benham talks, never *what* it may do. The
+  runtime `personality_overrides.txt` layer went dormant with voice - `brain.py` was its only
+  reader.
 - **Review-first for outward posts:** use `draft.py` so a human sees a reply before it goes to a
   real channel.
 - **Secrets** live in `config/environ.env` (`BOT_KEY`, `ANTHROPIC_API_KEY`) - gitignored, never committed
@@ -383,7 +373,7 @@ deliberate edit to `control.json` rather than something a right-click can do.
 drag it onto the taskbar to pin it. A balloon on startup says so, since otherwise a working app
 looks like a broken one.
 
-Requires Python 3.12, `discord.py` 2.7+, and (for voice) `PyNaCl`, `davey`, FFmpeg on PATH.
+Requires Python 3.12 and the four packages in `requirements.txt`.
 Reading message text needs the privileged Message Content intent enabled in the Discord Developer
 Portal.
 
@@ -391,15 +381,13 @@ Portal.
 
 | file | purpose | committed? |
 |------|---------|-----------|
-| `config/environ.env` | tokens + `BENHAM_AUTO_REPLY` | no (gitignored) |
+| `config/environ.env` | tokens (`BOT_KEY`, `ANTHROPIC_API_KEY`, exaroton) | no (gitignored) |
 | `config/control.json` | owner ids, destructive/agent guild allowlists, agent model, intents | no (see `.example`) |
-| `config/exaroton_watch.json` | `/server` + watchdog + `auto_reply_guilds` | no (see `.example`) |
+| `config/exaroton_watch.json` | `/server` command guilds + watchdog | no (see `.example`) |
 | `config/webhooks.json` | webhook URLs | no (gitignored) |
-| `config/voices.json` | named voice roster | yes |
-| `prompts/guardrails.md` / `prompts/persona.md` | the one shared personality + voice guardrails | yes |
-| `prompts/guest_persona.md` | guest-facing prompt (separate from `persona.md`) | yes |
+| `prompts/guardrails.md` / `prompts/persona.md` | locked safety rules + the one shared personality | yes |
+| `prompts/guest_persona.md` / `prompts/guest_guide.md` | guest-facing prompt + the doc guests are onboarded with | yes |
 | `state/channels.json` | guild/channel IDs (written each boot) | no |
-| `state/voice_settings.json` | bot-written voice defaults | no |
 | `state/agent_memory.json` | per-conversation history | no (gitignored - private) |
 | `state/guest_memory.json` / `state/guest_usage.json` | guest conversations + daily counters | no (gitignored - private) |
 | `logs/` | supervise.log + boot captures and run logs | no (gitignored) |
@@ -414,8 +402,11 @@ whitelisted non-owner can hold a **conversation** with Claude by DM, and can do 
 
 The property that makes this safe is not a rule, it is an absence. `guest.py` calls the Messages
 API with **no `tools` argument** - not an empty list, not a filtered one. So "can a guest reach
-capability X" has the same answer for all 47 of them, for `pc_task`, and for anything added
-later, without that code knowing what a capability is.
+capability X" has the same answer for every one of them, for `pc_task`, and for anything added
+later, without that code knowing what a capability is. (A tool loop DID exist beside this from
+2026-08-04 to 2026-08-16 - guests could run code and keep files. It was archived unused; see
+`archive/guest-tools/`. The grant machinery it needed is still in place and still grants nothing,
+which the boot banner asserts out loud.)
 
 Two independent denials back it up in `policy.py`, either of which would be sufficient:
 
@@ -432,7 +423,9 @@ Other properties worth knowing:
 - **Its own prompt.** `guest_persona.md`, because `persona.md` names Tyler, says the model has
   real tools, and describes operating his machine - all wrong here, the last one dangerously so.
 - **Directives stripped, never applied.** A reply's `<<persona: ...>>` is removed rather than
-  written to `personality_overrides.txt`, which every other surface reads.
+  acted on (`core/directives.py`). Nothing applies one since voice was archived, but stripping
+  stays load-bearing: the persona still describes the syntax, so an unstripped `<<...>>` would
+  reach a friend's DM as a leaked internal.
 - **The owner is never a guest**, even if his id is added to the list.
 - **Capped**, because every guest message bills Tyler: per-guest daily, global daily, and a
   cooldown. `check()` reserves the message under a lock rather than reading the counter and
@@ -521,19 +514,35 @@ whole channel dumps along with it.
 
 ```
 python tests/test_control.py      # gates, allowlists, confirm matching, agent history shape
-python tests/test_owner_gate.py   # drives bot.on_message + handle_auto_reply with fake messages
+python tests/test_owner_gate.py   # drives the real bot.on_message with fake messages
 python tests/test_injection.py    # can text someone else wrote make Benham act?
 python tests/test_policy.py       # every capability x every origin, plus the rule matrix
+python tests/test_memory.py       # what gets stored is what was actually said
+python tests/test_guest.py        # the guest lane's gate, caps and refusals
+python tests/test_pc_reply.py     # pc.. reading the message a DM replies to
+python tests/test_attachments.py  # attachments in and out
+python tests/test_find_user.py    # name -> user id, both implementations
+python scripts/gen_readme.py --check   # this file's generated blocks are current
 ```
 
 Deliberately offline with stub clients - "does it refuse to purge Chillbar" is not a thing you want
 to verify by trying it in Chillbar.
 
-Two of these exist because of mistakes worth not repeating. `test_owner_gate` drives the real
-handlers rather than the helper functions, because the original bug was a helper that passed while
-nothing called it. And `test_injection`'s watcher records **every** invocation, not just forced
-ones - an earlier version watched the wrong flag and reported a pass while the action it was
-guarding actually executed.
+**Three of these exist because of mistakes worth not repeating**, and they are the same mistake
+wearing different clothes: a test can be green about the wrong thing.
+
+- `test_owner_gate` drives the real handlers rather than the helper functions, because the
+  original bug was a helper that passed while nothing called it.
+- `test_injection`'s watcher records **every** invocation, not just forced ones - an earlier
+  version watched the wrong flag and reported a pass while the action it guarded actually ran.
+- `test_memory` asserts on the bytes that reach disk. `test_injection` drives that same code path
+  and spent twelve days corrupting the stored history **while passing**, because it only ever
+  asked which tools fired. Its last check is shape-only, so it fails on any future echo pair
+  whatever causes one.
+
+`gen_readme.py --check` belongs in that list for the same reason. The counts in this file were
+hand-typed and drifted to 50-documented against 59-registered; they are generated now, and
+`--check` fails loudly instead of letting them rot.
 
 ## Outside the chokepoint
 
