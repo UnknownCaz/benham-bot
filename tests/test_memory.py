@@ -168,25 +168,42 @@ async def main():
               turns[0]["content"], "list your folder for me")
         check("assistant turn is the reply", turns[1]["content"], "a.txt and b.txt")
 
-        section("No stored conversation has a user turn equal to its assistant turn")
+        section("A multi-round turn stores the owner's message, not the LAST text block")
+        # The variant that got past the first repair. reply is "\n\n".join(parts),
+        # so with two text-producing rounds the clobbered `text` held only the tail
+        # - user != assistant, and an equality check sails right past it.
+        await _one_turn("test:memory_multi", "check my downloads folder", [
+            _Resp([_Block(type="text", text="Sure - checking now."),
+                   _Block(type="tool_use", id="p1", name="pc_task",
+                          input={"task": "list downloads"})], "tool_use"),
+            _Resp([_Block(type="text", text="Two files in there.")], "end_turn"),
+        ])
+        turns = _stored("test:memory_multi")
+        check("user turn survives MULTIPLE text rounds",
+              turns[0]["content"], "check my downloads folder")
+        check("assistant turn joins every part",
+              turns[1]["content"], "Sure - checking now.\n\nTwo files in there.")
+        check("and the pair does not read as an echo",
+              agent.is_echo_pair(turns[0], turns[1]), False)
+
+        section("No stored conversation echoes Benham's reply back as the owner")
         # Shape-only, and deliberately over the WHOLE file including the live DM
         # thread: this is the assertion that would have caught f06b79b without
-        # anyone knowing what f06b79b was going to be.
+        # anyone knowing what f06b79b was going to be. It asks agent.is_echo_pair
+        # rather than testing equality here, so widening the definition of damage
+        # can never again leave the repair script and the guard disagreeing.
         agent._memory = None
         mem = agent._load_memory()
-        echoed = []
-        for key, turns in mem.items():
-            for i in range(0, len(turns) - 1, 2):
-                u, a = turns[i], turns[i + 1]
-                if u.get("role") == "user" and a.get("role") == "assistant" \
-                        and u.get("content") == a.get("content"):
-                    echoed.append(f"{key}[{i // 2}]")
+        echoed = [f"{key}[{i // 2}]"
+                  for key, turns in mem.items()
+                  for i in range(0, len(turns) - 1, 2)
+                  if agent.is_echo_pair(turns[i], turns[i + 1])]
         check("no conversation echoes Benham's reply back as the owner's message",
               echoed, [])
     finally:
         capabilities.REGISTRY["pc_task"].handler = real_pc
         agent._client = None
-        for k in ("test:memory_plain", "test:memory_tools"):
+        for k in ("test:memory_plain", "test:memory_tools", "test:memory_multi"):
             agent.forget(k)
 
     print()
