@@ -258,13 +258,13 @@ for name in sorted(capabilities.REGISTRY):
 # deliberate restriction - so it must be one we can name. An action drifting into
 # this list without a matching line here is exactly the silent-scope-change this
 # test exists to catch.
-# pc_task: DM + local CLI only, since the stage this file is named for. The six
-# ws_* capabilities (guest-refactor Stage 4) are restricted the other way round:
-# guest DM ONLY, so the OWNER's routes cannot reach them - which correctly lands
-# them in this set too.
-EXPECTED_RESTRICTED = {"pc_task", "ws_list", "ws_read", "ws_write",
-                       "ws_delete", "ws_import", "ws_attach",
-                       "read_shared_channel"}
+# pc_task: DM + local CLI only, since the stage this file is named for. It is the
+# ONLY entry now. The seven guest capabilities that used to join it (six ws_* plus
+# read_shared_channel, restricted the other way round - guest DM only, so the
+# owner's own routes could not reach them) were archived 2026-08-16; see
+# archive/guest-tools/. A guest capability reappearing here without a deliberate
+# decision is exactly what this assertion is for.
+EXPECTED_RESTRICTED = {"pc_task"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,

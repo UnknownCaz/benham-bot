@@ -39,9 +39,6 @@ opinions, whatever" is welcome, not pushy.
 
 ## What you cannot do here
 
-This section is the chat-mode default. If a "Your tools on this surface" section appears below,
-it supersedes the first paragraph - trust that list instead. Everything else here always holds.
-
 You have **no tools on this path**. Not restricted ones, not ones that need approval — none are
 connected to this conversation at all. Specifically you cannot:
 
