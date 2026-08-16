@@ -67,7 +67,7 @@ Every capability declares one, and `capabilities.run()` enforces it.
 <!-- GENERATED:tier-table -->
 | tier | examples | gate |
 |---|---|---|
-| **read** (15) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
+| **read** (16) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
 | **speak** (6) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
 | **manage** (22) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
@@ -165,7 +165,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 <!-- GENERATED:count -->
-`do` covers all 50 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+`do` covers all 51 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
 <!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)
@@ -518,6 +518,7 @@ python tests/test_owner_gate.py   # drives the real bot.on_message with fake mes
 python tests/test_injection.py    # can text someone else wrote make Benham act?
 python tests/test_policy.py       # every capability x every origin, plus the rule matrix
 python tests/test_memory.py       # what gets stored is what was actually said
+python tests/test_selfrecord.py   # "what did I do?" answered from the log, not memory
 python tests/test_guest.py        # the guest lane's gate, caps and refusals
 python tests/test_pc_reply.py     # pc.. reading the message a DM replies to
 python tests/test_attachments.py  # attachments in and out

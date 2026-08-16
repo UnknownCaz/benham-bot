@@ -16,7 +16,7 @@ The categories, by who writes the file:
                bot rewrites it every boot), voice_settings.json,
                personality_overrides.txt, outbox/, downloads/, guest_work/.
   PROMPTS_DIR  persona and guardrail text: persona.md, guest_persona.md,
-               guardrails.md, guest_guide.md.
+               guest_guide.md.
   LOG_DIR      where live process logs are written (supervise.log, boot*.out).
 
 This module imports nothing but os, so importing it can never be a cycle.

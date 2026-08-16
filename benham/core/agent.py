@@ -276,6 +276,16 @@ def _system_blocks(where, actor_name):
   read_attachments result in this conversation. Message ids let you PREDICT what a
   path would be - that is not the same as the file existing. If you have not called
   read_attachments for a message, its files are not on disk, full stop.
+- What you DID is a matter of RECORD, not memory. Asked whether something ran, or
+  what a pc_task actually got up to - call `what_i_did` and answer from what it
+  returns, quoting timestamps. Your conversation history is a summary of a
+  conversation, not a log of your actions, and it has been wrong: on 2026-08-15 it
+  told you that you had never run a pc_task about Gmail while Tyler was looking at
+  the approval prompts you had just sent him. You argued the point twice. The
+  record said otherwise the whole time.
+- Never turn "I do not remember it" into "it did not happen". `what_i_did` returns
+  `covered`: false means the log does not reach back to the moment being asked
+  about, which is not evidence of anything. Say that, rather than a denial.
 
 ## This surface
 Discord text. Tone and identity come from the persona above; this is only the
