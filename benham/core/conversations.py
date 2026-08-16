@@ -155,6 +155,7 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "opened_at": _iso(now),
             "due_at": _iso(now + NUDGE_AFTER),
             "nudges": 0,
+            "ask_message_ids": [],
             "answer": None,
             "answered_at": None,
             "outcome": None,
@@ -165,6 +166,36 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
         data[cid] = conv
         _save(data)
         return conv
+
+
+def record_ask_message(cid, message_id):
+    """Remember which Discord message carried the question.
+
+    A LIST, not a field, and appended to on every nudge as well as the first ask.
+    Tyler settled the binding rule as "reply binds, otherwise the model judges" -
+    and a reply to the NUDGE is every bit as much an answer as a reply to the
+    original. Storing only the first would have made the fast, certain path fail
+    exactly when someone did the most natural thing: answer the message that just
+    arrived.
+    """
+    def go(conv):
+        ids = conv.setdefault("ask_message_ids", [])
+        if int(message_id) not in ids:
+            ids.append(int(message_id))
+    return _mutate(cid, go)
+
+
+def by_ask_message(message_id):
+    """The live conversation whose question was carried by this message, or None.
+
+    THE CERTAIN HALF OF BINDING. No model, no inference: Discord handed over a
+    message reference, and this says which question it points at.
+    """
+    mid = int(message_id)
+    for c in _load().values():
+        if c.get("state") in LIVE_STATES and mid in (c.get("ask_message_ids") or []):
+            return c
+    return None
 
 
 def _live_for(data, counterparty):

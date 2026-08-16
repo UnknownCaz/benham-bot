@@ -343,10 +343,21 @@ who the counterparty is.
     "this is the eighth thing I have asked you in two minutes". None of it is newly gathered;
     `run_task` already had all three on the wire.
 
+    **Binding — SETTLED 2026-08-16 (Tyler): "both, reply binds and the model judges and tells
+    me."** So there are two routes and they are not equal:
+
+    - A Discord **reply** (a real message reference) to the question binds in CODE. Certain, no
+      model involved, recorded as `bound_by="reply"`.
+    - Anything else is judged by the model, which must **say which way it read the message**.
+      Recorded as `bound_by="judged"`.
+
+    The asymmetry is the point. Requiring a reply every time is friction; letting the model
+    silently decide is how an instruction gets swallowed as an answer. Judging and *announcing*
+    keeps the fast path fast and makes a wrong guess visible in the same breath it is made. The
+    conversation record has carried `bound_by` since item 7 for exactly this.
+
     **What stage 3 still owes:** the same standard applied to questions a session asks that are
-    NOT tool approvals ("which of these two do you want?"), and binding a reply to the question
-    it answers, the way `confirm.py` already binds a token to one pending action rather than
-    trusting a bare "yes".
+    NOT tool approvals ("which of these two do you want?").
 12. Read-only auto-triage:
 
 ```
