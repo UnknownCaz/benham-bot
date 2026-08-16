@@ -76,3 +76,9 @@ whitelist-usernames.txt
 # which is Tyler's whole DM history. The *.jsonl.bak rule above did not cover it:
 # ".json.pre-repair.bak" is neither *.jsonl nor *.jsonl.bak. Match the suffix itself.
 *.bak
+
+# Stage 3's conversation store: who was asked what, and what they answered. Real
+# message content from real people, same class as agent_memory/guest_memory above.
+# state/*.json is NOT ignored wholesale - each private file is listed by name, so
+# a new one has to be added here deliberately. This is that.
+conversations.json
