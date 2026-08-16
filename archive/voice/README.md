@@ -22,15 +22,18 @@ people working on projects.
 | `brain.py` | The autonomous AUTO_REPLY brain: Haiku, wake-gated, sliding window, local zero-API shortcuts. |
 | `speak.py` / `listen.py` / `stoplisten.py` | The CLI entry points. |
 | `voices.json` | The 15-voice B-named roster (Tyler likes B-names). Bennett was the default; Bella the female default. |
+| `guardrails.md` | The LOCKED safety + output-format rules. **Voice-only, though it did not look it** - `brain.py` was its sole loader, and it is written throughout for speech ("this is text-to-speech", "NO markdown", "do not edit via voice"). The DM agent never read it; `agent.py` carries its own Hard rules block, which is why archiving this leaves no gap. Verified before moving it. |
 
 ## What was NOT archived, and why
 
 - **`prompts/persona.md` stays.** It is the shared personality, read by `agent.py` and
   `codesession.py` too. Voice was one consumer of it, not its owner.
-- **`brain.strip_directive` moved to `core/shared_tools.py`** rather than coming here. It removes
-  `<<...>>` directives from model output, and **the guest lane calls it** (`guest.py:508`,
-  `guest_agent.py:403`) — brain.py was never voice-only, which is exactly the sort of thing that
-  turns an archive into an outage. Its regex came with it.
+- **`brain.strip_directive` moved to `core/directives.py`** rather than coming here. It removes
+  `<<...>>` directives from model output, and **the guest lane called it** — brain.py was never
+  voice-only, which is exactly the sort of thing that turns an archive into an outage. Its regex
+  came with it. It got its own small module rather than joining `shared_tools.py`, because that
+  module's docstring restricts it to server-side tool definitions and this is text
+  post-processing.
 - **`state/personality_overrides.txt` is now orphaned.** `brain.py` was its only reader — despite
   a comment in `guest.py` claiming "every surface reads" it, which was simply wrong: `agent.py`
   and `codesession.py` read `persona.md` and never the overrides. So the runtime "be more

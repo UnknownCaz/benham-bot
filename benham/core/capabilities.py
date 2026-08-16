@@ -119,7 +119,21 @@ def action(name, tier, summary, params=None, needs_guild=False,
       denial, and a guest capability that forgot to name the guest origin would
       pass the flag check and then refuse every real call.
     """
+    # Reserved by the outbox envelope. do.py enqueues {action: <name>, **params},
+    # a FLAT json object that bot.py reads by key - so a capability parameter
+    # sharing one of these names is not merely awkward, it is unrepresentable: the
+    # value silently overwrites the envelope, or (for "action") blows up with a
+    # TypeError deep inside enqueue that names neither the capability nor the
+    # parameter. Found the honest way, by declaring a param called "action".
+    RESERVED_PARAMS = {"action", "queued_at", "confirm_token"}
+
     def deco(fn):
+        clash = RESERVED_PARAMS & set(params or {})
+        if clash:
+            raise ValueError(
+                f"capability {name!r} declares parameter(s) {sorted(clash)}, which "
+                "the outbox envelope reserves. Rename them - the CLI cannot send a "
+                "capability parameter that collides with an envelope key.")
         if guest:
             problems = []
             if tier >= identity.DESTRUCTIVE:
@@ -814,6 +828,43 @@ async def _list_emojis(ctx, p):
     return {"guild": g.name, "count": len(g.emojis), "emojis": [
         {"id": e.id, "name": e.name, "animated": e.animated, "usage": str(e)}
         for e in g.emojis]}
+
+
+@action("what_i_did", identity.READ,
+        "Your OWN action record - what you actually did, read from the log the bot "
+        "writes on every capability run. Use this whenever you are asked what you "
+        "did, whether something ran, or what a pc_task actually got up to. Answer "
+        "from what this returns, never from what you remember. "
+        "TWO FIELDS DECIDE WHETHER SILENCE MEANS ANYTHING: `covers` is the real "
+        "time span the log spans, and `covered` says whether the window you asked "
+        "about falls inside it. If `covered` is false, the record does not reach "
+        "back that far - say exactly that, and do NOT say the thing did not "
+        "happen. Quote the timestamps you find; they are the evidence.",
+        {"limit": {"type": "int", "desc": "How many entries, newest first. Default 20, max 200."},
+         "only": {"type": "str", "desc": "Only this capability name, e.g. pc_task."},
+         "since_minutes": {"type": "int", "desc": "Only the last N minutes. Sets `covered`."},
+         "actor": {"type": "str", "desc": "Only this actor id, or 'code-session'."}},
+        # Third-party text rides along: a logged read_channel result contains the
+        # messages it read. Without this, reading the log would launder a
+        # stranger's words into an untainted turn and back into pc_task's reach.
+        taints=True)
+async def _what_i_did(ctx, p):
+    from benham.core import selfrecord
+    out = selfrecord.read(
+        limit=int(p.get("limit") or 20),
+        action=p.get("only") or None,
+        since_minutes=(int(p["since_minutes"]) if p.get("since_minutes") else None),
+        actor=p.get("actor") or None)
+    if not out["entries"]:
+        # Say which of the two silences this is, in the payload itself, rather than
+        # leaving the model to infer it from a bare empty list. Inferring it wrong
+        # is precisely the 2026-08-15 failure this capability exists to prevent.
+        out["note"] = ("No matching entries. " + (
+            "The log does NOT cover the window you asked about, so this is not "
+            "evidence that nothing happened."
+            if out["covered"] is False else
+            "The log DOES cover that window, so nothing matching was recorded."))
+    return out
 
 
 @action("guild_info", identity.READ, "Overview of one server.",
