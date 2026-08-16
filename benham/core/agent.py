@@ -344,9 +344,14 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         # `tool_use` only - a server_tool_use block is Anthropic's own search call,
         # already executed on their side, and must never be looked up in REGISTRY.
         tool_calls = [b for b in resp.content if b.type == "tool_use"]
-        text = _response_text(resp)
-        if text:
-            reply_parts.append(text)
+        # NOT `text`: that is the parameter holding what the owner actually said,
+        # and _remember() reads it 120 lines below to store the user turn. Binding
+        # the model's own output to it made Benham remember its replies as Tyler's
+        # messages - the bug that had it insisting it never ran a pc_task while he
+        # was looking at the approval prompts it had just sent him.
+        resp_text = _response_text(resp)
+        if resp_text:
+            reply_parts.append(resp_text)
 
         # Record the assistant turn verbatim so tool_use/tool_result stay paired -
         # the API rejects a tool_result whose tool_use is missing from history.
