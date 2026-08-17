@@ -57,6 +57,7 @@ from benham.core import identity
 from benham.core import jsonio
 from benham.core import policy
 from benham.core import shared_tools
+from benham.core import turnmemory
 
 from benham import paths
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
@@ -348,32 +349,30 @@ def is_known_guest(user_id):
 # PermissionError [WinError 32] rather than a merge conflict. Guest turns run in
 # worker threads (asyncio.to_thread), so this is reachable whenever two guests are
 # mid-conversation - the failure would be a crashed turn, not a wrong count.
-_memory_lock = threading.Lock()
+# Shared with agent.py via turnmemory - one implementation of the six lines that
+# store a turn pair. This copy was never broken, but only because it happened to
+# name a variable `raw` instead of `text`; agent.py's identical copy stored
+# Benham's own replies as Tyler's messages for twelve days. Luck is not a
+# maintenance strategy.
+#
+# The FILE stays separate, which is the part that matters here: guest_memory.json
+# is a different path, not a prefixed key, so Tyler's history and a guest's cannot
+# end up in one thread through a typo. turnmemory takes the path as an argument
+# precisely so sharing the logic cannot erode that.
+_store = turnmemory.TurnMemory(lambda: MEMORY_FILE, HISTORY_TURNS)
 
 
 def _history(key):
-    return jsonio.read_json(MEMORY_FILE, default={}).get(key, [])
+    return _store.history(key)
 
 
 def _remember(key, user_text, assistant_text):
-    with _memory_lock:
-        mem = jsonio.read_json(MEMORY_FILE, default={})
-        turns = list(mem.get(key, []))
-        turns.append({"role": "user", "content": user_text})
-        turns.append({"role": "assistant", "content": assistant_text})
-        mem[key] = turns[-HISTORY_TURNS * 2:]
-        jsonio.write_json(MEMORY_FILE, mem)
+    _store.remember(key, user_text, assistant_text)
 
 
 def forget(user_id=None):
     """Drop one guest's conversation, or every guest's."""
-    with _memory_lock:
-        if user_id is None:
-            jsonio.write_json(MEMORY_FILE, {})
-            return
-        mem = jsonio.read_json(MEMORY_FILE, default={})
-        mem.pop(_key(user_id), None)
-        jsonio.write_json(MEMORY_FILE, mem)
+    _store.forget(None if user_id is None else _key(user_id))
 
 
 def _system_prompt():

@@ -114,7 +114,10 @@ class _StubClient:
 
 def _stored(key):
     """The turns as they exist on disk, not as the module cached them."""
-    agent._memory = None
+    # No cache to invalidate any more - turnmemory reads the file every time,
+    # which is the change that removed the "stop the bot before repairing it"
+    # hazard. Kept as its own helper because the NAME is the point: these checks
+    # assert on what reached disk, not on what a getter remembers.
     return agent._history(key)
 
 
@@ -192,8 +195,7 @@ async def main():
         # anyone knowing what f06b79b was going to be. It asks agent.is_echo_pair
         # rather than testing equality here, so widening the definition of damage
         # can never again leave the repair script and the guard disagreeing.
-        agent._memory = None
-        mem = agent._load_memory()
+        mem = agent._store._read()
         echoed = [f"{key}[{i // 2}]"
                   for key, turns in mem.items()
                   for i in range(0, len(turns) - 1, 2)
