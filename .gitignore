@@ -82,3 +82,9 @@ whitelist-usernames.txt
 # state/*.json is NOT ignored wholesale - each private file is listed by name, so
 # a new one has to be added here deliberately. This is that.
 conversations.json
+
+# The batch-message pointer: counterparty id -> the Discord message currently
+# showing them their queue. Bot-mutated state, and it names whose DM thread is
+# whose. Added the day it was created (2026-08-17) rather than the day someone
+# nearly committed it - the per-file policy above only works if that happens.
+ask_batches.json
