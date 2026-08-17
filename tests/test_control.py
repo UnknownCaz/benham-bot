@@ -18,7 +18,9 @@ import _testconfig  # noqa: F401,E402 - control.json fixture; must precede benha
 
 import asyncio
 import os
+import shutil
 import sys
+import tempfile
 
 import discord
 
@@ -287,6 +289,58 @@ finally:
         pass
     agent.MEMORY_FILE = _orig_mem_file
     agent._memory = None
+
+section("The control file itself — absent and malformed are opposite cases")
+# Both halves matter and neither is ceremony. The loud half stops a typo from
+# silently WIDENING two gates: treating an unparseable control.json as an absent
+# one drops post_guilds (posting_allowed then returns True everywhere) and drops
+# agent.enabled (agent.py defaults it to True). The quiet half is what stops a
+# future edit from "fixing" that by catching more and making a fresh clone fail to
+# boot. Written together so neither can drift without the other noticing.
+_orig_control_file = identity.CONTROL_FILE
+_cf_dir = tempfile.mkdtemp(prefix="benham-controlfile-")
+try:
+    identity.CONTROL_FILE = os.path.join(_cf_dir, "control.json")
+
+    check("an ABSENT control.json is not an error", identity.load_control(), dict(identity._DEFAULTS))
+
+    with open(identity.CONTROL_FILE, "w", encoding="utf-8") as _f:
+        _f.write('{ "owner_ids": [1], oops }')
+    _raised = None
+    try:
+        identity.load_control()
+    except identity.ControlFileError as e:
+        _raised = e
+    check("a MALFORMED control.json raises", _raised is not None, True)
+    check("...and the message names the file", identity.CONTROL_FILE in str(_raised), True)
+    check("...and does not masquerade as the absent case",
+          "not valid JSON" in str(_raised), True)
+
+    # The trap this whole section exists for: the old code returned the defaults
+    # here, and the defaults are not uniformly restrictive. posting_allowed() reads
+    # the module-level CONTROL, so swap in exactly what that fallback produces.
+    os.remove(identity.CONTROL_FILE)                     # back to the absent state
+    _orig_control = identity.CONTROL
+    try:
+        identity.CONTROL = identity.load_control()
+        check("the defaults a malformed file would have fallen back to leave posting UNCAPPED",
+              identity.posting_allowed(4040404040404040404, 999), True)
+    finally:
+        identity.CONTROL = _orig_control
+    check("...while destructive_guilds does fail closed, which is why it looked safe",
+          identity._DEFAULTS["destructive_guilds"], [])
+    check("...and agent.enabled is absent, which agent.py reads as ON",
+          "enabled" in identity._DEFAULTS["agent"], False)
+
+    # A valid file still loads, so the raise is about parseability and nothing else.
+    with open(identity.CONTROL_FILE, "w", encoding="utf-8") as _f:
+        _f.write('{"owner_ids": [7], "_comment": "annotation keys are still skipped"}')
+    _reloaded = identity.load_control()
+    check("a VALID control.json still loads", _reloaded["owner_ids"], [7])
+    check("...with annotation keys skipped", "_comment" in _reloaded, False)
+finally:
+    identity.CONTROL_FILE = _orig_control_file
+    shutil.rmtree(_cf_dir, ignore_errors=True)
 
 section("Registry shape")
 check("every action has a summary",
