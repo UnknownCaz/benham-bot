@@ -16,6 +16,7 @@ as nothing at all.
 # repo root there too - that is where the benham package and bot.py live.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _testconfig  # noqa: F401,E402 - control.json fixture; must precede benham imports
 
 import sys
 
@@ -57,11 +58,12 @@ def ctx_for(origin, tainted=False, guild_id=TESTING):
     if origin == Origin.SYSTEM:
         return CallContext.system(guild_id)
     if origin == Origin.GUEST_DM:
-        # A REAL whitelisted guest, not a stranger. Using an id that is not on the
-        # list would make every row below pass for the wrong reason - refused for
-        # not being a guest at all, rather than refused for being one.
-        guest_id = sorted(identity.GUEST_IDS)[0] if identity.GUEST_IDS else 777000777000777000
-        return CallContext.guest_dm(guest_id, 111)
+        # A whitelisted guest, not a stranger. Using an id that is not on the list
+        # would make every row below pass for the wrong reason - refused for not
+        # being a guest at all, rather than refused for being one. _testconfig
+        # whitelists this one; the check under "the fixture is live" below is what
+        # stops that silently ceasing to be true.
+        return CallContext.guest_dm(_testconfig.GUEST_ID, 111)
     raise AssertionError(origin)
 
 
@@ -71,6 +73,15 @@ def allowed(action_name, origin, tainted=False, guild_id=TESTING):
 
 
 # --------------------------------------------------------------------------
+section("The fixture is live — everything about guests below rests on this")
+# Not ceremony. If the guest surface is OFF, rule_guest_enabled short-circuits
+# ahead of the two rules the guest matrix claims to be testing, and all 56 rows
+# report "refused" for a reason nothing here asserts on. The suite stayed green
+# through exactly that for one commit. Assert the precondition, not the symptom.
+check("guests are switched on", identity.guest_enabled(), True)
+check("and the id every guest row uses is actually whitelisted",
+      identity.is_guest(_testconfig.GUEST_ID), True)
+
 section("Fail closed — the property that makes threading mistakes safe")
 send = capabilities.REGISTRY["send_message"]
 check("no context is denied", policy.authorize(send, None).allowed, False)
