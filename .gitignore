@@ -82,3 +82,10 @@ whitelist-usernames.txt
 # state/*.json is NOT ignored wholesale - each private file is listed by name, so
 # a new one has to be added here deliberately. This is that.
 conversations.json
+
+# The ask queue's batch pointer: {discord user id: message id} for the DM currently
+# showing that person their queue. No message text in it, unlike conversations.json
+# above - but it still names real people and points into a private DM thread, and
+# it is bot-written state, which is never committable whatever it holds. Listed by
+# name because that is the rule directly above, and this file shipped without it.
+ask_batches.json
