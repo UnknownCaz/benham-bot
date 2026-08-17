@@ -26,7 +26,7 @@
                        |
  every message seen → state/inbox.jsonl    each boot → state/channels.json</code></pre>
     <p>The second chokepoint is logical: <code>capabilities.run()</code> is the single execution
-    path for all 57 capabilities — authorize → validate → authorize_target → confirm-or-execute
+    path for all <!-- GENERATED:count -->56<!-- /GENERATED:count --> capabilities — authorize → validate → authorize_target → confirm-or-execute
     — and <code>policy.py</code> is the single place authorization is decided. Every entry
     point must state its <strong>origin</strong> (<code>OWNER_DM</code>, <code>OWNER_GUILD</code>,
     <code>OWNER_VOICE</code>, <code>LOCAL_CLI</code>, <code>SYSTEM</code>, <code>GUEST_DM</code>);

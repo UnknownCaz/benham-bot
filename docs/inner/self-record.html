@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Answering from record — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/self-record.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Answering from record</h1>
+    <p class="lede">What Benham <em>did</em> is a matter of record, not memory. Asked whether
+    something ran, it reads the log it already writes and answers from evidence.</p>
+
+    <h2 id="why">The incident this exists because of</h2>
+    <p>On 2026-08-15 Tyler asked Benham what a <code>pc_task</code> had done. Benham answered that
+    it had never run one — <strong>twice, arguing the point</strong> — while Tyler was looking at
+    the eight approval prompts it had just sent him.</p>
+    <p>It was not lying, and it was not hallucinating. A one-line variable shadow in
+    <code>agent.py</code> had been storing Benham's own replies as Tyler's messages since
+    2026-08-04, so its conversation memory genuinely recorded him saying things it had said
+    itself. When he told it to look closer, <em>the record really did disagree with him.</em></p>
+    <p>Fixing the shadow stopped new damage. This page is about the deeper problem: <strong>memory
+    was the only thing it could consult.</strong></p>
+
+    <h2 id="what">What it does</h2>
+    <p>Nothing new is recorded to make this work. <code>capabilities.run()</code> has always
+    logged every invocation, every refusal (<code>DENIED</code>) and every preview
+    (<code>PROPOSED</code>); <code>codesession</code> logs each PC permission prompt. The record
+    existed and had no reader — the same discovery <code>watch_pc.py</code> made about Claude
+    Code's own transcripts.</p>
+    <p><code>core/selfrecord.py</code> is the reader; <code>what_i_did</code> is the capability on
+    top of it. It filters by action, actor and time window.</p>
+    <p>The disputed <code>pc_task</code> is in that log at <code>2026-08-15T08:55:36</code>. The
+    denial is logged at <strong>08:56:40 — sixty-four seconds later.</strong> The new capability
+    finds it in one call.</p>
+
+    <h2 id="silence">The part that actually matters</h2>
+    <p>Finding entries is not the point; grep does that. The point is making <em>"I have no record
+    of that"</em> mean something narrower than <em>"it did not happen"</em>.</p>
+    <p>A log covers a window. Asked about a moment outside it, honest silence and damning silence
+    are identical. So every result carries:</p>
+    <table>
+      <tr><th>field</th><th>meaning</th></tr>
+      <tr><td><code>covers</code></td><td>the real time span the log files span</td></tr>
+      <tr><td><code>covered</code></td><td>did the window you asked about fall <em>inside</em>
+        that span? <code>false</code> means the record does not reach back that far — which is
+        <strong>not</strong> evidence of anything.</td></tr>
+    </table>
+    <p>The empty case says in the payload <em>which</em> silence it is, rather than leaving the
+    model to infer it from a bare empty list. Inferring it wrong is precisely the 2026-08-15
+    failure. And <code>agent.py</code>'s hard rules now forbid turning "I do not remember" into
+    "it did not happen".</p>
+    <p>The span is measured over every parsed line, not just matching ones — otherwise a filter
+    that matched nothing would report "no log" instead of "no match".</p>
+
+    <h2 id="taint">Why it taints</h2>
+    <p>Logged action results embed text other people wrote: a <code>read_channel</code> result
+    contains the messages it read. So <code>what_i_did</code> declares
+    <code>taints=True</code>, exactly as reading a channel does. Without it this would be a
+    laundering path — stranger text into the log, into an untainted turn, and back within reach of
+    <a href="pc-access.html"><code>pc_task</code></a>.</p>
+
+    <h2 id="lesson">The recurring shape</h2>
+    <p>"Claims things it didn't do" and "I can't see what it's doing" turned out to be
+    <strong>one defect</strong>: no consultable record. The same shape has appeared repeatedly in
+    this codebase — a rule that was written, tested and never called; a test that passed while
+    corrupting the thing it was testing; a security comment describing a defence that had been
+    removed months earlier. Each time, the fix was to make the claim checkable rather than to
+    argue about it.</p>
+
+    <h2 id="trail">Paper trail</h2>
+    <ul>
+      <li><code>logs/supervise.log</code> — <code>action</code> / <code>DENIED</code> /
+        <code>PROPOSED</code> lines, one per capability call.</li>
+      <li><code>logs/bot.log</code> — the pre-supervisor relic, still holding July.</li>
+      <li><code>tests/test_selfrecord.py</code> — asserts the no-record-versus-no-event
+        distinction, which is the part worth protecting.</li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

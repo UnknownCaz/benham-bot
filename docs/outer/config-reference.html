@@ -35,20 +35,26 @@
       <tr><td><code>post_guilds</code> / <code>post_channels</code></td><td>hard cap on where Benham may PUT content (channels wins if non-empty; both empty = no cap). Not a confirmation gate — a refusal here has no unlock. Reading is never restricted by it.</td></tr>
       <tr><td><code>agent.*</code></td><td>owner agent: <code>enabled</code> (false = pure relay, no API cost), <code>model</code>, <code>max_tokens</code>, <code>max_tool_rounds</code>, <code>history_turns</code>, <code>cooldown_seconds</code>, <code>web_search</code>, <code>searches_per_turn</code></td></tr>
       <tr><td><code>pc.*</code></td><td>PC session: <code>enabled</code>, <code>workdir</code> (a starting point, NOT a sandbox), <code>permission_timeout_seconds</code> (300 — no answer = denied), <code>max_turns</code>, <code>use_api_key</code> (billing: API vs subscription)</td></tr>
-      <tr><td><code>guest.*</code></td><td>everything guest: <code>enabled</code>, <code>mode</code> (chat / workspace; unrecognised = disabled rather than guessed), <code>ids</code>, <code>capabilities</code> (the config half of the three-part grant — typos can only turn things OFF), model + caps + cooldown, <code>workspace</code> quotas. Full procedures: <a href="guest-admin.html">Guest admin</a>.</td></tr>
+      <tr><td><code>guest.*</code></td><td>everything guest: <code>enabled</code>, <code>ids</code>, model, caps, cooldown, <code>web_search</code>. <code>mode</code> now accepts only <code>"chat"</code> — anything else, including a lingering <code>"workspace"</code>, DISABLES guest chat rather than guessing. <code>capabilities</code>, <code>read_channels</code> and <code>code_execution</code> belonged to the archived tool loop and are ignored. Full procedures: <a href="guest-admin.html">Guest admin</a>.</td></tr>
       <tr><td><code>confirm.ttl_seconds</code></td><td>how long a parked tier-3 confirmation lives (3600 = 1h). Expired = cancelled, never assumed yes.</td></tr>
       <tr><td><code>intents.members</code></td><td>off = <code>find_user</code> is prefix-only — "caz" finds "caz6666" but never "UnknownCaz", and every result carries a note saying so. Turning it on needs the Dev Portal toggle too, or the bot refuses to log in.</td></tr>
       <tr><td><code>presence.*</code></td><td>status + activity applied on login</td></tr>
     </table>
-    <p>Adjacent config files: <code>exaroton_watch.json</code> (/server gating, watchdog,
-    <code>auto_reply_guilds</code>), <code>voices.json</code> (voice roster),
-    <code>webhooks.json</code> (webhook URLs, gitignored), <code>channels.json</code> (IDs,
-    rewritten each boot — read it, don't edit it).</p>
+    <p>Adjacent config files: <code>exaroton_watch.json</code> (/server gating and the
+    watchdog), <code>webhooks.json</code> (webhook URLs, gitignored), <code>channels.json</code>
+    (IDs, rewritten each boot — read it, don't edit it).</p>
+    <p><code>voices.json</code> and <code>auto_reply_guilds</code> went with voice on 2026-08-16
+    (<code>archive/voice/</code>), along with <code>BENHAM_AUTO_REPLY</code> in
+    <code>environ.env</code>. That file now holds tokens only: <code>BOT_KEY</code>,
+    <code>ANTHROPIC_API_KEY</code>, and the exaroton credentials.</p>
 
     <h2 id="defaults">Most-restrictive defaults</h2>
     <p>The philosophy, stated once: <strong>a typo can only turn things off.</strong> Missing
-    keys fall to the most restrictive value. <code>guest.capabilities</code> grants nothing
-    unless code also flags the capability for guests. Privileged intents default off because
+    keys fall to the most restrictive value. The guest grant machinery survives its own feature
+    and still grants nothing: a name in config does nothing unless code ALSO flags that capability
+    for guests, and nothing does. <code>test_policy</code> asserts the guest column of the
+    capability matrix is empty, so a regression shows up as a failing test rather than as
+    silence. Privileged intents default off because
     requesting an ungranted intent bricks login on the next restart — the failure mode of "off"
     is two capabilities that plainly say why they're unavailable, which beats a bot that won't
     start. Unrecognised guest modes disable guest chat rather than guessing.</p>
