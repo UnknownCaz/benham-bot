@@ -211,6 +211,10 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "due_at": _iso(now + NUDGE_AFTER),
             "nudges": 0,
             "ask_message_ids": [],
+            # Whether this question has ever been put in front of the person, as
+            # its OWN fact. See was_delivered() for why it cannot be inferred from
+            # ask_message_ids, which is what it was until 2026-08-17.
+            "delivered_at": None,
             "answer": None,
             "answered_at": None,
             "outcome": None,
@@ -238,6 +242,14 @@ def record_ask_message(cid, message_id):
     original. Storing only the first would have made the fast, certain path fail
     exactly when someone did the most natural thing: answer the message that just
     arrived.
+
+    STRICTLY A BINDING RECORD, and nothing else. The batch message id lands here
+    for every question that message displays, which is right - a reply to it may
+    answer any of them - and it means this list says NOTHING about whether a
+    particular question was the reason a message went out. It was read as a
+    delivery flag until 2026-08-17 and the race that followed cost two questions
+    their nudge budget within a second of being asked. was_delivered() is the
+    delivery fact; this is the binding one.
     """
     def go(conv):
         ids = conv.setdefault("ask_message_ids", [])
@@ -267,20 +279,67 @@ def record_diagnosis(cid, text, confidence=None):
     return _mutate(cid, go)
 
 
-def restart_clock(cid, now=None):
-    """Start the nudge countdown from now - called when the question is delivered.
+def mark_delivered(cid, now=None):
+    """This question is now in front of the person. Records it, and starts the clock.
 
-    open() sets a deadline assuming the ask goes out promptly, which is usually
-    true and occasionally very wrong: if the bot is down when a session asks, the
-    conversation sits undelivered and its fifteen minutes elapse before the person
-    has seen a word. Then the first thing they ever receive about it is a nudge.
+    Was `restart_clock`, which named the side effect and hid the point. What
+    matters is the FACT - see was_delivered() - and the clock restart follows from
+    it: open() sets a deadline assuming the ask goes out promptly, which is
+    usually true and occasionally very wrong. If the bot is down when a session
+    asks, the conversation sits undelivered and its fifteen minutes elapse before
+    the person has seen a word. Then the first thing they ever receive about it is
+    a nudge.
+
+    Called for EVERY question a delivery put on screen, not only the one whose job
+    happened to run. One batch message shows the whole queue, so it delivers the
+    whole queue - and a sibling left unmarked is one whose deadline is still
+    counting from a moment it was invisible.
     """
     now = now or _now()
 
     def go(conv):
+        conv["delivered_at"] = _iso(now)
         conv["due_at"] = _iso(now + NUDGE_AFTER)
         _event(conv, "delivered")
     return _mutate(cid, go)
+
+
+def was_delivered(conv):
+    """Has this question ever actually been shown to the person? Takes a conv dict.
+
+    ITS OWN FACT, and that is the whole content of this function. Until 2026-08-17
+    the test was `bool(conv["ask_message_ids"])` - and that list is stamped with
+    the batch message id for EVERY question the message displays, because a reply
+    to it may answer any of them. Correct for binding, and load-bearing for it.
+    Disastrous as a delivery flag: when several asks were opened within a second,
+    whichever advance job ran first marked all the others, so their own delivery
+    jobs concluded the question had already been asked and sent a NUDGE instead -
+    one second after it first appeared. Two facts sharing one field, and the
+    quieter one lost.
+
+    The ask_message_ids fallback is for records written before this field existed.
+    It reads them exactly as the old code did, so a conversation mid-flight across
+    the upgrade is not re-asked; the deadline check in advance_conversation is
+    what keeps those from nudging early.
+    """
+    return bool(conv.get("delivered_at") or conv.get("ask_message_ids"))
+
+
+def beat_due(conv, now=None):
+    """Is this conversation's next nudge or bank actually due? Takes a conv dict.
+
+    THE SECOND NET UNDER THE RACE. The tick loop only ever advances what due()
+    hands it, so this changed nothing there - but advance_conversation is also
+    called directly the moment an ask is opened, to deliver it, and that path
+    trusted the caller completely. When delivery was skipped for any reason the
+    next branch was a nudge, unconditionally, however new the question was.
+
+    Nothing should ever nudge someone about a question whose deadline has not
+    arrived. Stating that here means it holds however the caller got here.
+    """
+    now = now or _now()
+    deadline = _parse(conv.get("due_at"))
+    return bool(deadline) and now >= deadline
 
 
 def by_ask_message(message_id):
@@ -618,8 +677,7 @@ def due(now=None):
         # have not done yet.
         if c.get("direction", ASKING) != ASKING:
             continue
-        deadline = _parse(c.get("due_at"))
-        if not deadline or now < deadline:
+        if not beat_due(c, now):
             continue
         out.append((c, "nudge" if int(c.get("nudges", 0)) < MAX_NUDGES else "bank"))
     out.sort(key=lambda p: p[0].get("seq", 0))

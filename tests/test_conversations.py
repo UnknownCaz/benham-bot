@@ -392,6 +392,26 @@ def main():
             return res
 
         import asyncio
+
+        def make_due(*convs):
+            """Wind a deadline back so the next beat is genuinely due.
+
+            advance_conversation refuses to nudge before the deadline (the second
+            half of the 2026-08-17 race fix), so a test that wants the nudge has to
+            say the fifteen minutes elapsed. It cannot simply pass a clock the way
+            the rest of this file does: the beat runs through capabilities.run,
+            which takes an action's parameters and not a time.
+
+            Every nudge below used to be an immediate second call, and that is
+            exactly the assumption the race exploited - "advance always does the
+            next beat, right now" is what turned a sibling's delivery into a nudge
+            one second later.
+            """
+            for cv in convs:
+                C._mutate(cv["id"] if isinstance(cv, dict) else cv,
+                          lambda c: c.__setitem__(
+                              "due_at", C._iso(C._now() - timedelta(seconds=1))))
+
         r = asyncio.run(advance(conv["id"]))
         check("the first beat asks", r["status"], "asked")
         check("the question went to the counterparty", sent[-1][0], DOOM)
@@ -400,10 +420,11 @@ def main():
         check("the ask becomes repliable",
               len(C.get(conv["id"])["ask_message_ids"]), 1)
 
-        asyncio.run(advance(conv["id"]))          # nudge 1
-        asyncio.run(advance(conv["id"]))          # nudge 2
+        make_due(conv); asyncio.run(advance(conv["id"]))          # nudge 1
+        make_due(conv); asyncio.run(advance(conv["id"]))          # nudge 2
         check("both nudges were spent", C.get(conv["id"])["nudges"], 2)
         sent.clear()
+        make_due(conv)
         r = asyncio.run(advance(conv["id"]))      # budget spent -> bank
         check("once the budget is spent it banks", r["status"], "banked")
         check("state on disk agrees", C.get(conv["id"])["state"], C.BANKED)
@@ -423,9 +444,10 @@ def main():
         sent.clear()
         own = C.open_conversation(owner_id, "which way", "A or B?", now=NOW)
         asyncio.run(advance(own["id"]))          # ask
-        asyncio.run(advance(own["id"]))          # nudge 1
-        asyncio.run(advance(own["id"]))          # nudge 2
+        make_due(own); asyncio.run(advance(own["id"]))          # nudge 1
+        make_due(own); asyncio.run(advance(own["id"]))          # nudge 2
         sent.clear()
+        make_due(own)
         r = asyncio.run(advance(own["id"]))
         check("it still banks", r["status"], "banked")
         # He has had the question twice already; a third message telling him he did
@@ -460,9 +482,98 @@ def main():
         check("delivering does NOT spend a nudge", C.get(fresh["id"])["nudges"], 0)
         check("the delivery is on the record",
               [e["event"] for e in C.get(fresh["id"])["log"]][-1], "delivered")
+        check("...and as a FACT, not something to infer from the message list",
+              bool(C.get(fresh["id"]).get("delivered_at")), True)
+        # Immediately, before the deadline. This used to nudge, and that is half of
+        # what made the race below possible.
+        sent.clear()
         r = asyncio.run(advance(fresh["id"]))
-        check("only the SECOND beat is a nudge", r["status"], "nudged")
+        check("a beat that is not due yet does NOTHING", r["status"], "waiting")
+        check("...and says nothing to him", sent, [])
+        make_due(fresh)
+        r = asyncio.run(advance(fresh["id"]))
+        check("only the SECOND beat, once it is due, is a nudge", r["status"], "nudged")
         C.forget()
+
+        section("Beat zero is PER QUESTION, not per message")
+        # THE RACE, live in Tyler's DMs on 2026-08-17. Three sessions asked within
+        # 300ms of each other. Whichever advance job ran first delivered the batch
+        # and stamped its message id onto EVERY question the message showed - right
+        # for binding, since a reply to that message may answer any of them. But
+        # that same list was doubling as the "has this ever been delivered" flag, so
+        # the other two found it non-empty, skipped beat zero, and NUDGED:
+        #
+        #   c11  07:38:42 opened -> 07:38:43 nudged #1
+        #   c12  07:38:42 opened -> 07:38:43 delivered   (this one won the race)
+        #   c13  07:38:42 opened -> 07:38:45 nudged #1
+        #
+        # MAX_NUDGES is 2, so c11 and c13 each burned one on a question that had
+        # been on his screen for under a second, and their bank deadline arrived
+        # ~15 minutes early. Both banked at 08:10:28. Tyler answered c11 at
+        # 08:11:43 - 75 seconds too late to bind, and the answer was lost. c12,
+        # which delivered correctly and kept its full budget, was still live at
+        # 08:15:43 and bound fine. It is the control case.
+        #
+        # He also got "still after this one when you get a sec:" about questions he
+        # had never been shown, which reads as nagging about nothing.
+        RACE = 999000777
+        C.forget()
+        C.set_batch_message(RACE, None)
+        sent.clear(); edits.clear(); deleted.clear()
+        first = C.open_conversation(RACE, "db", "which database?", now=NOW)
+        won = C.open_conversation(RACE, "cache", "drop the cache?", now=NOW)
+        last = C.open_conversation(RACE, "deploy", "ready to deploy?", now=NOW)
+
+        # The middle one's job happens to run first - as c12's did - and delivers
+        # the batch on behalf of all three.
+        r = asyncio.run(advance(won["id"]))
+        check("whichever job runs first delivers", r["status"], "asked")
+        check("...and the one message it sends shows all three", r["queued"], 3)
+        check("...so all three questions really are on his screen",
+              [q in sent[-1][1] for q in ("which database?", "drop the cache?",
+                                          "ready to deploy?")], [True, True, True])
+
+        # Now the other two run their own delivery jobs, a second later.
+        r = asyncio.run(advance(first["id"]))
+        check("a question the message already showed does NOT nudge",
+              r["status"], "waiting")
+        r = asyncio.run(advance(last["id"]))
+        check("...and neither does the third", r["status"], "waiting")
+        check("nobody spent a nudge on a question one second old",
+              [C.get(x["id"])["nudges"] for x in (first, won, last)], [0, 0, 0])
+        check("...so the full budget is intact and the bank deadline is not early",
+              [C.get(x["id"])["state"] for x in (first, won, last)],
+              [C.OPEN, C.OPEN, C.OPEN])
+        check("...and he was told once, not three times", len(sent), 1)
+
+        # The flag, and the clock. Delivery is a fact about a QUESTION, and this
+        # message delivered all three - so all three are marked, and all three
+        # start their fifteen minutes from now. Restarting only the winner's clock
+        # is the same bug wearing a hat: if the bot were down when the asks were
+        # made, the other two would arrive with their deadline already in the past
+        # and nudge on the very next tick.
+        check("every question the message showed is recorded as delivered",
+              [bool(C.get(x["id"]).get("delivered_at")) for x in (first, won, last)],
+              [True, True, True])
+        # Asserted on the LOG, not on due_at. "the deadline is in the future" is
+        # true of a nudged conversation too - nudging moves the clock as well - so
+        # that check passed with the fix backed out, which is this file's own
+        # recurring failure mode. The delivery event is the thing that can only
+        # have one cause.
+        check("...and every one of them starts its fifteen minutes from delivery",
+              [[e["event"] for e in C.get(x["id"])["log"]].count("delivered")
+               for x in (first, won, last)], [1, 1, 1])
+
+        # And once the deadline really has passed, the nudge is not cancelled -
+        # only deferred to the moment it was always meant to happen.
+        sent.clear()
+        make_due(first)
+        r = asyncio.run(advance(first["id"]))
+        check("the nudge still happens when it is genuinely due", r["status"], "nudged")
+        check("...and it quotes the question rather than rephrasing it",
+              "which database?" in sent[-1][1], True)
+        C.forget()
+        C.set_batch_message(RACE, None)
 
         section("The batch message - one numbered DM, edited in place")
         # The queue primitive was well covered from the day it shipped; the
