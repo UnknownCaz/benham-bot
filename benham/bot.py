@@ -72,10 +72,31 @@ for d in (OUTBOX, SENT, FAILED):
     os.makedirs(d, exist_ok=True)
 
 # --- exaroton /server commands + watchdog config (public IDs only; no secrets here) ---
-with open(os.path.join(paths.CONFIG_DIR, "exaroton_watch.json"), encoding="utf-8") as _wf:
-    WATCH = json.load(_wf)
-GUILD_ID = int(WATCH["guild_id"])
-ALERT_CHAN = int(WATCH["alert_channel_id"])
+# Absent file => no servers, no command guilds, watchdog never starts. This used to be a
+# bare open(), and exaroton_watch.json is gitignored, so `from benham import bot` raised
+# FileNotFoundError in any fresh clone or git worktree - which read as four broken test
+# files (attachments, guest, owner_gate, pc_reply) rather than one missing config.
+#
+# Deliberately NOT falling back to exaroton_watch.json.example: that file carries real
+# guild, channel and exaroton server ids with watch=true. Falling back to it would mean a
+# clone with no config polls Tyler's actual account, posts into a real channel and
+# registers slash commands in real guilds. Same principle identity.py states for
+# control.json - a missing config should cost capability, never safety.
+#
+# FileNotFoundError only, and deliberately not jsonio.read_json: that helper also
+# swallows malformed JSON, and the two cases deserve opposite treatment. An absent
+# file is expected (a clone that never configured exaroton). A file that is PRESENT
+# and unparseable is a typo Tyler just made in an editor, and its only symptom would
+# be a watchdog that quietly never alerts again - so that one still crashes at boot,
+# where it is impossible to miss.
+try:
+    with open(os.path.join(paths.CONFIG_DIR, "exaroton_watch.json"), encoding="utf-8") as _wf:
+        WATCH = json.load(_wf)
+except FileNotFoundError:
+    WATCH = {}
+WATCH.setdefault("servers", {})  # every reader below indexes this; a hand-edit may omit it
+GUILD_ID = int(WATCH.get("guild_id") or 0)      # 0 = unconfigured, never a real guild id
+ALERT_CHAN = int(WATCH.get("alert_channel_id") or 0)
 OWNER_IDS = set(WATCH.get("owner_ids", []))
 
 # --- Per-guild /server command config: a SERVER whitelist per Discord guild (not per user) ---
@@ -83,10 +104,12 @@ OWNER_IDS = set(WATCH.get("owner_ids", []))
 # From a given Discord guild you can only see/control the listed exaroton servers; require_operator
 # decides whether start/stop/restart still need an operator there (owner_ids or a guild admin).
 # The /server commands are registered to exactly these guilds. Default: Testing only, all servers,
-# operators required.
+# operators required - or nothing at all when there is no config to name a guild.
+_DEFAULT_COMMAND_GUILDS = (
+    {str(GUILD_ID): {"servers": "*", "require_operator": True}} if GUILD_ID else {})
 COMMAND_GUILDS = {
     int(gid): cfg for gid, cfg in
-    WATCH.get("command_guilds", {str(GUILD_ID): {"servers": "*", "require_operator": True}}).items()
+    WATCH.get("command_guilds", _DEFAULT_COMMAND_GUILDS).items()
 }
 
 
@@ -505,8 +528,15 @@ async def on_ready():
             log(f"Synced {len(synced)} command(s) to guild {gid}: {[c.name for c in synced]}")
         except Exception:  # noqa: BLE001
             log(f"Slash command sync failed for guild {gid}:\n" + traceback.format_exc())
-    if not exaroton_watchdog.is_running():
-        exaroton_watchdog.start()
+    # Started only when there is something to watch. With no exaroton_watch.json the loop
+    # would still poll the exaroton API every 30s and hit the credits endpoint every 20th
+    # cycle, failing each time against an account it has no token for - log noise standing
+    # in for a watchdog that cannot watch anything.
+    if WATCH["servers"]:
+        if not exaroton_watchdog.is_running():
+            exaroton_watchdog.start()
+    else:
+        log("exaroton watchdog: OFF — no servers in config/exaroton_watch.json")
 
 
 # Prefix that sends a DM straight to the PC session with no API call. Configurable

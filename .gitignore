@@ -83,8 +83,10 @@ whitelist-usernames.txt
 # a new one has to be added here deliberately. This is that.
 conversations.json
 
-# Which Discord message is showing each person their ask queue, and which
-# questions it shows. Real message ids in real DMs, keyed by real user id - the
-# same class as conversations.json above, and it was missed when the queue
-# shipped because the file only appears once someone is actually asked something.
+# The batch-message pointer: counterparty id -> the Discord message currently
+# showing them their queue, and which questions it shows. Bot-mutated state, and
+# it names whose DM thread is whose - same class as conversations.json above.
+# It shipped with the queue and had no rule, and two sessions found that
+# independently, which is the tell: the file does not exist until someone is
+# actually asked something, so an untouched state/ hides it from every check.
 ask_batches.json
