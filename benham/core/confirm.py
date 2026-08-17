@@ -36,6 +36,7 @@ is the safe direction to fail. A confirmation that survived a crash would be an
 approval granted to a process that no longer remembers why it asked.
 """
 
+import re
 import time
 import uuid
 
@@ -155,15 +156,73 @@ def _normalize(text):
     return (text or "").strip().strip(".!?,;:").strip().lower()
 
 
-def read_reply(text):
+# Words too common to prove a reply means THIS action rather than the sentence
+# around it. "yes, do it" names nothing; "yes, purge that channel" does.
+_WEAK_WORDS = {
+    "the", "that", "this", "it", "its", "do", "go", "and", "for", "you", "your",
+    "yes", "yeah", "yep", "ok", "okay", "please", "now", "all", "one", "with",
+    "from", "was", "are", "was", "totally", "right", "sure", "sounds", "good",
+}
+
+
+def _action_words(pending):
+    """Distinctive words that count as naming this action.
+
+    Drawn from the action name and from whatever the caller actually passed, so
+    "yes, purge that channel" and "yes, ban steve" both land without anyone
+    maintaining a phrase list per capability.
+    """
+    words = set(re.split(r"[^a-z0-9]+", pending.action.lower()))
+    for value in (pending.params or {}).values():
+        if isinstance(value, str):
+            words.update(re.split(r"[^a-z0-9]+", value.lower()))
+    # The preview holds the resolved names - the channel, the members, the role -
+    # which is usually what a human types rather than the parameter name.
+    preview = pending.preview
+    if isinstance(preview, dict):
+        for key in ("channel", "name", "target", "user", "member", "role", "guild"):
+            v = preview.get(key)
+            if isinstance(v, str):
+                words.update(re.split(r"[^a-z0-9]+", v.lower()))
+    return {w for w in words if len(w) >= 3} - _WEAK_WORDS
+
+
+def needs_reference(pending):
+    """True when a bare affirmative must not be enough.
+
+    Tier 3 only - no undo. Tyler's rule, 2026-08-17: "a bare yes should not work
+    it should work with a yes, xyz to confirm thats what the sender is talking
+    about, so 'yes, purge that channel.' would work but, 'yes, your totally
+    right' wouldnt."
+
+    Imported lazily: capabilities pulls in policy and the whole registry, and
+    this module is deliberately cheap enough to import from anywhere.
+    """
+    if pending is None:
+        return False
+    try:
+        from benham.core import capabilities
+    except ImportError:
+        return False
+    act = capabilities.REGISTRY.get(pending.action)
+    return bool(act and act.tier == 3)
+
+
+def read_reply(text, pending=None):
     """Classify a reply to a confirmation prompt.
 
-    Returns (verdict, token) where verdict is "yes" | "no" | None. A token is
-    extracted when the message names one, so an explicit "yes a1b2c3" targets that
-    action even if something else was parked in between.
+    Returns (verdict, token) where verdict is "yes" | "no" | "needs_reference" |
+    None. A token is extracted when the message names one, so an explicit
+    "yes a1b2c3" targets that action even if something else was parked in between.
 
     Anything that is not clearly affirmative or negative returns None - and a None
     must be treated as "no action", never as assent. Ambiguity is not consent.
+
+    "needs_reference" is the tier-3 case: the reply IS affirmative, but it does not
+    say what it is affirming, so it does not fire. It is a distinct verdict rather
+    than a None so the caller can say WHY nothing happened - a destructive action
+    silently not running is its own kind of confusing, and the next thing a human
+    does is say "yes" again, louder.
     """
     raw = _normalize(text)
     if not raw:
@@ -181,10 +240,33 @@ def read_reply(text):
     phrase = " ".join(w for w in words if w != token).strip()
 
     if phrase in _AFFIRMATIVE:
-        return "yes", token
+        # Naming the token is already an unambiguous reference - it identifies the
+        # action more precisely than any word could, so it satisfies the tier-3
+        # rule on its own.
+        if token or not needs_reference(pending):
+            return "yes", token
+        if _references(raw, pending):
+            return "yes", token
+        return "needs_reference", token
     if phrase in _NEGATIVE:
         return "no", token
+
+    # Affirmative-plus-reference lands here, because the phrase is longer than a
+    # bare "yes": "yes, purge that channel" is not in _AFFIRMATIVE. Only tier 3
+    # accepts it - elsewhere the strict whitelist stays exactly as it was, so this
+    # cannot loosen anything that was previously refused.
+    if needs_reference(pending) and _references(raw, pending):
+        head = raw.replace(",", " ").split()
+        if head and head[0] in _AFFIRMATIVE:
+            return "yes", token
+
     return None, token
+
+
+def _references(raw, pending):
+    """Does this reply name the action it is confirming?"""
+    said = set(re.split(r"[^a-z0-9]+", raw))
+    return bool(said & _action_words(pending))
 
 
 def describe(p):
@@ -205,9 +287,17 @@ def describe(p):
     reason = p.preview.get("reason")
     if reason:
         lines += ["", f"_{reason}_"]
-    lines += [
-        "",
-        f"Tap a button, or reply **yes** to run it / **no** to cancel. "
-        f"Token `{p.token}`, expires in {p.seconds_left // 60}m.",
-    ]
+    # The prompt has to state the rule that will actually be applied. Telling him
+    # "reply yes" and then refusing a bare yes is how a safety feature becomes a
+    # thing people fight with - and the next move after an unexplained no-op is to
+    # say yes again, louder.
+    if needs_reference(p):
+        verb = p.action.split("_")[0]
+        how = (f"Tap a button, or reply with a yes that **names what it is** - "
+               f"\"yes, {verb} it\" or `yes {p.token}`. A bare \"yes\" will not fire "
+               f"this one: no undo on this tier. **no** cancels.")
+    else:
+        how = (f"Tap a button, or reply **yes** to run it / **no** to cancel. "
+               f"Token `{p.token}`.")
+    lines += ["", f"{how} Expires in {p.seconds_left // 60}m."]
     return "\n".join(lines)

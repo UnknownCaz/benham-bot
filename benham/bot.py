@@ -1154,8 +1154,22 @@ async def on_message(message):
     # conversation falls through to the agent as normal.
     pending = confirm.current()
     if pending is not None:
-        verdict, token = confirm.read_reply(text)
+        # The pending goes IN so the tier-3 rule can apply: on a destructive action
+        # an affirmative has to name what it is affirming. At most one is ever live,
+        # so get(token) and current() are the same object whenever the token is real.
+        verdict, token = confirm.read_reply(text, pending)
         target = confirm.get(token) if token else pending
+        if verdict == "needs_reference":
+            await reply_in(
+                message.channel,
+                f"That reads as a yes, but I'm not firing **{pending.action}** on a bare "
+                f"one — no undo on this tier. Name what you're confirming and I'll go: "
+                f"e.g. \"yes, {pending.action.split('_')[0]} it\", or `yes {pending.token}`. "
+                f"\"no\" cancels.",
+                reference=message)
+            log(f"UNREFERENCED yes for {pending.action} (token {pending.token}) "
+                f"by {message.author.id} - asked for a specific confirmation")
+            return
         if verdict == "yes" and target is not None:
             confirm.consume(target.token)
             await retire_view(("confirm", target.token), "answered 'yes' in chat")
