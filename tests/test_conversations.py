@@ -60,8 +60,16 @@ def section(title):
 def main():
     tmp = tempfile.mkdtemp(prefix="benham-conv-")
     real_store = C.STORE
+    real_batches = C.BATCHES
     try:
         C.STORE = os.path.join(tmp, "conversations.json")
+        # BATCHES was NOT redirected until 2026-08-18, and it was not a
+        # theoretical leak: the live state/ask_batches.json on Tyler's machine
+        # held {doom: 7007, tyler: 7004} - stub message ids from _Sent below,
+        # written by this file on every run. The real bot would then try to edit
+        # message 7007 in a real DM. It fails safe (the fetch raises and it sends
+        # a fresh one), which is exactly why nobody noticed for a day.
+        C.BATCHES = os.path.join(tmp, "ask_batches.json")
 
         section("An ask is a thing, and it starts waiting")
         c = C.open_conversation(DOOM, "check the lore-button fix",
@@ -301,6 +309,8 @@ def main():
         # learned this the expensive way: a gate that is written but not wired is
         # indistinguishable, from a test, from one that works.
         sent = []
+        edits = []
+        deleted = []
 
         class _Sent:
             """What discord's channel.send actually returns: a Message with an id.
@@ -309,25 +319,63 @@ def main():
             reads .id off it to make the nudge repliable - so the stub being looser
             than the real API hid a real code path. Same class of gap as a test that
             asserts against a helper instead of the live one.
+
+            It also could not be fetched, edited or deleted, so the ENTIRE
+            edit-in-place path was unreachable from the suite: every attempt threw
+            AttributeError into a bare `except Exception` and fell through to
+            sending a fresh message. The batched delivery looked tested and was
+            not, which is how the silent-edit bug below survived.
             """
             _next = [7000]
 
-            def __init__(self):
+            def __init__(self, ch, content):
                 self.id = _Sent._next[0]
                 _Sent._next[0] += 1
+                self.channel, self.content = ch, content
+
+            async def edit(self, content=None, **kw):
+                self.content = content
+                edits.append((self.channel.uid, self.id, content))
+
+            async def delete(self):
+                self.channel.store.pop(self.id, None)
+                deleted.append((self.channel.uid, self.id))
 
         class _DM:
+            """One channel object per user, kept across calls.
+
+            The old stub built a fresh _DM every time get_user ran, so nothing sent
+            in one beat existed in the next - which is precisely the state the
+            batch message lives in.
+            """
+            _channels = {}
+
             def __init__(self, uid):
                 self.uid = uid
+                self.store = {}
+
+            @classmethod
+            def get(cls, uid):
+                return cls._channels.setdefault(int(uid), cls(int(uid)))
 
             async def send(self, content=None, **kw):
                 sent.append((self.uid, content))
-                return _Sent()
+                msg = _Sent(self, content)
+                self.store[msg.id] = msg
+                return msg
+
+            async def fetch_message(self, mid):
+                # Discord raises NotFound for a message that is gone. So does this,
+                # and the caller catches it - if the stub returned None instead, the
+                # None-check downstream would paper over a path that really throws.
+                if int(mid) not in self.store:
+                    raise LookupError(f"no message {mid}")
+                return self.store[int(mid)]
 
         class _User:
             def __init__(self, uid):
                 self.id = uid
-                self.dm_channel = _DM(uid)
+                self.dm_channel = _DM.get(uid)
 
         class _Client:
             def get_user(self, uid):
@@ -392,6 +440,13 @@ def main():
         # get a sec" about a question the person had never seen. Delivering is not a
         # nudge and must not spend the budget.
         C.forget()
+        # Clear the batch record too, so this section tests beat zero and nothing
+        # else. C.forget() drops conversations but not the message showing them,
+        # and the leftover sent this section down the edit path - which meant it
+        # was silently also testing batch staleness, and blew up with an
+        # IndexError instead of a diagnosis when that broke. One section, one
+        # subject; staleness has its own below.
+        C.set_batch_message(DOOM, None)
         fresh = C.open_conversation(DOOM, "check the fix", "does the lore button work?",
                                     now=NOW)
         check("a new conversation has nothing delivered yet",
@@ -408,6 +463,111 @@ def main():
         r = asyncio.run(advance(fresh["id"]))
         check("only the SECOND beat is a nudge", r["status"], "nudged")
         C.forget()
+
+        section("The batch message - one numbered DM, edited in place")
+        # The queue primitive was well covered from the day it shipped; the
+        # DELIVERY of it was not covered at all, because the stub could not be
+        # edited or fetched. Two real bugs were living in that gap.
+        BATCH = 999000444
+        C.forget()
+        C.set_batch_message(BATCH, None)
+        sent.clear(); edits.clear(); deleted.clear()
+
+        one = C.open_conversation(BATCH, "db choice", "sqlite or json?", now=NOW)
+        body = C.render_queue(BATCH)
+        check("a queue of one is just the question - no list to number",
+              body, "sqlite or json?")
+        asyncio.run(advance(one["id"]))
+        first_msg = C.batch_message(BATCH)
+        check("it was sent, not edited into something", len(sent), 1)
+        check("and the batch message is on record", bool(first_msg), True)
+        check("what it shows is on record too", C.shown_queue(BATCH)[0]["id"], one["id"])
+
+        # A question joining the BACK amends the list silently, which is right:
+        # nothing at the top changed, and a Discord edit fires no notification.
+        two = C.open_conversation(BATCH, "cache", "drop the cache?", now=NOW)
+        asyncio.run(advance(two["id"]))
+        check("a question joining the back edits in place", len(edits), 1)
+        check("...rather than sending a second message", len(sent), 1)
+        check("...and it is the SAME message, so one numbering exists",
+              C.batch_message(BATCH), first_msg)
+        body = edits[-1][2]
+        check("now it is a numbered list", "**1.** sqlite or json?" in body, True)
+        check("...with the second question as 2", "**2.** drop the cache?" in body, True)
+        check("...and it says how to answer", "by number" in body, True)
+        check("both questions bind to that one message",
+              [C.by_ask_message(first_msg) is not None,
+               first_msg in C.get(two["id"])["ask_message_ids"]], [True, True])
+
+        # A BLOCKING question jumps the front, and an edit would deliver it
+        # invisibly - the exact opposite of what claiming BLOCKING is for. So the
+        # message is replaced, which notifies.
+        sent.clear(); edits.clear()
+        three = C.open_conversation(BATCH, "prod", "restart prod?", now=NOW,
+                                    priority=C.BLOCKING,
+                                    placement_reason="deploy is wedged")
+        asyncio.run(advance(three["id"]))
+        check("jumping the queue REPLACES the message so it notifies", len(sent), 1)
+        check("...instead of amending it silently", len(edits), 0)
+        check("...and the stale numbering is deleted, not left to contradict it",
+              deleted[-1][1], first_msg)
+        check("the batch message moved", C.batch_message(BATCH) != first_msg, True)
+        check("the blocking one is now 1", "**1.** restart prod?" in sent[-1][1], True)
+        check("...and says so, because self-assessment only works if he sees it",
+              "blocking a session" in sent[-1][1], True)
+        check("its stated reason rides along", "deploy is wedged" in sent[-1][1], True)
+
+        section("A number means what it means ON HIS SCREEN")
+        # The half that was missing. Slots are recomputed, which is right - but
+        # recomputing is only honest while the message on screen matches the
+        # queue, and NOTHING re-renders it when he answers. He answers 1, the live
+        # queue renumbers underneath a list he can still read, and his next "2"
+        # lands on what used to be 3.
+        screen = [c["id"] for c in C.shown_queue(BATCH)]
+        check("the screen shows blocking first, then the other two",
+              screen, [three["id"], one["id"], two["id"]])
+        C.answer_slots(BATCH, {1: "yes restart it"})
+        check("slot 1 got its answer", C.get(three["id"])["answer"], "yes restart it")
+        check("the LIVE queue has renumbered - this is the trap",
+              C.slot_of(two["id"]), 2)
+        # .get() rather than ["id"] so a regression here REPORTS. The first run of
+        # this with the fix backed out bound slot 2 to c2 and slot 3 to nothing,
+        # and the None then crashed the file - one diagnosis followed by a
+        # traceback that hid the rest.
+        def at(slot):
+            hit = C.by_slot(BATCH, slot)
+            return hit["id"] if hit else None
+        check("but slot 2 still means the second thing he can SEE",
+              at(2), one["id"])
+        check("...and slot 3 still means the third", at(3), two["id"])
+        check("a slot he already answered binds to nothing rather than to its "
+              "neighbour", at(1), None)
+        C.answer_slots(BATCH, {3: "yeah drop it"})
+        check("answering by the on-screen number lands on the right question",
+              C.get(two["id"])["answer"], "yeah drop it")
+        check("...and did NOT touch the one still open", C.get(one["id"])["answer"], None)
+
+        section("A lone question after a quiet spell still makes his phone buzz")
+        # The regression, found 2026-08-18. The batch id is never cleared when a
+        # queue empties, so the next single question found a stale message and took
+        # the EDIT path - and an edit sends no notification. The first question
+        # after a quiet spell is the one most likely to be urgent and was the one
+        # guaranteed to arrive silently.
+        C.answer(one["id"], "sqlite", bound_by="slot")
+        check("the queue is empty but the message record survives",
+              [C.queue_for(BATCH), bool(C.batch_message(BATCH))], [[], True])
+        stale_msg = C.batch_message(BATCH)
+        sent.clear(); edits.clear()
+        lone = C.open_conversation(BATCH, "deploy", "ready to deploy?", now=NOW)
+        asyncio.run(advance(lone["id"]))
+        check("it is SENT, so he is actually notified", len(sent), 1)
+        check("...and not quietly edited into the old list", len(edits), 0)
+        check("the old message is gone rather than showing answered questions",
+              deleted[-1][1], stale_msg)
+        check("and the new message is the one that binds",
+              C.by_ask_message(C.batch_message(BATCH))["id"], lone["id"])
+        C.forget()
+        C.set_batch_message(BATCH, None)
 
         section("Binding: a reply is certain, everything else is judged")
         # Tyler's rule, 2026-08-16: "both, reply binds and the model judges and
@@ -480,6 +640,7 @@ def main():
         check("...with its log intact", len(raw[cid]["log"]) >= 1, True)
     finally:
         C.STORE = real_store
+        C.BATCHES = real_batches
         shutil.rmtree(tmp, ignore_errors=True)
 
     print()
