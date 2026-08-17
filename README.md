@@ -410,8 +410,13 @@ which the boot banner asserts out loud.)
 
 Two independent denials back it up in `policy.py`, either of which would be sufficient:
 
-- `Origin.GUEST_DM` is in `Origin.HUMAN`, so `rule_owner` refuses it
+- `rule_guest` refuses anything not named in `guest.capabilities`, and nothing is - it is
+  fail-closed, so an empty config grants nothing rather than everything
 - `Origin.GUEST_DM` is **not** in `DEFAULT_ORIGINS`, so `rule_origin_allowed` refuses it too
+
+(This list used to name `rule_owner` as the first denial. It is not one: `rule_owner` steps
+aside for guest origins, and has since the guest refactor. Corrected 2026-08-17 while adding
+`GUEST_DM` to `test_policy`'s exhaustive matrix, which is what surfaced it.)
 
 A capability written next year inherits both without anyone remembering guests exist.
 
