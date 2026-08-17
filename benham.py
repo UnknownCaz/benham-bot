@@ -37,6 +37,8 @@ COMMANDS = {
     "purge":        ("benham.cli.purge",        "bulk-delete messages older than N days"),
     "catchup":      ("benham.cli.catchup",      "invisible, read-only catch-up on one channel"),
     "read_history": ("benham.cli.read_history", "invisible, read-only reader across guilds"),
+    "ask":          ("benham.cli.ask",          "ask Tyler something and wait for his answer"),
+    "conv":         ("benham.cli.conv",         "read, close or bank conversations"),
     "status":       ("benham.cli.status",       "quick, read-only health check"),
     "usage":        ("benham.cli.usage",        "token and cost accounting from the logs"),
     "watch_pc":     ("benham.cli.watch_pc",     "watch, live, what Benham is doing on the PC"),
