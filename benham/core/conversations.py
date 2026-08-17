@@ -114,6 +114,23 @@ MAX_NUDGES = 2
 # information about when to ask again, not permission to ask sooner.
 MAX_DEFER = timedelta(hours=1)
 
+# A BANK IS NOT A DOOR SLAMMING (Tyler's call, 2026-08-17). Giving up waiting and
+# refusing to hear are different things, and only the first was ever intended:
+# bank() keeps the question precisely because it is still a real question. So an
+# answer arriving just after the deadline is still an answer, and throwing it away
+# is strictly worse than any alternative.
+#
+# It bit for real. c11 banked at 08:10:28 and Tyler answered it at 08:11:43 - 75
+# seconds late. The answer went nowhere, silently, and Benham then told him it had
+# been recorded. He was answering a question that was still on his screen; nothing
+# about that moment told him it had expired.
+BANK_GRACE = timedelta(minutes=10)
+
+# How long a finished conversation stays worth mentioning to the model. Long
+# enough to cover the batch message he is probably still looking at, short enough
+# that the volatile block does not become a changelog.
+STILL_ON_SCREEN = timedelta(minutes=30)
+
 _lock = threading.Lock()
 
 
@@ -325,6 +342,57 @@ def was_delivered(conv):
     return bool(conv.get("delivered_at") or conv.get("ask_message_ids"))
 
 
+def answerable(conv, now=None):
+    """Can this conversation still take an answer? Takes a conv dict.
+
+    LIVE, or banked inside BANK_GRACE. The second half is the whole point: the
+    question a banked conversation asked is still on the person's screen, still
+    unanswered, and still one this side actually wants the answer to - bank()
+    keeps it for exactly that reason. Refusing an answer that arrives ninety
+    seconds late does not protect anything; it just loses it.
+
+    ANSWERED and CLOSED are not answerable, and that is different in kind rather
+    than in timing. Those already have an answer or an outcome, and quietly
+    replacing one would be the silent misfiling that slots exist to prevent.
+    """
+    state = conv.get("state")
+    if state in LIVE_STATES:
+        return True
+    if state != BANKED:
+        return False
+    when = _parse(conv.get("closed_at"))
+    return bool(when) and (now or _now()) - when <= BANK_GRACE
+
+
+def recently_terminal(counterparty, within=None, now=None):
+    """Conversations for this person that ended recently - probably still on screen.
+
+    Everything else in this module is about questions that are WAITING. This is
+    the opposite, and it exists because of what the gap did on 2026-08-17: the
+    model is only ever handed live conversations, so when Tyler answered a
+    question that had banked 75 seconds earlier, nothing in front of it said that
+    question existed, let alone that it was dead. It said "Locked c11 in" and
+    called nothing - which is INTENT.md §3.3 arriving through a new route.
+
+    Not a fix for that - a model can still assert whatever it likes. It removes
+    the reason: a true account of the thing he is plainly talking about is now
+    available to it instead of absent.
+    """
+    within = within or STILL_ON_SCREEN
+    now = now or _now()
+    out = []
+    for c in _load().values():
+        if int(c.get("counterparty", 0)) != int(counterparty):
+            continue
+        if c.get("state") not in TERMINAL_STATES:
+            continue
+        when = _parse(c.get("closed_at"))
+        if not when or now - when > within:
+            continue
+        out.append(c)
+    return sorted(out, key=lambda c: c.get("closed_at") or "")
+
+
 def beat_due(conv, now=None):
     """Is this conversation's next nudge or bank actually due? Takes a conv dict.
 
@@ -350,7 +418,7 @@ def by_ask_message(message_id):
     """
     mid = int(message_id)
     for c in _load().values():
-        if c.get("state") in LIVE_STATES and mid in (c.get("ask_message_ids") or []):
+        if answerable(c) and mid in (c.get("ask_message_ids") or []):
             return c
     return None
 
@@ -588,7 +656,20 @@ def shown_queue(counterparty):
         # Nothing has been delivered (or it predates the shown list), so the live
         # queue is the best available account of what he would be looking at.
         return list(live.values())
-    return [live.get(str(cid)) for cid in rec["shown"]]
+    data = _load()
+
+    def at(cid):
+        c = live.get(str(cid))
+        if c is not None:
+            return c
+        # Not live any more - but a question that banked moments ago is still
+        # printed on the message he is typing a number into, and inside the grace
+        # window it can still take that answer. Resolving it to None here would
+        # send a perfectly good "2: yes" to the model to guess about.
+        c = data.get(str(cid))
+        return c if c is not None and answerable(c) else None
+
+    return [at(cid) for cid in rec["shown"]]
 
 
 def render_queue(counterparty, queue=None):
@@ -755,13 +836,20 @@ def answer(cid, text, bound_by="reply"):
                in the same breath. An inference, recorded as one.
     """
     def go(conv):
-        if conv.get("state") not in LIVE_STATES:
+        if not answerable(conv):
             raise ValueError(f"{cid} is {conv.get('state')}, not waiting on an answer")
+        # Worth recording separately. A late answer is a real answer, but the
+        # record should be able to say the deadline had passed when it arrived -
+        # both because it is true, and because a run of them means the nudge
+        # policy is tuned wrong rather than that people are slow.
+        late = conv.get("state") == BANKED
         conv["state"] = ANSWERED
         conv["answer"] = str(text)
         conv["answered_at"] = _iso(_now())
         conv["due_at"] = None          # nothing is owed BY them any more
-        _event(conv, "answered", f"via {bound_by}")
+        _event(conv, "answered",
+               f"via {bound_by}" + (" (after banking, inside the grace window)"
+                                    if late else ""))
     return _mutate(cid, go)
 
 

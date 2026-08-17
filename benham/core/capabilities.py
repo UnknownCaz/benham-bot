@@ -884,17 +884,34 @@ async def _answer_conversation(ctx, p):
     conv = conversations.get(str(p["id"]))
     if conv is None:
         raise ActionError(f"no conversation {p['id']!r}")
-    if conv.get("state") not in conversations.LIVE_STATES:
-        raise ActionError(f"{conv['id']} is {conv['state']} - it is not waiting on an answer")
+    if not conversations.answerable(conv):
+        # Say WHICH refusal this is. "It banked twenty minutes ago" and "you
+        # already answered that" are different facts about the world, and a model
+        # told only "no" will reach for a plausible sentence rather than either of
+        # them - which is precisely how "Locked c11 in" got said about a call that
+        # was never made.
+        raise ActionError(
+            f"{conv['id']} is {conv['state']} and can no longer be answered"
+            + (f" - it banked at {conv.get('closed_at')}, more than "
+               f"{int(conversations.BANK_GRACE.total_seconds() // 60)} minutes ago. "
+               "NOTHING has been recorded. Tell him that plainly and offer to ask "
+               "it again; do not say you logged it."
+               if conv.get("state") == conversations.BANKED else
+               f" - it already has an answer: {str(conv.get('answer'))[:200]!r}"))
     if int(conv["counterparty"]) != int(ctx.actor_id or 0):
         # The one open question belongs to whoever was asked. Recording someone
         # else's answer against it would put words in their mouth on the record.
         raise ActionError(f"{conv['id']} is waiting on someone else, not you")
+    late = conv.get("state") == conversations.BANKED
     conversations.answer(conv["id"], str(p["answer"]), bound_by="judged")
     return {"status": "answered", "id": conv["id"], "bound_by": "judged",
-            "question": conv["question"],
+            "question": conv["question"], "after_banking": late,
             "note": "Tell him you took this as the answer - a judged binding that "
-                    "is not announced is the failure mode this exists to avoid."}
+                    "is not announced is the failure mode this exists to avoid."
+                    + (" This one had already given up waiting and was banked; it "
+                       "is un-banked and recorded now. Say so - he waited long "
+                       "enough for it to expire and should know it landed anyway."
+                       if late else "")}
 
 
 @action("triage_conversation", identity.MANAGE,
