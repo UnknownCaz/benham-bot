@@ -22,9 +22,8 @@ was a mistake:
                   mandatory dry-run, and an explicit second step to fire.
 """
 
+import json
 import os
-
-from benham.core import jsonio
 
 from benham import paths
 CONTROL_FILE = os.path.join(paths.CONFIG_DIR, "control.json")
@@ -51,9 +50,53 @@ _DEFAULTS = {
 }
 
 
+class ControlFileError(Exception):
+    """control.json exists but could not be parsed. Never raised for an absent file."""
+
+
 def load_control():
-    """Read control.json, filling in restrictive defaults for anything absent."""
-    cfg = jsonio.read_json(CONTROL_FILE, default={})
+    """Read control.json, filling in restrictive defaults for anything absent.
+
+    ABSENT and MALFORMED are opposite cases and get opposite treatment, which is
+    the whole reason this does not just call jsonio.read_json - that helper catches
+    (OSError, ValueError) together, so a syntax error read as an empty file.
+
+    Absent is a legitimate state: a fresh clone, or Tyler moving the file aside on
+    purpose. It falls back to _DEFAULTS above.
+
+    Malformed is a typo he just made in an editor, and treating it as absent is not
+    the safe reading it looks like. The defaults fail CLOSED on two axes and OPEN on
+    two others:
+
+        destructive_guilds  -> []      no tier 3 anywhere.        Closed. Fine.
+        agent_guilds        -> []      no mentions engage.        Closed. Fine.
+        post_guilds         -> absent  posting_allowed() returns True for EVERY
+                                       guild. The scope cap that docstring calls
+                                       "arithmetic" rather than a judgement call -
+                                       the one defence against Benham being invited
+                                       somewhere and reading planted text - is gone.
+        agent.enabled       -> absent  agent.py reads .get("enabled", True), so the
+                                       autonomous agent switches ON, and bills.
+
+    So a misplaced comma silently widens two gates and starts spending money, while
+    looking like a bot that came up fine. Refusing to boot is the correct response
+    to a control plane nobody can parse: the failure is loud, immediate, and happens
+    before a single Discord connection, which is the cheapest possible moment.
+    """
+    try:
+        with open(CONTROL_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        cfg = {}
+    except ValueError as e:  # json.JSONDecodeError subclasses this
+        raise ControlFileError(
+            f"{CONTROL_FILE} is not valid JSON: {e}\n"
+            "Benham will not start on a guess. Treating an unparseable control "
+            "plane as an absent one removes the posting scope cap entirely and "
+            "turns the agent on - it is not the safe reading it looks like.\n"
+            "Fix the syntax, or move the file aside to run on restrictive defaults "
+            "deliberately."
+        ) from e
     out = dict(_DEFAULTS)
     for k, v in cfg.items():
         if k.startswith("_"):  # "_comment"-style annotation keys in the example file
