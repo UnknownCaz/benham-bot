@@ -37,14 +37,17 @@
       The uploader controls the filename and nothing else — <code>..\..\Windows\System32\evil.dll</code>
       is a legal name for a Discord upload, and <code>CON.txt</code> is a device, not a file.
       Rewrites are reported, not silent; a final <code>realpath</code> check refuses anything
-      still resolving outside the folder. (This hygiene now lives in <code>pathsafe.py</code>,
-      shared with the guest workspace — one implementation of "may this path exist", not two
-      drifting copies.)</li>
+      still resolving outside the folder. (This hygiene lives in <code>pathsafe.py</code>. It was
+      extracted to be shared with the guest workspace — one implementation of "may this path
+      exist" rather than two drifting copies — and outlived it: the workspace was archived on
+      2026-08-16, this path is the only caller left, and the extraction is still the right
+      shape for the next one.)</li>
       <li><strong>Nothing is ever run.</strong> Windows-runnable extensions are flagged
       <code>executable: true</code> and written anyway — a blocklist would refuse ordinary work
       (<code>.jar</code> mod files) while preventing nothing, since the file is only ever bytes
-      on disk. Guests get the stricter rule (refusal) because a guest has no legitimate reason
-      to author <code>.bat</code> onto your disk.</li>
+      on disk. The archived guest workspace took the stricter rule — refusal — because a guest
+      had no legitimate reason to author <code>.bat</code> onto your disk. No guest path writes
+      files at all now, so the only live rule is the flag-and-write one above.</li>
     </ol>
     <p><strong>Outbound is where the gate sits:</strong> <code>send_file</code> is
     <code>outward</code> + <code>posts</code> — in a <a href="taint.html">tainted turn</a> the

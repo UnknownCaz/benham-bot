@@ -26,9 +26,17 @@
 
     <h2 id="confirm">When it asks to confirm</h2>
     <p>Destructive actions (delete / purge / kick / ban) and role changes always come back as a
-    <strong>preview + token</strong> first. Reply naming the token to fire. A stray "yes" without
-    the token does nothing, on purpose. Previews expire (<code>confirm.ttl_seconds</code>,
-    currently 1h) — expired = cancelled, never assumed yes.</p>
+    <strong>preview + token</strong> first. Reply "yes" to fire it, or name the token to target
+    one specific action if something else got parked in between. Previews expire — on this DM
+    path that is <code>confirm.conversation_ttl_seconds</code>, <strong>10 minutes</strong>, not
+    the hour <code>confirm.ttl_seconds</code> gives the other paths. Expired = cancelled, never
+    assumed yes. Anything that is not a recognised yes or no counts as neither, so an ambiguous
+    reply never fires anything.</p>
+    <p class="note"><strong>Corrected 2026-08-17.</strong> This paragraph used to say a bare
+    "yes" without the token does nothing "on purpose". It does fire the parked action — see
+    <a href="../inner/confirm-flow.html">the confirm flow</a> for what actually keeps a stray
+    "yeah" from triggering a purge, and for the open question of whether the token ought to be
+    mandatory on tier 3.</p>
     <p><strong>"Why is it asking approval for a normal send?"</strong> The turn is
     <em>tainted</em> — Benham read something a non-owner wrote: a channel, a nickname, a
     forwarded message, or a web search result. Outward actions then need your yes. Not a bug.

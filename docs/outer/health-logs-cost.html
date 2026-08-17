@@ -23,8 +23,9 @@
     <h2 id="cost">What's it costing?</h2>
     <pre><code>python benham.py usage --today     # today's actual consumption
 python benham.py usage --all       # every log, full history</code></pre>
-    <p>Parsed from the logs the bot already writes — no separate metering. It searches the repo
-    root and <code>logs/</code>, so archived boots still count. Why the bill stays small: the
+    <p>Parsed from the logs the bot already writes — no separate metering. It globs
+    <code>logs/</code> (both <code>LOG_DIR</code> and <code>LOGS_DIR</code>, which have been the
+    same directory since the Stage 5 move), so archived boots still count. Why the bill stays small: the
     agent's static prefix (the full registry of tool schemas + system prompt, ~7.4k tokens measured pre-Stage-4) is cache-marked, so
     after the first call each turn reads it at a tenth of the price. Per-agent billing details:
     <a href="agents.html#cost">The agents → Cost profile</a>.</p>
@@ -36,7 +37,6 @@ python benham.py usage --all       # every log, full history</code></pre>
       <tr><td>what's it doing on the PC right now?</td><td><code>python benham.py watch_pc</code> (follow live), <code>--last</code> (replay), <code>--list</code></td></tr>
       <tr><td>what did that CLI action actually do?</td><td>its <code>…_result.json</code> in <code>outbox/sent/</code> (failures: <code>outbox/failed/</code>)</td></tr>
       <tr><td>what are guests doing?</td><td><code>python benham.py guest status</code>; searches in <code>guest_searches.jsonl</code></td></tr>
-      <tr><td>what's being said in voice?</td><td><code>voice_transcript.jsonl</code> while listening</td></tr>
     </table>
 
     <h2 id="where">Where logs live</h2>
@@ -47,7 +47,6 @@ python benham.py usage --all       # every log, full history</code></pre>
       <tr><td><code>logs/supervise.log</code></td><td>supervisor lines + all bot output</td><td>→ <code>.1</code> past 5MB</td></tr>
       <tr><td><code>state/inbox.jsonl</code></td><td>every message seen</td><td rowspan="3"><code>jsonio.rotate_if_large</code>, same one-generation convention</td></tr>
       <tr><td><code>state/agent_searches.jsonl</code> / <code>state/guest_searches.jsonl</code></td><td>every web search, owner / guest</td></tr>
-      <tr><td><code>state/voice_transcript.jsonl</code></td><td>transcribed speech + wake flags</td></tr>
       <tr><td><code>outbox/sent|failed/</code></td><td>request/result JSON pairs for every queued action</td><td>—</td></tr>
       <tr><td>PC transcripts (<code>*.jsonl</code>)</td><td>full Claude Code sessions; <code>SECRET-READ</code> flags in the bot log</td><td>—</td></tr>
     </table>

@@ -28,16 +28,17 @@
     <h2 id="when">Which one fires when</h2>
     <table>
       <tr><th>trigger</th><th>goes to</th><th>notes</th></tr>
-      <tr><td>a conversation beat comes due</td><td>the tick loop, no model</td><td>The only autonomous trigger there is. Every 60s it asks <code>conversations.due()</code> whether an ask needs delivering, nudging or banking, then delivers - it decides nothing. Reaches exactly one outward capability.</td></tr>
+      <tr><td>a conversation beat comes due</td><td>the tick loop, no model</td><td>One of two autonomous triggers. Every 60s it asks <code>conversations.due()</code> whether an ask needs delivering, nudging or banking, then delivers — it decides nothing, and reaches exactly one outward capability. No model is involved.</td></tr>
+      <tr><td>a watched Minecraft server changes state</td><td><code>exaroton_watchdog</code>, no model</td><td>The other one, and the more powerful of the two: a <code>tasks.loop</code> started unconditionally at <code>on_ready</code>. It posts alerts to Discord on its own via <code>send_alert</code>, and with <code>auto_stop_empty</code> it calls <code>exa.stop()</code> — an action on a real server with nobody asked. It posts <em>outside</em> the capability chokepoint, straight to <code>channel.send</code>.</td></tr>
       <tr><td>you DM Benham</td><td>owner agent</td><td>the normal path; owner gate checked first</td></tr>
       <tr><td>you DM starting <code>pc..</code></td><td>PC session directly</td><td>skips the agent round-trip entirely</td></tr>
       <tr><td>you ask the agent for something PC-shaped</td><td>owner agent → <code>pc_task</code> → PC session</td><td>blocked in tainted turns; DM-only</td></tr>
       <tr><td>you @mention it in a guild</td><td>owner agent</td><td>only in <code>agent_guilds</code>; elsewhere refused</td></tr>
       <tr><td>a whitelisted guest DMs it</td><td>guest agent</td><td>separate memory, separate persona, capped daily</td></tr>
       <tr><td>anyone else DMs or mentions it</td><td>nobody</td><td>seen and logged, never obeyed</td></tr>
-      <tr><td>CLI scripts / <code>do.py</code></td><td>no agent at all</td><td>straight through the outbox to <code>capabilities.py</code> — same gates, no model in the loop</td></tr>
+      <tr><td>CLI scripts / <code>benham.py do</code></td><td>no agent at all</td><td>straight through the outbox to <code>capabilities.py</code> — same gates, no model in the loop</td></tr>
     </table>
-    <p>That last row matters: the CLI is not an agent. When you run <code>send.py</code> yourself,
+    <p>That last row matters: the CLI is not an agent. When you run <code>benham.py send</code> yourself,
     no model decides anything — your command goes through the same policy gates and executes.</p>
 
     <h2 id="cost">Cost profile</h2>

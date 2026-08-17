@@ -51,10 +51,11 @@ from benham import paths
 # environment variable still wins and loading twice is harmless.
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 MEMORY_FILE = os.path.join(paths.STATE_DIR, "agent_memory.json")
-# The one shared personality file, also read by brain.py (voice) and codesession.py
-# (PC). Benham used to be three different characters depending on how you reached
-# him - a casual "one of the guys" in voice, something terser in DMs - which is a
-# strange thing for a proxy that is supposed to be one person.
+# The one shared personality file, also read by codesession.py (PC). Benham used
+# to be three different characters depending on how you reached him - a casual
+# "one of the guys" in voice, something terser in DMs - which is a strange thing
+# for a proxy that is supposed to be one person. brain.py was the third reader
+# until voice was archived on 2026-08-16; two surfaces share it now.
 PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}

@@ -51,9 +51,18 @@ python benham.py guest forget-all             # everyone</code></pre>
 
     <h2 id="archived">Workspace, shared channels and code runs <span class="badge off">ARCHIVED</span></h2>
     <p>These three used to be here, behind flags you could flip. They were archived on
-    2026-08-16 and the procedures are gone with them — <code>guest.mode</code>,
-    <code>guest.capabilities</code>, <code>guest.read_channels</code> and
-    <code>guest.code_execution</code> are ignored if they linger in your config.</p>
+    2026-08-16 and the procedures are gone with them. <code>guest.read_channels</code> and
+    <code>guest.code_execution</code> are ignored if they linger in your config —
+    <strong>but the other two are not, and both bite:</strong></p>
+    <ul>
+      <li><code>guest.mode</code> accepts only <code>"chat"</code>. A lingering
+      <code>"workspace"</code> does not fall back — it makes <code>guest_enabled()</code> return
+      <code>False</code> and <strong>silently switches guests off entirely</strong>. If friends
+      report Benham ignoring their DMs, look here first.</li>
+      <li><code>guest.capabilities</code> is still read on every guest call by
+      <code>rule_guest</code>. It cannot open anything today, because no capability declares
+      <code>guest=True</code>, but it is live code rather than a dead key.</li>
+    </ul>
     <p>Why: the usage never came. <strong>Fifteen code runs, every one on the two days it was
     built.</strong> Three workspace files, one of them named "anime to watch". No recorded use of
     shared reads. Meanwhile the <code>idea..</code> filing path — about a hundred lines, shipped in
