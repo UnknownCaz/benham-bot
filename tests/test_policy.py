@@ -56,6 +56,12 @@ def ctx_for(origin, tainted=False, guild_id=TESTING):
         return c
     if origin == Origin.SYSTEM:
         return CallContext.system(guild_id)
+    if origin == Origin.GUEST_DM:
+        # A REAL whitelisted guest, not a stranger. Using an id that is not on the
+        # list would make every row below pass for the wrong reason - refused for
+        # not being a guest at all, rather than refused for being one.
+        guest_id = sorted(identity.GUEST_IDS)[0] if identity.GUEST_IDS else 1097631170788851815
+        return CallContext.guest_dm(guest_id, 111)
     raise AssertionError(origin)
 
 
@@ -248,8 +254,16 @@ check("a refused post DENIES even when tainted",
               channel_id=999).verdict, D.DENY)
 
 section("Full matrix — every action against every origin")
+# GUEST_DM was missing from this list until stage 4, and it was the one that
+# mattered most. Today the guest lane is a separate file that passes no client
+# tools, so the boundary is PHYSICS - a guest cannot reach a capability because
+# the code that would call one is not in the file they talk to. Stage 4 merges the
+# lanes, and the moment it does, the only thing between a guest and the whole
+# registry is policy.py. INTENT.md is explicit that this matrix must cover guests
+# BEFORE that merge, not after - so this row exists first, and the merge has to
+# keep it green.
 ORIGINS = [Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
-           Origin.LOCAL_CLI, Origin.SYSTEM]
+           Origin.LOCAL_CLI, Origin.SYSTEM, Origin.GUEST_DM]
 matrix = {}
 for name in sorted(capabilities.REGISTRY):
     matrix[name] = {o: allowed(name, o) for o in ORIGINS}
@@ -318,6 +332,52 @@ EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
+
+# THE ASSERTION STAGE 4 EXISTS TO PROTECT.
+#
+# Adding GUEST_DM as a matrix ROW is worth nothing on its own - the first version
+# of this change computed the column and asserted nothing about it, which is the
+# same "collected but never checked" shape that let test_injection corrupt memory
+# for twelve days while passing.
+#
+# EMPTY is the correct answer today: the guest tool loop was archived 2026-08-16,
+# so nothing declares guest=True and guest_grants() is empty. Two independent
+# rules produce that - rule_guest refuses anything not named in guest.capabilities
+# (fail-closed, and nothing is named), and rule_origin_allowed refuses because
+# GUEST_DM is not in DEFAULT_ORIGINS - and either alone would be sufficient.
+#
+# This comment said "rule_owner" on its first draft, copied from the docs it was
+# written alongside. That was the stale claim, reproduced one more time by someone
+# who had just read it. Which is the argument for the assertions below.
+#
+# The merge in item 13 dissolves the physical file boundary that currently makes
+# this true by construction. When it does, THIS LINE is what stands between a
+# guest and fifty-six capabilities. It must still read `set()` afterwards, and a
+# capability appearing here is a security regression, not a test to update.
+EXPECTED_GUEST = set()
+guest_ok = {n for n, row in matrix.items() if row[Origin.GUEST_DM]}
+check("NOTHING in the registry is reachable by a guest", guest_ok, EXPECTED_GUEST)
+
+# And the REASON, not just the result: assert each denial independently, so an edit
+# that weakens one is caught by the other rather than by nobody.
+#
+# Writing this found a stale claim in the security documentation. Both policy.py's
+# comment on Origin.HUMAN and README's guest section said the two denials were
+# rule_owner and rule_origin_allowed - but rule_owner STEPS ASIDE for guest
+# origins ("Guest origins are rule_guest's lane"), which changed in the guest
+# refactor and neither doc followed. Not a hole - rule_guest and
+# rule_origin_allowed still refuse independently - but a comment that names a
+# defence which no longer fires is how a real hole gets opened later, by someone
+# deleting rule_guest on the belief that rule_owner has it covered. Both docs
+# corrected; these assertions now pin the true pair.
+_probe = capabilities.REGISTRY["read_channel"]
+_gctx = ctx_for(Origin.GUEST_DM)
+check("rule_guest alone refuses a guest (nothing is granted)",
+      policy.rule_guest(_probe, _gctx) is not None, True)
+check("rule_origin_allowed alone refuses a guest too",
+      policy.rule_origin_allowed(_probe, _gctx) is not None, True)
+check("and rule_owner deliberately does NOT - it is rule_guest's lane",
+      policy.rule_owner(_probe, _gctx), None)
 
 print(f"\n  matrix covers {len(matrix)} actions x {len(ORIGINS)} origins "
       f"= {len(matrix) * len(ORIGINS)} combinations")

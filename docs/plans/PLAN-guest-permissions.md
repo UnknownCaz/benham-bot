@@ -18,6 +18,14 @@ regression is always attributable to a single step.
 
 What the refactor builds on, file by file:
 
+> **Historical note, 2026-08-17.** The paragraph below describes the state BEFORE this
+> plan was carried out, and the plan itself changed it: §"New caller rule" adds
+> `rule_guest` and gives `rule_owner` the line `if ctx.origin in Origin.GUEST: return
+> None`. So `rule_owner` has not refused guests since this landed. The live pair is
+> `rule_guest` + `rule_origin_allowed`. Left in place because a plan is a record of what
+> was decided, not live documentation - but the same sentence had been copied into
+> `policy.py` and `README.md`, where it WAS live, and both are now corrected.
+
 - **benham/core/policy.py** — single chokepoint. Caller rules (`RULES`) then target rules
   (`TARGET_RULES`). Guests are denied twice, independently: `rule_owner` refuses any
   human non-owner (GUEST_DM is deliberately in `Origin.HUMAN` for exactly this), and

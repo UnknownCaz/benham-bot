@@ -64,11 +64,16 @@ class Origin:
 
     # Origins that carry a human actor whose identity can be checked.
     #
-    # GUEST_DM is deliberately in here even though a guest is never an owner, and
-    # that is the point: rule_owner checks exactly this set, so listing a guest
-    # origin as human makes every capability refuse it without a line being written
-    # about guests. The alternative - leaving guests out so they skip rule_owner -
-    # would be a set membership standing between a stranger and 47 actions.
+    # GUEST_DM is in here because a guest IS a human actor - the set means "carries
+    # a person whose identity can be checked", not "is allowed".
+    #
+    # CORRECTED 2026-08-17: this comment used to say rule_owner refuses guests
+    # because of this membership. It does not, and has not since the guest
+    # refactor - rule_owner explicitly steps aside for Origin.GUEST (see its
+    # docstring: "guest origins are rule_guest's lane"). The two denials that
+    # actually fire are rule_guest (nothing is granted, and it is fail-closed) and
+    # rule_origin_allowed (GUEST_DM is not in DEFAULT_ORIGINS). test_policy pins
+    # all three facts, including the step-aside, so this cannot drift again.
     HUMAN = frozenset({OWNER_DM, OWNER_GUILD, OWNER_VOICE, GUEST_DM})
 
     # Origins belonging to someone who is not the owner. Nothing in this file grants
@@ -85,8 +90,10 @@ class Origin:
 #   anyone having to remember to exclude them. A new capability added next year is
 #   guest-proof on the day it is written, because the default it inherits says so.
 #
-# This is the second of the two independent denials guests get; rule_owner is the
-# first. Either alone would be sufficient, which is the reason for having both.
+# This is one of the two independent denials guests get; rule_guest is the other
+# (it is fail-closed, and nothing is granted). Either alone would be sufficient,
+# which is the reason for having both. NOT rule_owner - that steps aside for guest
+# origins; see the correction on Origin.HUMAN above.
 DEFAULT_ORIGINS = frozenset({
     Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE, Origin.LOCAL_CLI,
 })
