@@ -196,7 +196,8 @@ def _system_prompt(where, actor_name):
     return static + "\n\n" + volatile
 
 
-def _system_blocks(where, actor_name, conversation=None, already_bound=False):
+def _system_blocks(where, actor_name, conversation=None, already_bound=False,
+                   queue=None):
     """Split the prompt into (static, volatile).
 
     The split exists purely so the static half can be cached. Anything that varies
@@ -269,6 +270,28 @@ it deliberately instead.
                 f"He has just REPLIED to it, and that is already recorded - a reply "
                 f"binds by itself. Do NOT call answer_conversation. Just respond to "
                 f"what he actually said.")
+        elif queue and len(queue) > 1:
+            # Several are waiting, so "does this answer the open question" has become
+            # "does this answer ANY of them, and which". The certain paths (a slot
+            # number, or a reply while only one was live) already ran and did not
+            # fire, so this is genuinely a judgement call - and the more candidates
+            # there are, the less it may assume. Guessing wrong here files an answer
+            # against the wrong question and tells a session something Tyler never
+            # said, which is worse than one extra clarifying message.
+            listing = "\n".join(
+                f"{i}. `{c['id']}` - {str(c.get('question',''))[:200]}"
+                for i, c in enumerate(queue, 1))
+            volatile += (
+                f"\n\n## {len(queue)} open questions\n"
+                f"He is being waited on for all of these:\n{listing}\n"
+                f"If his message clearly answers ONE of them, call "
+                f"`answer_conversation` with that id and his words, and SAY which "
+                f"one you took it as. If it could be more than one, ASK which he "
+                f"meant - do not pick the most likely. If it answers none of them, "
+                f"ignore this section entirely: answer him normally, do not mention "
+                f"the queue, and do not call the tool. He can always answer by "
+                f"number instead, and telling him that is useful ONLY if he seems "
+                f"to be struggling to be understood - not as a standing reminder.")
         else:
             volatile += (
                 f"\n\n## An open question\n"
@@ -287,7 +310,7 @@ it deliberately instead.
 
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
-                  already_bound=False):
+                  already_bound=False, queue=None):
     """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
 
     `reply_text` is what Benham should say. The pending confirmation, if any, has
@@ -318,7 +341,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # Worth contrasting with brain.py, where caching was measured and rejected: the
     # voice prefix sits under the 4096-token minimum and would never have hit. This
     # one clears it comfortably.
-    _static, _volatile = _system_blocks(where, actor_name, conversation, already_bound)
+    _static, _volatile = _system_blocks(where, actor_name, conversation, already_bound,
+                                        queue)
     system = [
         {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _volatile},   # after the breakpoint, so it stays free to vary

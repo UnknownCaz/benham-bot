@@ -356,6 +356,65 @@ def by_slot(counterparty, slot):
     return q[slot - 1] if 1 <= slot <= len(q) else None
 
 
+BATCHES = os.path.join(paths.STATE_DIR, "ask_batches.json")
+
+
+def batch_message(counterparty):
+    """The Discord message currently showing this person their queue, or None.
+
+    Its own tiny file rather than a reserved key in the conversation store: that
+    store is iterated as {id: conversation} in a dozen places, and a key that was
+    not a conversation would need a guard at every one of them. One of those
+    guards would eventually be missed.
+    """
+    rec = jsonio.read_json(BATCHES, default={}).get(str(counterparty))
+    return int(rec) if rec else None
+
+
+def set_batch_message(counterparty, message_id):
+    data = jsonio.read_json(BATCHES, default={})
+    if message_id is None:
+        data.pop(str(counterparty), None)
+    else:
+        data[str(counterparty)] = int(message_id)
+    jsonio.write_json(BATCHES, data)
+
+
+def render_queue(counterparty, queue=None):
+    """The whole queue as one numbered message.
+
+    Numbered because the number is the binding handle - see slot_of(). The
+    self-assessed priority is shown rather than hidden: if three sessions all
+    claim BLOCKING, Tyler should be able to see that they did, which is the only
+    thing keeping self-assessment honest.
+    """
+    q = queue if queue is not None else queue_for(counterparty)
+    if not q:
+        return None
+    if len(q) == 1:
+        c = q[0]
+        body = c["question"]
+        if c.get("project"):
+            body += f"\n\n_(about {c['project']})_"
+        return body
+
+    lines = [f"**{len(q)} things waiting on you.** Answer any of them by number "
+             f"- \"2: sqlite\" - or just reply and I'll work it out.", ""]
+    for i, c in enumerate(q, 1):
+        tag = ""
+        if c.get("priority") == BLOCKING:
+            tag = " ⚠️ _blocking a session_"
+        elif c.get("priority") == WHENEVER:
+            tag = " _(no rush)_"
+        where = f" · {c['project']}" if c.get("project") else ""
+        lines.append(f"**{i}.** {c['question']}{tag}")
+        if c.get("placement_reason"):
+            lines.append(f"     _{c['placement_reason']}_{where}")
+        elif where:
+            lines.append(f"     _{where.lstrip(' ·')}_")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------
 # Reading
 # --------------------------------------------------------------------------

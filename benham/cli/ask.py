@@ -46,6 +46,24 @@ def _owner():
     return ids[0]
 
 
+def _print_queue(q, stream=None):
+    """What is already waiting on him, in the order he will see it."""
+    stream = stream or sys.stdout
+    if not q:
+        print("  (nothing waiting on him)", file=stream)
+        return
+    for i, c in enumerate(q, 1):
+        mark = {"blocking": "!", "whenever": "."}.get(c.get("priority"), " ")
+        age = c.get("opened_at", "")[11:16]
+        print(f"  {mark} {i}. [{c.get('priority','normal'):8}] {c['question'][:88]}",
+              file=stream)
+        detail = c.get("placement_reason")
+        if detail:
+            print(f"        why: {detail[:88]}", file=stream)
+        print(f"        {c['id']}, asked {age}Z, {c.get('nudges',0)} nudge(s)",
+              file=stream)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(
         prog="benham.py ask",
@@ -59,25 +77,45 @@ def main(argv):
                     help="Seconds to wait. Default 900 (15 min - one nudge cycle).")
     ap.add_argument("--no-wait", action="store_true",
                     help="Send it and exit; read the answer later with `conv show`.")
+    ap.add_argument("--priority", default=conversations.NORMAL,
+                    choices=list(conversations.PRIORITIES),
+                    help="Where you belong in the line. blocking = this session "
+                         "cannot continue; normal = it gates something but there "
+                         "is other work; whenever = no rush. YOU choose - read the "
+                         "queue first (--queue) and be honest, because he sees "
+                         "every claim.")
+    ap.add_argument("--why", default=None,
+                    help="One line on why you placed yourself there. Shown to him "
+                         "next to your question.")
+    ap.add_argument("--queue", action="store_true",
+                    help="Print what is already waiting on him and exit. Read this "
+                         "BEFORE asking.")
     a = ap.parse_args(argv)
 
     who = _owner()
 
-    # One live ask per person, so a reply is unambiguously bindable. Report the
-    # clash rather than silently queueing behind it: two questions in flight is a
-    # mistake at the call site, and the caller can decide whether to wait or drop it.
-    live = conversations.live_for(who)
-    if live:
-        print(f"He is already being asked something else ({live['id']}): "
-              f"{live['question'][:160]}", file=sys.stderr)
-        print("Wait for that one to close, or answer it first.", file=sys.stderr)
-        return 3
+    # THE COORDINATION STEP (Tyler's design, 2026-08-17). Sessions do not know
+    # about each other and never will, so the queue is the only place they can
+    # meet. Reading it before choosing a priority is what stops self-assessment
+    # from inflating: ranking yourself in a vacuum has one safe answer, ranking
+    # yourself against three visible claims does not.
+    q = conversations.queue_for(who)
+    if a.queue:
+        _print_queue(q)
+        return 0
+    if q:
+        print(f"Already waiting on him ({len(q)}) - place yourself accordingly:",
+              file=sys.stderr)
+        _print_queue(q, stream=sys.stderr)
+        print("", file=sys.stderr)
 
     conv = conversations.open_conversation(
         who,
         purpose=a.purpose or a.question,
         question=a.question,
         project=a.project,
+        priority=a.priority,
+        placement_reason=a.why,
         # The registration. cwd and pid, so a banked question can be traced back to
         # whatever was running at the time - months later, when nothing about the
         # session survives except this string.
@@ -87,7 +125,10 @@ def main(argv):
     # Discord connection and should not grow one. advance_conversation's first beat
     # is the ask itself, so the same action that nudges and banks also delivers.
     outbox.enqueue(action="advance_conversation", id=conv["id"])
-    print(f"asked {who} ({conv['id']}): {a.question}")
+    slot = conversations.slot_of(conv["id"])
+    total = len(conversations.queue_for(who))
+    where = f" - slot {slot} of {total}" if total > 1 else ""
+    print(f"asked {who} ({conv['id']}, {a.priority}{where}): {a.question}")
 
     if a.no_wait:
         print(f"not waiting - read it later with: python benham.py conv show {conv['id']}")

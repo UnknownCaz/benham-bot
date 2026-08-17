@@ -1061,17 +1061,51 @@ async def _advance_conversation(ctx, p):
     # about a conversation the other person has no memory of. Delivering is NOT a
     # nudge and must not consume the budget.
     if not (conv.get("ask_message_ids") or []):
-        body = f"{conv['question']}"
-        if conv.get("project"):
-            body += f"\n\n_(about {conv['project']})_"
-        sent = await ch.send(body)
-        conversations.record_ask_message(conv["id"], sent.id)
+        queue = conversations.queue_for(who)
+        body = conversations.render_queue(who, queue)
+
+        # ONE message for the whole queue, edited in place as it changes, so the
+        # numbering a reply refers to is always the numbering on screen.
+        #
+        # The catch that shapes this: a Discord EDIT sends no notification. Editing
+        # silently is right for a question joining the back of the line and wrong
+        # for one that jumps to the front - that one would arrive invisibly, which
+        # is the opposite of what claiming BLOCKING is for. So an edit that changes
+        # what is at the top replaces the message instead of amending it.
+        existing = conversations.batch_message(who)
+        jumped = bool(queue) and queue[0]["id"] == conv["id"] and len(queue) > 1
+        sent = None
+        if existing and not jumped:
+            try:
+                old = await ch.fetch_message(existing)
+                await old.edit(content=body)
+                sent = old
+            except Exception:  # noqa: BLE001 - deleted, too old to edit, or gone
+                sent = None
+        if sent is None:
+            if existing:
+                # Remove the stale list rather than leaving two contradictory
+                # numberings in the thread - "3" must not mean different things
+                # depending on which message he scrolls to.
+                try:
+                    stale = await ch.fetch_message(existing)
+                    await stale.delete()
+                except Exception:  # noqa: BLE001
+                    pass
+            sent = await ch.send(body)
+        conversations.set_batch_message(who, sent.id)
+
+        # Bind the batch message to EVERY question it displays: a reply to it is a
+        # reply to any of them, and the slot number picks which.
+        for c in queue:
+            conversations.record_ask_message(c["id"], sent.id)
         # Restart the nudge clock from DELIVERY, not from opening. open() assumes
         # prompt delivery; if the bot was down when the ask was made, the 15 minutes
         # would otherwise have elapsed before the person ever saw it.
         conversations.restart_clock(conv["id"])
         return {"status": "asked", "id": conv["id"], "counterparty": who,
-                "message_id": sent.id}
+                "message_id": sent.id, "queued": len(queue),
+                "slot": conversations.slot_of(conv["id"])}
 
     if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
         # Quote the question rather than paraphrasing it. A nudge that restates the
