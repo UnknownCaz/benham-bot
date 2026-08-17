@@ -789,6 +789,25 @@ def main():
         C.bank(gone["id"])
         check("a question that just banked is offered as context",
               [c["id"] for c in C.recently_terminal(TYLER)], [gone["id"]])
+        # ...and it reaches the PROMPT. Asserted because a block that is written
+        # but never rendered is indistinguishable, from a test, from one that
+        # works - the lesson the policy layer taught this repo, and the reason
+        # advance_conversation is driven through capabilities.run above rather than
+        # called directly.
+        from benham.core import agent as _agent
+        _s, vol = _agent._system_blocks("a DM", "caz6666",
+                                        recent=C.recently_terminal(TYLER))
+        check("the banked question reaches the prompt", gone["id"] in vol, True)
+        check("...with its text, so the model can match his message to it",
+              "declare it or infer it?" in vol, True)
+        check("...and it is told nothing was recorded",
+              "nobody answered in time" in vol, True)
+        check("...and told not to claim otherwise",
+              "unless a tool call actually returned that" in vol, True)
+        _s, quiet = _agent._system_blocks("a DM", "caz6666", recent=[])
+        check("nothing recent means no block at all, not an empty heading",
+              "still on his screen" in quiet, False)
+
         C._mutate(gone["id"], lambda cv: cv.__setitem__(
             "closed_at", C._iso(C._now() - C.STILL_ON_SCREEN - timedelta(minutes=1))))
         check("...but not forever - the block is context, not a changelog",
