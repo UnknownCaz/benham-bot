@@ -1028,10 +1028,11 @@ async def _tell_conversation(ctx, p):
 
 @action("advance_conversation", identity.SPEAK,
         "Move one waiting conversation to its next beat: ASK the question if it has "
-        "never been delivered, send the nudge that is due, or - once its nudge "
-        "budget is spent - bank it and tell the owner it went unanswered. Takes only "
-        "a conversation id; the recipient and the words both come from the stored "
-        "record.",
+        "never been delivered, send the nudge that is DUE, or - once its nudge "
+        "budget is spent - bank it and tell the owner it went unanswered. If the "
+        "question is already on their screen and its deadline has not arrived, this "
+        "does nothing and says so. Takes only a conversation id; the recipient and "
+        "the words both come from the stored record.",
         {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"}},
         # SYSTEM, because the whole point of stage 3 is that a loop closes with no
         # session running. This is the ONLY outward action an automated caller can
@@ -1060,9 +1061,21 @@ async def _advance_conversation(ctx, p):
     # nobody had been asked with "still after this one", which reads as a reminder
     # about a conversation the other person has no memory of. Delivering is NOT a
     # nudge and must not consume the budget.
-    if not (conv.get("ask_message_ids") or []):
+    #
+    # The test is was_delivered(), not "does it have a message id". Those read the
+    # same until several asks are opened at once, and then they read opposite: the
+    # batch id is stamped on every question the message shows, so whichever job ran
+    # first told the others they had already been asked. See was_delivered().
+    if not conversations.was_delivered(conv):
         queue = conversations.queue_for(who)
         body = conversations.render_queue(who, queue)
+        # Who is genuinely new, worked out BEFORE anything is written, so it does
+        # not depend on the order the two records below are updated in.
+        fresh = [c["id"] for c in queue if not conversations.was_delivered(c)]
+        # conv itself is always delivered by this beat, even in the odd case where
+        # it is not in the queue at all - otherwise beat zero would repeat forever.
+        if conv["id"] not in fresh:
+            fresh.append(conv["id"])
 
         # ONE message for the whole queue, edited in place as it changes, so the
         # numbering a reply refers to is always the numbering on screen.
@@ -1111,13 +1124,26 @@ async def _advance_conversation(ctx, p):
         # reply to any of them, and the slot number picks which.
         for c in queue:
             conversations.record_ask_message(c["id"], sent.id)
-        # Restart the nudge clock from DELIVERY, not from opening. open() assumes
-        # prompt delivery; if the bot was down when the ask was made, the 15 minutes
-        # would otherwise have elapsed before the person ever saw it.
-        conversations.restart_clock(conv["id"])
+        # DELIVERED, and the clock starts from DELIVERY rather than from opening -
+        # for every question this message put on screen, not just the one whose job
+        # ran. open() assumes prompt delivery; if the bot was down when the asks
+        # were made, an unmarked sibling arrives with its fifteen minutes already
+        # spent and nudges on the very next tick, about a question one second old.
+        for cid in fresh:
+            conversations.mark_delivered(cid)
         return {"status": "asked", "id": conv["id"], "counterparty": who,
                 "message_id": sent.id, "queued": len(queue),
+                "delivered": fresh,
                 "slot": conversations.slot_of(conv["id"])}
+
+    # Delivered already, and nothing is owed yet. Not every call gets here from the
+    # tick loop - ask.py fires one the instant a conversation is opened, to deliver
+    # it - so "the next beat" cannot mean "a nudge, whenever you ask". A question
+    # that is already on his screen with fourteen minutes left on its clock has no
+    # next beat to move to.
+    if not conversations.beat_due(conv):
+        return {"status": "waiting", "id": conv["id"], "counterparty": who,
+                "due_at": conv.get("due_at"), "nudges": int(conv.get("nudges", 0))}
 
     if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
         # Quote the question rather than paraphrasing it. A nudge that restates the
