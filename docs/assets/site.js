@@ -8,7 +8,7 @@ const PAGES = {
     { f: "confirm-flow.html",     t: "Confirmation flow",   k: "destructive token dry-run ttl three gates self-confirm delete purge",  d: "Why the model can never say yes to itself." },
     { f: "taint.html",            t: "The taint model",     k: "tainted turn stranger text approval injection prompt",                 d: "Reading stranger text gates outward actions." },
     { f: "pc-access.html",        t: "PC access",           k: "codesession claude code pc_task secret-read workdir sandbox",          d: "Read freely, ask before changing." },
-    { f: "conversations.html",   t: "Conversations",       k: "ask nudge bank close tell reverse channel binding reply outreach loop collaborator", d: "An ask that outlives the session that made it." },
+    { f: "conversations.html",   t: "Conversations",       k: "ask nudge bank close tell reverse channel binding reply outreach loop collaborator queue slot priority blocking whenever numbered batch uncollected", d: "An ask that outlives the session that made it." },
     { f: "self-record.html",     t: "Answering from record", k: "what_i_did log evidence memory gaslighting covered proof",              d: "What it DID is a matter of record, not memory." },
     { f: "guests.html",           t: "The guest system",    k: "guest invariants capabilities workspace grants friends whitelist",     d: "Three invariants that never bend." },
     { f: "web-search.html",       t: "Web search",          k: "search tainted queries owner guest logs internet",                     d: "A web page is text a stranger wrote." },

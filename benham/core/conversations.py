@@ -379,11 +379,15 @@ def answer_slots(counterparty, mapping, bound_by="slot"):
     different conversation than the one the message showed him - silently filing
     his answer against the wrong question, which is the exact failure slots exist
     to prevent.
+
+    Against shown_queue(), which is the same argument one message wider: within a
+    single reply the resolve-first rule holds the numbering still, and between two
+    replies only the screen does.
     """
-    q = queue_for(counterparty)
+    q = shown_queue(counterparty)
     resolved = []
     for slot, body in sorted(mapping.items()):
-        if 1 <= slot <= len(q):
+        if 1 <= slot <= len(q) and q[slot - 1] is not None:
             resolved.append((slot, q[slot - 1], body))
     done = []
     for slot, conv, body in resolved:
@@ -440,16 +444,33 @@ def slot_of(cid):
 
 
 def by_slot(counterparty, slot):
-    """The conversation at this 1-based queue position, or None."""
-    q = queue_for(counterparty)
+    """The conversation at this 1-based position ON HIS SCREEN, or None.
+
+    Resolved against shown_queue() rather than the live queue, because the number
+    he typed is the number he is looking at. See shown_queue for why that is not
+    the same thing, and for the silent misfiling it prevents.
+    """
     try:
         slot = int(slot)
     except (TypeError, ValueError):
         return None
+    q = shown_queue(counterparty)
     return q[slot - 1] if 1 <= slot <= len(q) else None
 
 
 BATCHES = os.path.join(paths.STATE_DIR, "ask_batches.json")
+
+
+def _batch_rec(counterparty):
+    rec = jsonio.read_json(BATCHES, default={}).get(str(counterparty))
+    if rec is None:
+        return None
+    # Pre-2026-08-17 the value was a bare message id. Read it rather than
+    # discarding it: a live bot mid-upgrade has one of these on disk, and
+    # dropping it would orphan the message currently on his screen.
+    if isinstance(rec, int):
+        return {"message": rec, "shown": []}
+    return rec if isinstance(rec, dict) else None
 
 
 def batch_message(counterparty):
@@ -460,17 +481,55 @@ def batch_message(counterparty):
     not a conversation would need a guard at every one of them. One of those
     guards would eventually be missed.
     """
-    rec = jsonio.read_json(BATCHES, default={}).get(str(counterparty))
-    return int(rec) if rec else None
+    rec = _batch_rec(counterparty)
+    return int(rec["message"]) if rec and rec.get("message") else None
 
 
-def set_batch_message(counterparty, message_id):
+def set_batch_message(counterparty, message_id, shown=None):
+    """Record which message is showing the queue, and WHICH QUESTIONS IT SHOWS.
+
+    `shown` is the ordered list of conversation ids the message names as 1, 2,
+    3... It is stored because the numbering he answers by is the numbering he can
+    see, and the two drift apart the moment he answers one of them - see
+    shown_queue().
+    """
     data = jsonio.read_json(BATCHES, default={})
     if message_id is None:
         data.pop(str(counterparty), None)
     else:
-        data[str(counterparty)] = int(message_id)
+        data[str(counterparty)] = {"message": int(message_id),
+                                   "shown": [str(c) for c in (shown or [])]}
     jsonio.write_json(BATCHES, data)
+
+
+def shown_queue(counterparty):
+    """The queue as the message on his screen numbers it. Entries may be None.
+
+    THE SCREEN IS THE NUMBERING, and this is the half of the slot design that was
+    missing until 2026-08-18. Slots are recomputed rather than stored, which is
+    right - but recomputing only keeps them honest while the message on screen
+    still matches the queue, and NOTHING RE-RENDERS IT WHEN HE ANSWERS. So:
+
+        screen:  1. which database?   2. drop the cache?   3. ready to deploy?
+        he answers "1: sqlite"        -> live queue is now [drop, deploy]
+        he answers "2: yeah drop it"  -> live slot 2 is READY TO DEPLOY
+
+    which files an answer against the wrong question, silently, and is the exact
+    failure the old one-live-ask rule existed to prevent. Resolving against what
+    was shown gets slot 2 right, and gets a slot whose question has since been
+    answered wrong in the only safe direction: None, so the caller falls through
+    to the model, which has to say how it read the message.
+
+    Positions are preserved rather than compacted - a None in the middle is the
+    point. Compacting would renumber everything after it, which is the bug.
+    """
+    rec = _batch_rec(counterparty)
+    live = {c["id"]: c for c in queue_for(counterparty)}
+    if not rec or not rec.get("shown"):
+        # Nothing has been delivered (or it predates the shown list), so the live
+        # queue is the best available account of what he would be looking at.
+        return list(live.values())
+    return [live.get(str(cid)) for cid in rec["shown"]]
 
 
 def render_queue(counterparty, queue=None):
@@ -517,11 +576,13 @@ def get(cid):
 
 
 def live_for(counterparty):
-    """The one live conversation with this person, or None.
+    """The FRONT of this person's queue, or None.
 
-    THE BINDING FUNCTION. When a DM arrives, this is what says which question it
-    might be answering - and because open() enforces one-at-a-time, the answer is
-    never ambiguous.
+    Was "the one live conversation", and was the binding function, back when
+    open() enforced one live ask per person. It does not any more (2026-08-17),
+    so this is no longer a unique thing and no longer binds anything: it is the
+    one to nudge about, and the one to hand a model as context. by_slot() and
+    by_ask_message() are what bind now.
     """
     return _live_for(_load(), counterparty)
 
@@ -624,11 +685,16 @@ def defer(cid, minutes, reason, now=None):
 def answer(cid, text, bound_by="reply"):
     """They replied. Records what they said and how it was bound to the question.
 
-    `bound_by` is kept because the two ways differ in how much they can be
-    trusted: "reply" means Discord carried a message reference, which is certain,
-    and "only-live" means this was their one open conversation, which is an
-    inference - correct by the one-at-a-time invariant, but an inference. A later
-    dispute over what someone answered should be able to see which it was.
+    `bound_by` is kept because the routes differ in how much they can be trusted,
+    and a later dispute over what someone answered should be able to see which one
+    happened:
+
+      "reply"  Discord carried a message reference to the ask. Certain, while the
+               message it points at names one question.
+      "slot"   he typed the number the message showed. Certain, resolved against
+               that same screen - see shown_queue().
+      "judged" the model decided this was the answer, and had to say so out loud
+               in the same breath. An inference, recorded as one.
     """
     def go(conv):
         if conv.get("state") not in LIVE_STATES:
