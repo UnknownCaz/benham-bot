@@ -49,6 +49,7 @@ from benham.guest import guest
 from benham.core import ideas
 from benham.core import identity
 from benham.core import jsonio
+from benham.core import notify
 from benham.core import policy
 
 try:
@@ -741,7 +742,7 @@ async def send_with_view(channel, text, view, reference=None):
     return msg
 
 
-async def ask_owner_dm(text, rid=None):
+async def ask_owner_dm(text, rid=None, kind=None):
     """DM the owner. Used by the PC session's permission gate.
 
     Raises rather than swallowing a failure: codesession treats an unreachable
@@ -755,7 +756,15 @@ async def ask_owner_dm(text, rid=None):
     user = client.get_user(owner_id) or await client.fetch_user(owner_id)
     channel = user.dm_channel or await user.create_dm()
     if rid is None:
-        await reply_in(channel, text)
+        # `kind` is optional and its absence is meaningful: a permission prompt or
+        # an unclassified message buzzes, because the default for "I do not know
+        # how urgent this is" must be to reach him. Only news deliberately
+        # classified as quiet goes quiet.
+        silent = bool(kind) and notify.is_silent(kind)
+        if silent:
+            await channel.send(str(text)[:1900], silent=True)
+        else:
+            await reply_in(channel, text)
         return
 
     async def decide(approved):
@@ -1009,9 +1018,14 @@ async def handle_guest_dm(message):
                 log(f"guest idea: could not open a conversation ({e}) - the idea is "
                     "safe in guest_ideas.jsonl")
             try:
+                # QUIET. Doom filed two of these at 23:44 and 23:51 and both
+                # buzzed Tyler's phone; a friend reporting a bug is news that can
+                # wait until he looks, which is the entire distinction item 11
+                # exists to draw.
                 await ask_owner_dm(
                     f"💡 idea from {message.author.name}"
-                    + (f" [{conv['id']}]" if conv else "") + f": {_idea}")
+                    + (f" [{conv['id']}]" if conv else "") + f": {_idea}",
+                    kind="answered")
             except Exception as e:  # noqa: BLE001 - the filing already succeeded
                 log(f"guest idea: owner DM ping failed ({e}) - idea is safe in "
                     "guest_ideas.jsonl, sweep will surface it")

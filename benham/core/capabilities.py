@@ -897,6 +897,39 @@ async def _answer_conversation(ctx, p):
                     "is not announced is the failure mode this exists to avoid."}
 
 
+@action("notify_owner", identity.SPEAK,
+        "Tell Tyler something, at the volume the NEWS deserves rather than one you "
+        "pick. Say what happened with `kind` - blocked (work stopped, needs him), "
+        "broke (a server/sync/task failed), finished (a long task he asked for is "
+        "done), answered (a collaborator replied or filed something) - and the tier "
+        "follows. blocked and broke wake his phone; finished and answered land "
+        "quietly and are there when he looks. An unrecognised kind is refused "
+        "rather than guessed at.",
+        {"kind": {"type": "str", "required": True,
+                  "desc": "blocked | broke | finished | answered"},
+         "content": {"type": "str", "required": True, "desc": "The message itself"}},
+        # SYSTEM included on purpose: a watchdog noticing a server died is the
+        # archetypal `broke`, and it has nobody to ask. Bounded the same way as the
+        # other SYSTEM-reachable actions - the recipient is always the owner and
+        # cannot be chosen, so the worst an automated caller can do is talk to Tyler.
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
+        outward=True)
+async def _notify_owner(ctx, p):
+    from benham.core import notify
+    try:
+        silent = notify.is_silent(p["kind"])
+    except ValueError as e:
+        raise ActionError(str(e))
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    user = await ctx.user(owner_id)
+    ch = user.dm_channel or await user.create_dm()
+    # silent=True is Discord's own suppression: the message arrives in the channel
+    # exactly as normal, it just does not push. QUIET means "wait", never "drop".
+    await ch.send(str(p["content"])[:1900], silent=silent)
+    return {"status": "notified", "kind": str(p["kind"]),
+            "tier": notify.tier_for(p["kind"]), "silent": silent}
+
+
 @action("tell_conversation", identity.SPEAK,
         "Tell the counterparty how their report or question turned out, and record "
         "that they were told. Use the conversation's own outcome - close it first. "
@@ -1009,7 +1042,11 @@ async def _advance_conversation(ctx, p):
             f"no answer from <@{who}> after {conversations.MAX_NUDGES} nudges - "
             "banked it.\n\n"
             f"> {conv['question']}\n\n"
-            f"({conv['id']}, asked for: {conv['purpose']})")
+            f"({conv['id']}, asked for: {conv['purpose']})",
+            # QUIET (item 11). Someone not answering is the definition of news that
+            # can wait: nothing is blocked on it and the question is banked and
+            # readable whenever he looks.
+            silent=True)
         told_owner = True
     return {"status": "banked", "id": conv["id"], "counterparty": who,
             "owner_told": told_owner}
