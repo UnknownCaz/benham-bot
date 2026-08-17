@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversations — Benham Manual</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="../" data-page="inner/conversations.html">
+<div class="shell">
+  <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
+  <main>
+    <h1>Conversations</h1>
+    <p class="lede">An ask with a counterparty, a deadline and a state — which
+    <em>outlives the session that opened it</em>. The session that asks may be gone by the time
+    the answer arrives; the thing that closes the loop reads a file, not a variable in someone's
+    memory.</p>
+
+    <h2 id="why">Why it exists</h2>
+    <p>Benham is built on <strong>actions</strong>: fifty-odd stateless verbs you invoke and
+    forget. That is the right shape for <code>purge_messages</code>. It is the wrong shape for
+    "ask Doom whether the fix worked", which has a counterparty, a purpose, a deadline, and an
+    answer that arrives minutes later in a different process.</p>
+    <p>Every loop that used to stall was one of those with nowhere to live:</p>
+    <table>
+      <tr><th>The problem</th><th>As a conversation</th></tr>
+      <tr><td>Doom files a bug and never hears back</td><td>a conversation with no close</td></tr>
+      <tr><td>A session needs Tyler and cannot reach him</td><td>a conversation with no target</td></tr>
+      <tr><td>Notifications with no priority</td><td>conversation urgency, unmodelled</td></tr>
+    </table>
+    <p>It also fixes the trust defect by construction. Benham once insisted it had never run a
+    <code>pc_task</code> while Tyler was looking at the approval prompts it had just sent, because
+    its only record was a corrupted turn list. A conversation object <em>is</em> a record: state,
+    history, log. "What did I do?" stops being a memory question and becomes a lookup.</p>
+
+    <h2 id="invariants">The five invariants</h2>
+    <p>Each of these is enforced in <code>conversations.py</code> rather than documented and
+    hoped for.</p>
+    <table>
+      <tr><th>Invariant</th><th>Why it is code, not a convention</th></tr>
+      <tr><td><strong>One live ask per person</strong></td><td>This is what makes an answer
+        <em>bindable</em>. When a DM arrives, "which question is this answering" has exactly one
+        candidate. <code>open_conversation</code> raises rather than silently reusing.</td></tr>
+      <tr><td><strong>A defer only ever extends</strong></td><td>An away signal is information
+        about when to ask again, not permission to ask sooner. Capped at one hour.</td></tr>
+      <tr><td><strong>A close carries an outcome</strong></td><td>A silent close is the exact bug
+        this exists to end — work that looks finished from the inside and reads as silence from
+        the outside.</td></tr>
+      <tr><td><strong>Telling is not closing</strong></td><td>Two separate events, so a failed DM
+        can never look like a shut loop.</td></tr>
+      <tr><td><strong>Banking keeps the question</strong></td><td>Giving up waiting is not
+        deleting. The question stays readable and can be asked again later.</td></tr>
+    </table>
+
+    <h2 id="direction">Direction — who owes whom</h2>
+    <p>A conversation has a counterparty, but the <em>obligation</em> can run either way, and
+    almost every rule depends on which.</p>
+    <table>
+      <tr><th>direction</th><th>meaning</th><th>rules</th></tr>
+      <tr><td><code>ASKING</code></td><td>we asked them something; we are waiting</td><td>nudges
+        apply; only one live per person</td></tr>
+      <tr><td><code>OWED</code></td><td>they told <em>us</em> something (a bug, an idea) and we
+        owe an outcome</td><td>never nudged, never capped</td></tr>
+    </table>
+    <p>Without the distinction, the one-per-person rule would have <strong>refused Doom's second
+    bug report of the day</strong> — he filed three in two days — and the nudge loop would have
+    chased him for an answer to a bug <em>he</em> reported. <code>_live_for</code> excludes
+    <code>OWED</code> deliberately: if a report counted as live for its author, his next message
+    would be a candidate answer to his own bug report.</p>
+
+    <h2 id="beats">The beats</h2>
+    <p>Code owns timing; the model owns meaning. Nothing in <code>conversations.py</code> asks a
+    model anything, which is what lets a loop close with <strong>no session running</strong>.</p>
+    <table>
+      <tr><th>beat</th><th>when</th></tr>
+      <tr><td><strong>ask</strong></td><td>first delivery. Does <em>not</em> spend a nudge, and
+        restarts the countdown from delivery — a conversation opened while the bot is down must
+        not burn its fifteen minutes before anyone sees it.</td></tr>
+      <tr><td><strong>nudge</strong></td><td>15 minutes later, twice at most. Quotes the question
+        verbatim; a nudge that rephrases reads as a second, different question.</td></tr>
+      <tr><td><strong>bank</strong></td><td>budget spent. The owner is told a collaborator went
+        quiet — unless the owner <em>is</em> the one who went quiet, in which case a third message
+        saying so is noise.</td></tr>
+    </table>
+    <p>A background loop in <code>bot.py</code> ticks this every 60 seconds against the
+    15-minute policy. It decides nothing: <code>due()</code> reads the clock and the budget and
+    says nudge-or-bank; the loop only delivers.</p>
+
+    <h2 id="binding">Binding — how a reply attaches to a question</h2>
+    <p>Tyler's rule, and the asymmetry is the point:</p>
+    <table>
+      <tr><th>route</th><th>certainty</th><th>recorded as</th></tr>
+      <tr><td>A Discord <strong>reply</strong> to the ask (or to a nudge)</td><td>certain — no
+        model involved</td><td><code>bound_by="reply"</code></td></tr>
+      <tr><td>Anything else</td><td>the model judges, and <strong>must say so</strong> in the
+        same breath</td><td><code>bound_by="judged"</code></td></tr>
+    </table>
+    <p>Requiring a reply every time is friction; letting the model silently decide is how an
+    instruction gets swallowed as an answer. Judging <em>and announcing</em> keeps the fast path
+    fast while making a wrong guess visible. The record stores which route was taken, so the two
+    are never confused later.</p>
+
+    <h2 id="triage">Read-only triage</h2>
+    <p>A filed report can be investigated by a real Claude Code session restricted to
+    Read/Glob/Grep — <strong>a non-read tool is denied outright rather than asked about</strong>.
+    That guarantee does double duty: a stranger's bug report cannot reach a write, and it cannot
+    make Tyler's phone buzz either. Triage that pesters him is triage he turns off.</p>
+    <p>This is why <code>triage_conversation</code> is <em>not</em> behind
+    <code>blocked_when_tainted</code> while <code>pc_task</code> is.
+    <a href="taint.html">The taint wall</a> exists because <code>pc_task</code> can write; triage
+    cannot, so the wall is not bypassed — it is unnecessary. Tyler replying "fix it" from a DM
+    remains the only thing that moves work across it.</p>
+    <p>A diagnosis is stored on the conversation and the state stays <strong>open</strong>. "We
+    think it is X" is not something anyone should be told is resolved.</p>
+
+    <h2 id="drive">Driving it</h2>
+    <p>See <a href="../outer/cli.html#conversations">CLI shorthands</a>. In short:
+    <code>ask</code> from a running session, <code>conv list</code> / <code>show</code> to read,
+    <code>conv close … --tell</code> to shut the loop and say so.</p>
+
+    <h2 id="trail">Paper trail</h2>
+    <ul>
+      <li><code>state/conversations.json</code> — the store. Gitignored: it holds what real people
+        said.</li>
+      <li>Each conversation carries its own append-only <code>log</code> — opened, delivered,
+        nudged, answered (with the binding route), closed, counterparty-told, banked.</li>
+      <li><code>supervise.log</code> — one line per beat the loop fires.</li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

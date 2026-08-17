@@ -35,6 +35,29 @@ python benham.py do &lt;action&gt; key=value ...  # run it</code></pre>
 #   ...repeat with: confirm_token=80ac01
 python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="test" confirm_token=80ac01</code></pre>
 
+    <h2 id="all">Every command</h2>
+    <p>Generated from <code>benham.py</code>'s own dispatcher, so a retired command cannot linger
+    here the way <code>speak</code> and <code>listen</code> did after voice was archived.</p>
+    <table>
+      <tr><th>command</th><th>does</th></tr>
+<!-- GENERATED:cli-commands -->      <tr><td><code>python benham.py send</code></td><td>enqueue a message for the running bot to deliver</td></tr>
+      <tr><td><code>python benham.py dm</code></td><td>enqueue a DM for the running bot to deliver</td></tr>
+      <tr><td><code>python benham.py draft</code></td><td>draft a reply for review BEFORE it goes to a friend</td></tr>
+      <tr><td><code>python benham.py do</code></td><td>run any registered capability from the shell</td></tr>
+      <tr><td><code>python benham.py fetch</code></td><td>pull recent messages from a channel via the bot</td></tr>
+      <tr><td><code>python benham.py delete</code></td><td>ask the bot to delete ONE specific message by id</td></tr>
+      <tr><td><code>python benham.py purge</code></td><td>bulk-delete messages older than N days</td></tr>
+      <tr><td><code>python benham.py catchup</code></td><td>invisible, read-only catch-up on one channel</td></tr>
+      <tr><td><code>python benham.py read_history</code></td><td>invisible, read-only reader across guilds</td></tr>
+      <tr><td><code>python benham.py ask</code></td><td>ask Tyler something and wait for his answer</td></tr>
+      <tr><td><code>python benham.py conv</code></td><td>read, close or bank conversations</td></tr>
+      <tr><td><code>python benham.py status</code></td><td>quick, read-only health check</td></tr>
+      <tr><td><code>python benham.py usage</code></td><td>token and cost accounting from the logs</td></tr>
+      <tr><td><code>python benham.py watch_pc</code></td><td>watch, live, what Benham is doing on the PC</td></tr>
+      <tr><td><code>python benham.py webhook</code></td><td>post via a saved webhook / manage webhooks</td></tr>
+      <tr><td><code>python benham.py ideas</code></td><td>guest ideas inbox: new since sweep | --all | --sweep</td></tr><!-- /GENERATED:cli-commands -->
+    </table>
+
     <h2 id="everyday">Everyday shortcuts</h2>
     <table>
       <tr><th>command</th><th>does</th></tr>
@@ -100,31 +123,28 @@ python benham.py dm 2739…5952 "hey"</code></pre>
     <pre><code>python -u benham.py read_history            # 100 per channel, all friend guilds
 python -u benham.py read_history all        # no limit</code></pre>
 
-    <h2 id="voice">Voice</h2>
+    <h2 id="conversations">Conversations — ask, and close the loop</h2>
+    <p>Stage 3's surface. A conversation is an ask with a counterparty, a deadline and a state,
+    and it <em>outlives the session that opened it</em> — so a task can ask you something, exit,
+    and a later session reads your answer. See
+    <a href="../inner/conversations.html">the Inner page</a> for why it works that way.</p>
     <table>
       <tr><th>command</th><th>does</th></tr>
-      <tr><td><code>speak.py &lt;vc_id&gt; "text"</code></td><td>join, speak, leave</td></tr>
-      <tr><td><code>listen.py &lt;vc_id&gt;</code></td><td>join and transcribe</td></tr>
-      <tr><td><code>stoplisten.py &lt;vc_id&gt;</code></td><td>stop and leave</td></tr>
+      <tr><td><code>ask "question"</code></td><td>Ask Tyler from a running session and wait. <code>--no-wait</code> to fire and read later.</td></tr>
+      <tr><td><code>conv list</code></td><td>Everything still open. <code>--all</code> includes closed and banked.</td></tr>
+      <tr><td><code>conv show c7</code></td><td>One conversation with its full event log.</td></tr>
+      <tr><td><code>conv close c7 "outcome"</code></td><td>Shut the loop. <code>--tell</code> also DMs them the outcome.</td></tr>
+      <tr><td><code>conv bank c7 "reason"</code></td><td>Give up waiting, keep the question.</td></tr>
     </table>
-    <h3><code>speak.py</code></h3>
-    <p>Args: <code>&lt;voice_channel_id&gt; "text"</code>. Joins, speaks via an edge-tts neural
-    voice, disconnects. The voice is switchable by the named "B-voice" roster in
-    <code>voices.json</code>.</p>
-    <pre><code>python benham.py speak 8097…7301 "dinner's ready, get off the server"</code></pre>
-    <h3><code>listen.py</code> / <code>stoplisten.py</code></h3>
-    <p>Args: <code>&lt;voice_channel_id&gt;</code> each. Listen joins and transcribes utterances
-    with faster-whisper into <code>voice_transcript.jsonl</code>; wake words
-    ("benham"/"claude") are flagged in the record. Autonomous replies to wake words only
-    happen with <code>BENHAM_AUTO_REPLY=1</code>, and only in <code>auto_reply_guilds</code>.
-    Stoplisten makes it leave.</p>
-    <pre><code>python benham.py listen 8097…7301
-python benham.py stoplisten 8097…7301</code></pre>
-    <p><strong>Exaroton, in Discord rather than the terminal:</strong>
-    <code>/server status|start|stop|restart &lt;server&gt;</code> — per-guild gating in
-    <code>exaroton_watch.json</code> (Testing = all servers, operator required; Chillbar = Isle
-    of Berk, anyone). The watchdog posts crash/offline alerts for <code>watch: true</code>
-    servers.</p>
+    <p><strong>An outcome is required.</strong> <code>close</code> refuses without one, because a
+    silent close is the exact failure this was built to end — work that looks finished from the
+    inside and reads as silence from the outside.</p>
+    <p><strong>Closing and telling stay two facts</strong> even behind one flag. <code>--tell</code>
+    queues a message the running bot delivers, and the <code>counterparty-told</code> event is only
+    written when Discord actually accepts it. So a failed delivery can never look like a shut loop —
+    check with <code>conv show</code>.</p>
+    <p>In <code>conv list</code>, the arrow is the direction: <code>-&gt;</code> is something we
+    asked them, <code>&lt;-</code> is something they told us and we owe an answer to.</p>
 
     <h2 id="webhooks">Webhooks — posting without the bot</h2>
     <p>A different animal from everything above: <code>webhook.py</code> posts straight to
@@ -182,7 +202,7 @@ python benham.py webhook --list                       # configured webhooks (nev
 
     <h3><code>status.py</code></h3>
     <p>No args. Answers "is Benham up and what is it doing" without touching Discord: running
-    <code>benham/bot.py</code> pid, guilds/channels seen (from <code>channels.json</code>), AUTO_REPLY
+    <code>benham/bot.py</code> pid, guilds/channels seen (from <code>channels.json</code>)
     state + allowlist, last login / command-sync lines from the newest log. Never prints
     tokens.</p>
     <pre><code>python benham.py status</code></pre>

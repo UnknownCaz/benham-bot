@@ -15,13 +15,18 @@
     security-sensitive thing in the codebase, which is why it's built out of absences.</p>
 
     <h2 id="what">What it does</h2>
-    <p>Whitelisted friends can DM Claude-through-Benham. Chat mode (today's default): a plain
-    conversation plus server-side web search, capped daily, separate memory, separate persona.
-    The staged refactor adds, behind flags: a file workspace
-    <span class="badge shipped">CODE SHIPPED</span> (grants empty), allowlisted channel reads
-    <span class="badge planned">PLANNED</span>, and Anthropic-server-side code runs
-    <span class="badge planned">PLANNED</span>. Admin procedures live in
-    <a href="../outer/guest-admin.html">Outer → Guest admin</a>.</p>
+    <p>Whitelisted friends can DM Claude-through-Benham: a plain conversation plus server-side
+    web search, capped daily, separate memory, separate persona. They can also file ideas and bug
+    reports with an <code>idea..</code> prefix, which are quarantined and tracked as
+    <a href="conversations.html">conversations</a> they are told the outcome of. Admin procedures
+    live in <a href="../outer/guest-admin.html">Outer → Guest admin</a>.</p>
+    <p><strong>A tool loop used to sit beside this</strong> — a file workspace, allowlisted channel
+    reads and Anthropic-side code execution, built across seven commits in August 2026. It was
+    archived on 2026-08-16 because the usage never came: fifteen code runs, <em>every one on the
+    two days it was built</em>; three workspace files; no recorded use of shared reads. The one
+    genuine attempt to use code execution failed, because the sandbox has no network. See
+    <code>archive/guest-tools/</code>. The grant machinery it needed is still in place and still
+    grants nothing, which the boot banner asserts out loud.</p>
 
     <h2 id="why">Why we chose this</h2>
     <p><strong>The founding property is an absence, not a rule.</strong> <code>guest.py</code>
@@ -43,22 +48,32 @@
     code didn't mark. And the registry refuses at import to register <code>guest=True</code> on
     anything outward, posting, destructive, confirmable, or taint-blocked — a violating
     declaration crashes the boot rather than existing as a lie.</p>
-    <p><strong>Three modules, not flags.</strong> <code>guest.py</code> (chat) keeps its
-    no-tools property forever; <code>guest_agent.py</code> (workspace) runs a loop over exactly
-    the granted set; <code>agent.py</code> stays yours. "The same loop but a smaller list" is
-    one wrong conditional from being the same list — two files that do different things cannot
-    be collapsed by accident.</p>
+    <p><strong>All three are currently empty, and that is the point.</strong> Since the tool loop
+    was archived on 2026-08-16 the registry declares <code>guest=True</code> on
+    <strong>nothing</strong>, no config carries <code>guest.capabilities</code>, and the guest
+    chat path passes no client tools at all — so even a granted capability would have no caller.
+    The machinery is kept armed around an empty room deliberately: it is what makes the
+    <em>next</em> capability someone writes guest-proof on the day it is written, rather than on
+    the day someone remembers to check.</p>
+    <p><strong>Separate modules, not flags.</strong> <code>guest.py</code> keeps its no-tools
+    property forever; <code>agent.py</code> stays yours. "The same loop but a smaller list" is one
+    wrong conditional from being the same list — two files that do different things cannot be
+    collapsed by accident. That argument was tested in August 2026 when a refactor plan proposed
+    merging them, and it won: the loops stayed apart and only the six lines they genuinely shared
+    (storing a turn pair, in <code>turnmemory.py</code>) were extracted. Merging would have traded
+    a property the code <em>has</em> for one a conditional <em>claims</em>.</p>
     <p><strong>Guests never see a confirmation</strong> — anything that would ask you is a flat
     no for them (the preview would leak what would happen; the traffic would aim approval fatigue
     at you). Guest turns are <a href="taint.html">born tainted</a>. Nothing a guest does
-    executes on your machine, at any stage — code runs, when they come, are Anthropic-side
-    only; a local sandbox was rejected as a research project with a catastrophic failure
+    executes on your machine. When code execution existed it ran on Anthropic's servers, never
+    here; a local sandbox was rejected as a research project with a catastrophic failure
     mode.</p>
-    <p><strong>The threat model is re-answered per stage:</strong> a hostile guest today can
-    burn caps and log ugly searches — nothing else. With the workspace: fill a capped folder
-    with inert bytes (runnable suffixes refused however a file arrives). With shared reads:
-    see exactly what you chose to publish to every guest. Never: any outward action, any
-    confirmation, any code on your PC.</p>
+    <p><strong>The threat model, stated plainly:</strong> a hostile guest can burn caps and log
+    ugly searches — nothing else. They cannot take any outward action, cannot reach a
+    confirmation, and cannot run anything on your PC. <code>test_policy</code> asserts this
+    exhaustively rather than leaving it to argument: every capability against every origin, with
+    the guest column required to be <strong>empty</strong>. A capability appearing there is a
+    security regression, not a test to update.</p>
 
     <h2 id="paper-trail">Paper trail</h2>
     <div class="paper-trail">

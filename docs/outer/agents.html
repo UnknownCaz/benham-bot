@@ -17,10 +17,9 @@
     <h2 id="three">The three agents (and a half)</h2>
     <table>
       <tr><th>agent</th><th>file</th><th>model</th><th>can reach</th></tr>
-      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all 57 capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
-      <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code> (chat) / <code>guest_agent.py</code> (workspace <span class="badge off">OFF BY DEFAULT</span>)</td><td><code>guest.model</code> (claude-haiku-4-5)</td><td>chat mode: <em>no client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only. Workspace mode adds exactly the granted <code>ws_*</code> capabilities.</td></tr>
+      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all <!-- GENERATED:count -->56<!-- /GENERATED:count --> capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
+      <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code></td><td><code>guest.model</code> (claude-haiku-4-5)</td><td><em>No client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only, plus <code>idea..</code> filing. A workspace/tool-loop variant existed until 2026-08-16; see <code>archive/guest-tools/</code>.</td></tr>
       <tr><td><strong>PC session</strong> — the machine itself</td><td><code>codesession.py</code></td><td>the real Claude Code CLI (your subscription or API key per <code>pc.use_api_key</code>)</td><td>your actual PC, with your own Claude Code skills loaded — reads free, changes ask first</td></tr>
-      <tr><td><strong>Voice brain</strong> (the half)</td><td><code>brain.py</code></td><td>Anthropic API, only when <code>BENHAM_AUTO_REPLY=1</code></td><td>answering wake-word utterances by voice; gated to <code>auto_reply_guilds</code>, no tools</td></tr>
     </table>
     <p>The PC session is not a reimplementation — it drives the actual Claude Code CLI through
     the agent SDK with your settings loaded, so "restart Isle of Berk" works because your
@@ -29,13 +28,13 @@
     <h2 id="when">Which one fires when</h2>
     <table>
       <tr><th>trigger</th><th>goes to</th><th>notes</th></tr>
+      <tr><td>a conversation beat comes due</td><td>the tick loop, no model</td><td>The only autonomous trigger there is. Every 60s it asks <code>conversations.due()</code> whether an ask needs delivering, nudging or banking, then delivers - it decides nothing. Reaches exactly one outward capability.</td></tr>
       <tr><td>you DM Benham</td><td>owner agent</td><td>the normal path; owner gate checked first</td></tr>
       <tr><td>you DM starting <code>pc..</code></td><td>PC session directly</td><td>skips the agent round-trip entirely</td></tr>
       <tr><td>you ask the agent for something PC-shaped</td><td>owner agent → <code>pc_task</code> → PC session</td><td>blocked in tainted turns; DM-only</td></tr>
       <tr><td>you @mention it in a guild</td><td>owner agent</td><td>only in <code>agent_guilds</code>; elsewhere refused</td></tr>
       <tr><td>a whitelisted guest DMs it</td><td>guest agent</td><td>separate memory, separate persona, capped daily</td></tr>
       <tr><td>anyone else DMs or mentions it</td><td>nobody</td><td>seen and logged, never obeyed</td></tr>
-      <tr><td>wake word in voice + AUTO_REPLY on</td><td>voice brain</td><td>only in <code>auto_reply_guilds</code>; the sole autonomous trigger anywhere</td></tr>
       <tr><td>CLI scripts / <code>do.py</code></td><td>no agent at all</td><td>straight through the outbox to <code>capabilities.py</code> — same gates, no model in the loop</td></tr>
     </table>
     <p>That last row matters: the CLI is not an agent. When you run <code>send.py</code> yourself,
@@ -47,7 +46,6 @@
       <tr><td>owner agent</td><td>API</td><td>the full registry of tool schemas + system prompt (~7.4k tokens measured pre-Stage-4) per call, but cache-marked — after the first call each turn reads it at a tenth of the price. History is stored as plain text pairs, so long phone conversations don't drag channel dumps along.</td></tr>
       <tr><td>guest agent</td><td>API (bills you)</td><td>haiku + 500 max tokens keeps each message cheap; the caps (100/guest/day, 400 global, 3s cooldown) bound the total. Searched turns count double.</td></tr>
       <tr><td>PC session</td><td><code>pc.use_api_key</code>: currently <code>false</code> = bills the Claude subscription</td><td>a trivial task runs a few cents on API; not free</td></tr>
-      <tr><td>voice brain</td><td>API</td><td>only fires on wake words in allowed guilds</td></tr>
     </table>
     <p>Check actual spend: <code>python benham.py usage --today</code> — see
     <a href="health-logs-cost.html">Health, logs &amp; cost</a>.</p>

@@ -33,11 +33,10 @@
     shape as <code>destructive_guilds</code>: place-scoped authority that no amount of asking
     can widen.</p>
     <p><strong>Slash commands, not chat parsing:</strong> plain text is never
-    command-triggered — the bot records what it sees and stays quiet (voice wake words are the
-    only autonomous trigger anywhere). Slash commands make "this is an instruction" an explicit
-    Discord-level act with Discord-level attribution, rather than something inferred from
-    text — inference is exactly what the <a href="taint.html">injection defences</a> exist to
-    refuse.</p>
+    command-triggered — the bot records what it sees and stays quiet. It engages only when
+    addressed: an owner DM, an @-mention, or a guest DM. The one thing that acts without
+    being addressed is the conversation tick loop, which can only deliver an ask a human
+    already opened.</p>
     <p><strong>The watchdog posts outside the chokepoint</strong> (straight
     <code>channel.send</code>) — tolerable where webhook.py is tolerable and for the same
     reason: a fixed, code-authored message shape ("server X crashed") with no model and no
