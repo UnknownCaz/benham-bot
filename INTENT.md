@@ -388,6 +388,45 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     lanes** — today the physical file split is doing real security work, and merging converts a
     physics guarantee into a policy guarantee.
 14. Split `bot.py` (2345 lines) and `capabilities.py` (2139 lines) along the same seam.
+    **Note 2026-08-17:** item 13 was deliberately narrowed to the turnmemory extraction, so the
+    seam item 14 was meant to follow was never cut. What remains available is mechanical size
+    reduction along seams that already exist — bot.py's fenced exaroton block is genuinely
+    self-contained; splitting capabilities.py by tier costs the property that every gate is
+    readable in one place, which is what made this session's security bugs findable.
+
+### Stage 5 — The ask queue (2026-08-17)
+
+15. **Sessions queue instead of colliding.** Several ASKING conversations may be live for one
+    person; they arrive as ONE numbered message and answer by slot. Priority is **self-assessed**
+    — Tyler's call over my objection, and he was right: inflation is what happens when you rank
+    yourself in a vacuum, and a session that reads the queue first is ranking comparatively.
+    Advisory but recorded — nothing stops a session claiming BLOCKING, and nothing hides it.
+
+    Settled decisions:
+    - Named priorities, not integers. There is always a bigger integer; an arms race is the
+      failure mode. The three levels name a claim about the ASKER's own state.
+    - Within a level, strictly first-come-first-served. The only way past someone is to claim a
+      higher level, which is visible in the queue and in Tyler's message.
+    - Slots are recomputed, never stored. A stale slot binds an answer to the wrong question.
+    - A Discord reply is certain only while there is ONE candidate. With a queue it becomes a
+      judgement the model must announce, and with several candidates it must ask rather than
+      guess.
+
+16. **Where this goes next — its own project, not an extension of this one.** Tyler, 2026-08-17:
+    *"i think this idea is its own monster so lets start with the ask queue with the expectations
+    this will grow into a later form."* The later form is a **session-to-session negotiation
+    channel**: sessions reading and replying to each other rather than only reading a queue —
+    deferring to one another, merging duplicate questions, handing off work. They are all LLMs,
+    so it is genuinely possible.
+
+    Deliberately NOT started here. The queue is about coordinating questions *to Tyler*; the
+    negotiation channel is about sessions coordinating *with each other*, which is a different
+    system with its own failure modes (loops, deadlock, sessions talking each other out of asking
+    at all). Conflating them would have dragged the queue down. The queue's file is the seed: it
+    is already the only place unrelated sessions can meet.
+
+    Explicitly out of scope for that project until asked: sessions leaving each other notes about
+    the *work* ("I changed the schema"). That is the Corkboard's job, and it is a third thing.
 
 ### What "done" looks like
 
