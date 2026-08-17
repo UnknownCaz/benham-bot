@@ -39,6 +39,7 @@ from benham.core import identity
 from benham.core import policy
 from benham.core import jsonio
 from benham.core import shared_tools
+from benham.core import turnmemory
 
 from benham import paths
 
@@ -75,9 +76,6 @@ SEARCH_LOG = os.path.join(paths.STATE_DIR, "agent_searches.jsonl")
 
 _client = None
 _last_call = {}          # conversation key -> monotonic time
-_memory = None           # key -> [ {role, content}, ... ]
-
-# Type names in the registry map to JSON Schema types for the tool definitions.
 _JSON_TYPE = {"int": "integer", "str": "string", "bool": "boolean", "list": "array"}
 
 
@@ -93,76 +91,34 @@ def _get_client():
 # Conversation memory
 # --------------------------------------------------------------------------
 
-def _load_memory():
-    global _memory
-    if _memory is None:
-        _memory = jsonio.read_json(MEMORY_FILE, default={})
-    return _memory
+# The store itself lives in turnmemory, shared with guest.py - because these six
+# lines are where f06b79b's damage was written, and two copies of them meant one
+# could be broken for twelve days while the other was fine. Separate FILE, shared
+# logic: agent_memory.json and guest_memory.json stay distinct on disk.
+#
+# Note there is no module-level cache any more. The old one made repairing a
+# corrupted store require stopping the bot first, because the running process
+# held a stale copy that would write back over the fix.
+_store = turnmemory.TurnMemory(lambda: MEMORY_FILE, HISTORY_TURNS)
+
+# Re-exported so callers that already say agent.is_echo_pair / agent.forget keep
+# working; turnmemory is the definition.
+is_echo_pair = turnmemory.is_echo_pair
 
 
 def _history(key):
-    return _load_memory().get(key, [])
+    return _store.history(key)
 
 
 def _remember(key, user_text, assistant_text):
-    """Persist one exchange as plain text - deliberately NOT the raw turn list.
-
-    Two reasons the tool_use/tool_result blocks are dropped rather than stored:
-
-    Correctness. The API requires alternating roles and rejects a tool_result whose
-    tool_use is missing. A loop that ends on a tool round (max rounds hit, an
-    exception, a restart mid-call) leaves history ending on a user turn, and the
-    NEXT message would then send two user turns back to back and 400. Storing only
-    completed text pairs makes that structurally impossible instead of relying on
-    every exit path to clean up after itself.
-
-    Cost. Tool results here include whole channel reads. Re-sending those verbatim
-    on every subsequent turn of a long phone conversation is a bill that compounds
-    for context the model rarely needs twice - if it wants that channel again it
-    can read it again, fresh.
-    """
-    if not (user_text and assistant_text):
-        return
-    mem = _load_memory()
-    turns = list(mem.get(key, []))
-    turns.append({"role": "user", "content": user_text})
-    turns.append({"role": "assistant", "content": assistant_text})
-    mem[key] = turns[-HISTORY_TURNS * 2:]
-    jsonio.write_json(MEMORY_FILE, mem)
-
-
-def is_echo_pair(user_turn, assistant_turn):
-    """True if this stored pair is f06b79b damage - Benham's reply as Tyler's message.
-
-    Two shapes, because the reply is assembled and the clobbered variable was not:
-
-    - **Exact.** One round produced text, so `reply` is that single part and the
-      overwritten `text` is the same string. user == assistant.
-    - **Suffix.** Several rounds produced text, so `reply` is
-      `"\\n\\n".join(parts)` while `text` holds only the LAST part. The user turn
-      is then the tail of the assistant turn, and equality misses it entirely -
-      which it did, on the first pass of the repair.
-
-    Matching the join boundary rather than a bare `endswith` is deliberate: a real
-    message can coincidentally end with a short reply ("ok", "yes"), and dropping
-    a genuine exchange to be thorough would be its own corruption.
-    """
-    if not (user_turn.get("role") == "user" and assistant_turn.get("role") == "assistant"):
-        return False
-    u, a = user_turn.get("content"), assistant_turn.get("content")
-    if not isinstance(u, str) or not isinstance(a, str) or not u.strip():
-        return False
-    return a == u or a.endswith("\n\n" + u)
+    """Store one completed exchange. See turnmemory.TurnMemory.remember."""
+    _store.remember(key, user_text, assistant_text)
 
 
 def forget(key=None):
     """Drop conversation history (one conversation, or all)."""
-    mem = _load_memory()
-    if key is None:
-        mem.clear()
-    else:
-        mem.pop(key, None)
-    jsonio.write_json(MEMORY_FILE, mem)
+    _store.forget(key)
+
 
 
 # --------------------------------------------------------------------------
