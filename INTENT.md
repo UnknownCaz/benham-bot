@@ -428,6 +428,28 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     Explicitly out of scope for that project until asked: sessions leaving each other notes about
     the *work* ("I changed the schema"). That is the Corkboard's job, and it is a third thing.
 
+    **Tyler sharpened this the same day, answering c7** — the shape he actually has in mind is
+    not a flat channel but *rooms*: "this will likely evolve into a shared 'group chat' for
+    sessions with rooms for each kinda like discord server for active claude sessions that could
+    need to communicate." So the eventual model is a server, not a bulletin board: a room per
+    project or per topic, sessions joining the ones they are working in. Worth noting that the
+    ask queue is already the degenerate case of that — one room, one member (Tyler), and every
+    message a question. Whatever gets built should be able to look at the queue and see itself.
+
+17. **The uncollected-answer hole, found by Tyler 2026-08-17 and fixed the same day.** A session
+    that asks with `--no-wait`, or that simply exits before he replies, leaves the answer sitting
+    in the store with nothing to deliver it to. `ask.py`'s docstring had always claimed the
+    answer "gets read by whoever asks next" — but nothing ever showed it to whoever asked next,
+    so that sentence was aspirational rather than true. ANSWERED-but-not-CLOSED already meant
+    exactly "answer arrived, nobody acted on it", so `uncollected()` needed no new state, only a
+    surface: the queue view now prints it first, because an answer already given is worth more
+    than a question about to be asked.
+
+    Worth keeping as a pattern rather than an incident: **a docstring described a behaviour the
+    code did not implement, and it read as true because the state existed.** Same shape as the
+    manual audit and the `rule_owner` comment - the claim was plausible, adjacent to something
+    real, and nothing checked it.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the

@@ -100,6 +100,20 @@ def main(argv):
     # from inflating: ranking yourself in a vacuum has one safe answer, ranking
     # yourself against three visible claims does not.
     q = conversations.queue_for(who)
+    # Answers nobody has picked up. Shown FIRST, because an answer already given
+    # is more useful than a question about to be asked - and because the commonest
+    # way to waste his time is to re-ask something he has already answered to a
+    # session that has since exited.
+    waiting = conversations.uncollected(who)
+    if waiting:
+        print(f"{len(waiting)} answer(s) came back that nobody has collected:",
+              file=sys.stderr)
+        for c in waiting:
+            print(f"  {c['id']}: {c['question'][:80]}", file=sys.stderr)
+            print(f"     -> {str(c.get('answer',''))[:140]}", file=sys.stderr)
+        print("  (act on it, then: python benham.py conv close <id> --outcome \"...\")",
+              file=sys.stderr)
+        print("", file=sys.stderr)
     if a.queue:
         _print_queue(q)
         return 0
