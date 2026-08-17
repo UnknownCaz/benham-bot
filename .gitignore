@@ -84,7 +84,9 @@ whitelist-usernames.txt
 conversations.json
 
 # The batch-message pointer: counterparty id -> the Discord message currently
-# showing them their queue. Bot-mutated state, and it names whose DM thread is
-# whose. Added the day it was created (2026-08-17) rather than the day someone
-# nearly committed it - the per-file policy above only works if that happens.
+# showing them their queue, and which questions it shows. Bot-mutated state, and
+# it names whose DM thread is whose - same class as conversations.json above.
+# It shipped with the queue and had no rule, and two sessions found that
+# independently, which is the tell: the file does not exist until someone is
+# actually asked something, so an untouched state/ hides it from every check.
 ask_batches.json

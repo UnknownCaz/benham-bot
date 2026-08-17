@@ -1073,7 +1073,14 @@ async def _advance_conversation(ctx, p):
         # is the opposite of what claiming BLOCKING is for. So an edit that changes
         # what is at the top replaces the message instead of amending it.
         existing = conversations.batch_message(who)
-        jumped = bool(queue) and queue[0]["id"] == conv["id"] and len(queue) > 1
+        # Front of the line means the top of the message changed, which is the
+        # thing an edit cannot announce. Length is deliberately NOT part of this:
+        # it used to also require len(queue) > 1, on the assumption that a queue
+        # of one had no message to edit yet - but the batch id is never cleared
+        # when a queue empties, so the FIRST question after a quiet spell found a
+        # stale message, took the edit path, and arrived with no notification at
+        # all. The one case that most needed a ping was the one that never got one.
+        jumped = bool(queue) and queue[0]["id"] == conv["id"]
         sent = None
         if existing and not jumped:
             try:
@@ -1093,7 +1100,12 @@ async def _advance_conversation(ctx, p):
                 except Exception:  # noqa: BLE001
                     pass
             sent = await ch.send(body)
-        conversations.set_batch_message(who, sent.id)
+        # Store WHAT THE MESSAGE SHOWS, in order, not just its id. That list is
+        # the numbering he answers by, and it stops matching the live queue the
+        # moment he answers one of them - shown_queue() is what keeps "2" meaning
+        # the second thing on his screen rather than the second thing still open.
+        conversations.set_batch_message(who, sent.id,
+                                        shown=[c["id"] for c in queue])
 
         # Bind the batch message to EVERY question it displays: a reply to it is a
         # reply to any of them, and the slot number picks which.
