@@ -283,7 +283,14 @@ check("exactly the expected capabilities are origin-restricted",
 # may do while nobody is watching.
 #
 #   set_presence         - cosmetic, applied on login by on_ready.
-#   advance_conversation - added for stage 3 item 8, and the ONLY outward action
+#   tell_conversation    - added for stage 3 item 9. Same bounded shape: it takes
+#                          a conversation id, the recipient comes from the record,
+#                          and the substance is the OUTCOME already written there.
+#                          It refuses outright unless the conversation is closed
+#                          with a real outcome, so a timer cannot use it to send an
+#                          empty "update". SYSTEM is the point - closing the loop
+#                          must not depend on anyone remembering to.
+#   advance_conversation - added for stage 3 item 8, one of two outward actions
 #                          SYSTEM can reach. It is safe to grant because it cannot
 #                          CHOOSE anything: it takes a conversation id, and both the
 #                          recipient and the words come from a record a human
@@ -293,7 +300,7 @@ check("exactly the expected capabilities are origin-restricted",
 #                          handed a loop the ability to message anyone anything.
 #
 # A third name appearing here without a deliberate decision is what this asserts on.
-EXPECTED_SYSTEM = {"set_presence", "advance_conversation"}
+EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
