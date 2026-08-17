@@ -111,7 +111,7 @@ def main(argv):
         for c in waiting:
             print(f"  {c['id']}: {c['question'][:80]}", file=sys.stderr)
             print(f"     -> {str(c.get('answer',''))[:140]}", file=sys.stderr)
-        print("  (act on it, then: python benham.py conv close <id> --outcome \"...\")",
+        print("  (act on it, then: python benham.py conv close <id> \"what happened\")",
               file=sys.stderr)
         print("", file=sys.stderr)
     if a.queue:
