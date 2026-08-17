@@ -16,6 +16,7 @@ as nothing at all.
 # repo root there too - that is where the benham package and bot.py live.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _testconfig  # noqa: F401,E402 - control.json fixture; must precede benham imports
 
 import sys
 
