@@ -81,6 +81,17 @@ TERMINAL_STATES = (CLOSED, BANKED)    # worth telling the counterparty about
 # rules and the invariant differ.
 ASKING, OWED = "asking", "owed"
 
+# Self-assessed by the asking session, which reads the queue before choosing.
+# Named rather than numeric on purpose: integers invite an arms race (there is
+# always a bigger number), while these three are a claim about the ASKER'S OWN
+# STATE - something a session actually knows about itself, and something Tyler
+# can sanity-check at a glance when he sees three sessions all claiming the top.
+BLOCKING = "blocking"   # this session cannot continue without an answer
+NORMAL = "normal"       # it gates something, but there is other work meanwhile
+WHENEVER = "whenever"   # no rush; answer it when convenient
+PRIORITIES = (BLOCKING, NORMAL, WHENEVER)
+_RANK = {BLOCKING: 0, NORMAL: 1, WHENEVER: 2}
+
 # --- nudge policy -----------------------------------------------------------
 # Tyler's, retuned 2026-08-15 and proven against Doom before it was ever code.
 NUDGE_AFTER = timedelta(minutes=15)
@@ -137,13 +148,24 @@ def _next_id(data):
 # --------------------------------------------------------------------------
 
 def open_conversation(counterparty, purpose, question, project=None, origin=None,
-                      now=None, direction=ASKING):
+                      now=None, direction=ASKING, priority=NORMAL,
+                      placement_reason=None):
     """Start one. Returns the conversation dict.
 
-    Raises ValueError if this counterparty already has a live one - the caller
-    must close, bank, or reuse it. Deliberately an exception rather than a silent
-    reuse: two asks in flight to one person is a design mistake at the call site,
-    and quietly merging them would hide it.
+    Several ASKING conversations may be live for one person - they form a queue,
+    delivered as ONE numbered message rather than as N separate DMs. See
+    queue_for() for the ordering and slot_of() for what makes an answer bindable
+    now that "the live one" is no longer a unique thing.
+
+    `priority` is SELF-ASSESSED by the caller (Tyler's call, 2026-08-17). The
+    session decides where it belongs, having first read the queue - which is the
+    whole point, and the reason self-assessment works here rather than inflating:
+    ranking yourself in a vacuum has one safe answer, ranking yourself against
+    three visible claims does not.
+
+    `placement_reason` is why it put itself there, in its own words. Advisory but
+    RECORDED: nothing stops a session claiming BLOCKING, and nothing hides it
+    either. Line-jumping should cost visibility, not be impossible.
 
     `now` is injectable for the same reason nudge/defer/due take it: the deadline
     is arithmetic on a clock, and a test that has to wait fifteen real minutes to
@@ -152,17 +174,13 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
     default path was never run and shipped broken.
     """
     now = now or _now()
+    if priority not in PRIORITIES:
+        raise ValueError(
+            f"unknown priority {priority!r} - one of {', '.join(PRIORITIES)}. "
+            "A free-form field would become an arms race; these three are a claim "
+            "about the ASKER's state, which is a thing a session actually knows.")
     with _lock:
         data = _load()
-        # Only ASKING is capped at one per person. An OWED conversation is a report
-        # we owe an answer to, and refusing someone's second bug report because
-        # their first is unresolved would be exactly backwards.
-        existing = _live_for(data, counterparty) if direction == ASKING else None
-        if existing:
-            raise ValueError(
-                f"{counterparty} already has a live conversation ({existing['id']}: "
-                f"{existing['purpose']!r}). Close, bank, or reuse it - one open ask "
-                "per person is what makes their reply bindable.")
         cid, seq = _next_id(data)
         conv = {
             "id": cid,
@@ -173,6 +191,8 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "question": str(question),
             "project": (str(project) if project else None),
             "origin": (str(origin) if origin else None),
+            "priority": priority,
+            "placement_reason": (str(placement_reason) if placement_reason else None),
             "state": OPEN,
             "opened_at": _iso(now),
             "due_at": _iso(now + NUDGE_AFTER),
@@ -184,7 +204,13 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "closed_at": None,
             "log": [],
         }
-        _event(conv, "opened", str(purpose))
+        detail = str(purpose)
+        if direction == ASKING:
+            ahead = len(_queue(data, counterparty))
+            detail += f" [{priority}, {ahead} ahead]"
+            if placement_reason:
+                detail += f" - {placement_reason}"
+        _event(conv, "opened", detail)
         data[cid] = conv
         _save(data)
         return conv
@@ -257,19 +283,77 @@ def by_ask_message(message_id):
     return None
 
 
-def _live_for(data, counterparty):
-    """The one ASKING conversation waiting on this person.
+def _queue(data, counterparty):
+    """Every ASKING conversation waiting on this person, in the order to ask.
+
+    Ordered by self-assessed priority, then by seq - so within a priority it is
+    strictly first-come-first-served and a later session cannot overtake an
+    earlier one by claiming the same level. The only way past someone is to claim
+    a HIGHER level, which is visible in the queue and in Tyler's message.
 
     OWED is excluded deliberately: it is what makes binding unambiguous. If a
-    report Doom filed counted as "live" for him, his next message would be a
+    report Doom filed counted as waiting-on-him, his next message would be a
     candidate answer to his own bug report.
     """
-    for c in data.values():
-        if (int(c.get("counterparty", 0)) == int(counterparty)
-                and c.get("state") in LIVE_STATES
-                and c.get("direction", ASKING) == ASKING):
-            return c
+    live = [c for c in data.values()
+            if int(c.get("counterparty", 0)) == int(counterparty)
+            and c.get("state") in LIVE_STATES
+            and c.get("direction", ASKING) == ASKING]
+    return sorted(live, key=lambda c: (_RANK.get(c.get("priority", NORMAL), 1),
+                                       c.get("seq", 0)))
+
+
+def _live_for(data, counterparty):
+    """The FRONT of the queue, or None.
+
+    Kept because plenty of callers only ever wanted "the one to nudge about", and
+    with a queue that is simply the first. Anything that needs to know a queue
+    exists should call queue_for() and think about the plural case.
+    """
+    q = _queue(data, counterparty)
+    return q[0] if q else None
+
+
+def queue_for(counterparty):
+    """The full ordered queue waiting on this person. Read before you ask."""
+    with _lock:
+        return _queue(_load(), counterparty)
+
+
+def slot_of(cid):
+    """This conversation's 1-based number in its counterparty's queue.
+
+    THE SLOT IS THE BINDING HANDLE, and it is what replaces the old one-live-ask
+    invariant. That rule existed for exactly one reason - so a reply had a single
+    candidate and "which question is this answering" could not be got wrong. A
+    queue breaks that, so the numbering puts it back: "2: sqlite" is as certain as
+    a Discord reply was, with no model involved.
+
+    Recomputed rather than stored, so it can never disagree with the order the
+    message actually showed. A stored slot would drift the moment anything ahead
+    of it was answered, and a stale number is worse than none: it silently binds
+    an answer to the wrong question.
+    """
+    with _lock:
+        data = _load()
+        conv = data.get(cid)
+        if not conv:
+            return None
+        q = _queue(data, conv["counterparty"])
+        for i, c in enumerate(q, 1):
+            if c["id"] == cid:
+                return i
     return None
+
+
+def by_slot(counterparty, slot):
+    """The conversation at this 1-based queue position, or None."""
+    q = queue_for(counterparty)
+    try:
+        slot = int(slot)
+    except (TypeError, ValueError):
+        return None
+    return q[slot - 1] if 1 <= slot <= len(q) else None
 
 
 # --------------------------------------------------------------------------

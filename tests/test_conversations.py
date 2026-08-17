@@ -69,17 +69,67 @@ def main():
         check("the project rode along", c["project"], "storyizier")
         check("and it logged the opening", c["log"][0]["event"], "opened")
 
-        section("One live ask per person - the binding invariant")
-        try:
-            C.open_conversation(DOOM, "something else", "unrelated question", now=NOW)
-            raised = False
-        except ValueError as e:
-            raised = True
-            check("...and it names the conversation already in flight", c["id"] in str(e), True)
-        check("a second live ask to the same person is refused", raised, True)
-        check("a different person is fine",
+        section("The queue - what replaced one-live-ask-per-person")
+        # Until 2026-08-17 a second ask RAISED, because one live ask is what made a
+        # reply bindable. Tyler's call: sessions queue instead, reading the queue
+        # before placing themselves. The binding guarantee had to be replaced, not
+        # dropped - that is what slot_of() is for, and it is the point of this
+        # section. Losing it silently would have been the worst outcome here.
+        second = C.open_conversation(DOOM, "something else", "unrelated question", now=NOW)
+        check("a second ask now queues instead of raising", second["state"], C.OPEN)
+        check("both are waiting on him", [x["id"] for x in C.queue_for(DOOM)],
+              [c["id"], second["id"]])
+        check("a different person has their own queue",
               C.open_conversation(TYLER, "which way", "A or B?", now=NOW)["state"], C.OPEN)
-        check("live_for finds the right one", C.live_for(DOOM)["id"], c["id"])
+        check("live_for is now the FRONT of the queue", C.live_for(DOOM)["id"], c["id"])
+
+        # Slots are the handle: "2: sqlite" has to be as certain as a Discord reply.
+        check("front of the queue is slot 1", C.slot_of(c["id"]), 1)
+        check("the second is slot 2", C.slot_of(second["id"]), 2)
+        check("slots resolve back to the conversation",
+              C.by_slot(DOOM, 2)["id"], second["id"])
+        check("a slot past the end is None, not a wrap-around",
+              C.by_slot(DOOM, 3), None)
+        check("slot 0 is not the last item", C.by_slot(DOOM, 0), None)
+
+        # Ordering: priority first, then strictly first-come. A later session
+        # cannot overtake an earlier one by claiming the SAME level - only by
+        # claiming a higher one, which is visible in Tyler's message.
+        urgent = C.open_conversation(DOOM, "prod is down", "restart it?",
+                                     now=NOW, priority=C.BLOCKING,
+                                     placement_reason="cannot continue, deploy is wedged")
+        check("blocking jumps the queue", C.slot_of(urgent["id"]), 1)
+        check("...and pushes the others back", C.slot_of(c["id"]), 2)
+        tie = C.open_conversation(DOOM, "later thing", "another normal one", now=NOW)
+        check("equal priority does NOT overtake - first come, first served",
+              C.slot_of(tie["id"]), 4)
+
+        # Advisory but recorded. Nothing stops a session claiming the top; the
+        # claim and its reasoning are simply on the record where Tyler sees them.
+        check("the claim is stored", C.get(urgent["id"])["priority"], C.BLOCKING)
+        check("so is the reason it gave",
+              "deploy is wedged" in C.get(urgent["id"])["placement_reason"], True)
+        check("and the opening log entry carries both",
+              "blocking" in C.get(urgent["id"])["log"][0]["detail"], True)
+
+        # A made-up level is refused rather than silently ranked last - an unknown
+        # priority that sorted to the bottom would bury exactly the urgent thing
+        # someone fat-fingered.
+        try:
+            C.open_conversation(DOOM, "x", "y", now=NOW, priority="URGENT!!")
+            bad = False
+        except ValueError:
+            bad = True
+        check("an unknown priority is refused, not ranked last", bad, True)
+
+        # Slots are RECOMPUTED. A stored slot would go stale the moment anything
+        # ahead of it was answered, and a stale number binds an answer to the
+        # wrong question - which is the exact failure the old rule prevented.
+        C.answer(urgent["id"], "yes restart", bound_by="reply")
+        check("answering the front renumbers what is left", C.slot_of(c["id"]), 1)
+        check("...and the answered one has no slot at all", C.slot_of(urgent["id"]), None)
+        C.forget(tie["id"])
+        C.forget(second["id"])
 
         section("Nudges: 15 minutes, twice, then bank")
         check("nothing is due yet", C.due(now=NOW), [])
@@ -339,12 +389,17 @@ def main():
         q = C.open_conversation(DOOM, "ask", "did that fix it?", now=NOW)
         check("an ask alongside reports is still found for binding",
               C.live_for(DOOM)["id"], q["id"])
-        try:
-            C.open_conversation(DOOM, "second ask", "and this?", now=NOW)
-            two_asks = True
-        except ValueError:
-            two_asks = False
-        check("but a SECOND ask is still refused", two_asks, False)
+        # A second ask queues (2026-08-17). The property that matters here is
+        # unchanged and is the reason OWED is excluded from the queue at all:
+        # however many asks pile up, a person's own REPORTS never join the line
+        # and never become candidate answers to themselves.
+        q2 = C.open_conversation(DOOM, "second ask", "and this?", now=NOW)
+        check("a second ask joins the queue", [x["id"] for x in C.queue_for(DOOM)],
+              [q["id"], q2["id"]])
+        check("...and his own reports are still not in it",
+              any(x["direction"] == C.OWED for x in C.queue_for(DOOM)), False)
+        check("the reports are still there, just not queued",
+              len(C.all_conversations(counterparty=DOOM)) > len(C.queue_for(DOOM)), True)
         C.forget()
 
         section("It outlives the process that opened it")
