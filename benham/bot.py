@@ -1327,6 +1327,13 @@ async def on_message(message):
     answer_text = text
     if is_dm:
         queue = conversations.queue_for(message.author.id)
+        # The numbering he is answering by is the one on his SCREEN, and the two
+        # part company as soon as he answers one: nothing re-renders the batch
+        # message, so the live queue renumbers underneath a list he can still
+        # read. Every "which number is this" decision below therefore asks
+        # shown_queue, which returns None in a position whose question has since
+        # been answered rather than sliding the next one up into it.
+        shown = conversations.shown_queue(message.author.id)
 
         # SLOTS FIRST, and ALL of them. "2: sqlite" names which question it answers,
         # which is exactly as certain as a reply used to be and survives him
@@ -1337,7 +1344,7 @@ async def on_message(message):
         # one message. The first version handled exactly one, and greedily: slot 1
         # swallowed the answers to 2 and 3, which then went on being nudged for
         # questions he had already answered.
-        multi = conversations.parse_slot_answers(text) if len(queue) > 1 else {}
+        multi = conversations.parse_slot_answers(text) if len(shown) > 1 else {}
         if multi:
             done = conversations.answer_slots(message.author.id, multi)
             if done:
@@ -1347,7 +1354,7 @@ async def on_message(message):
                 log(f"answered {len(done)} by slot in one message: "
                     + ", ".join(f"{s}->{c['id']}" for s, c in done))
                 await react(message, "✅")
-        if bound_conv is None and len(queue) > 1:
+        if bound_conv is None and len(shown) > 1:
             m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
             if not m:
                 m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
@@ -1373,15 +1380,21 @@ async def on_message(message):
                 # job, announced. Auto-binding here would silently attach an answer
                 # to whichever happened to be at the front, which is the precise
                 # failure the old one-live-ask rule existed to prevent.
-                if len(queue) <= 1:
+                #
+                # Counted on the SCREEN, not the live queue: a message listing
+                # three questions is ambiguous however many of them are still
+                # open, and a reply to it should not become certain just because
+                # he happened to answer the other two.
+                if len(shown) <= 1:
                     conversations.answer(hit["id"], text, bound_by="reply")
                     bound_conv = hit
                     log(f"conversation {hit['id']}: answered by reply "
                         f"(msg {ref_id}) - {text[:120]!r}")
                     await react(message, "✅")
                 else:
-                    log(f"reply to the batch message with {len(queue)} live - "
-                        f"leaving it to the model to say which one it means")
+                    log(f"reply to a batch message showing {len(shown)} "
+                        f"({len(queue)} still live) - leaving it to the model to "
+                        f"say which one it means")
 
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"

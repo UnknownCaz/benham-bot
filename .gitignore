@@ -82,3 +82,9 @@ whitelist-usernames.txt
 # state/*.json is NOT ignored wholesale - each private file is listed by name, so
 # a new one has to be added here deliberately. This is that.
 conversations.json
+
+# Which Discord message is showing each person their ask queue, and which
+# questions it shows. Real message ids in real DMs, keyed by real user id - the
+# same class as conversations.json above, and it was missed when the queue
+# shipped because the file only appears once someone is actually asked something.
+ask_batches.json
