@@ -22,19 +22,22 @@
       <li><strong>Mandatory dry-run.</strong> The first call performs nothing and returns real
       facts: counts, date spans, author breakdowns, who currently holds the role. This is what
       catches a wrong channel id or an <code>older_than_days</code> off by 10×.</li>
-      <li><strong>Explicit confirm.</strong> In a DM: preview + a token, then a narrow
-      affirmative. Naming the token targets that exact action; a bare "yes" fires whatever is
-      parked right now. From the CLI: re-run with <code>confirm_token=</code>. No inline
-      shortcut exists in either path.</li>
+      <li><strong>Explicit confirm, and on tier 3 it must name what it is confirming.</strong>
+      In a DM: preview + a token, then an affirmative. On tiers 1–2 a bare "yes" fires. On
+      <strong>tier 3 it does not</strong> — the reply has to reference the action, so
+      "yes, purge that channel" fires and "yes, you're totally right" does not. Naming the token
+      (<code>yes a1b2c3</code>) counts as a reference, since it identifies the action more
+      precisely than any word could. From the CLI: re-run with <code>confirm_token=</code>.</li>
     </ol>
-    <p class="note"><strong>Corrected 2026-08-17 — read this if you relied on the old text.</strong>
-    This page used to say only an affirmative <em>naming the token</em> fires. That is not what
-    the code does and never was: <code>bot.py</code> resolves
-    <code>target = confirm.get(token) if token else pending</code>, so the token is optional
-    disambiguation, not a requirement. Benham's own prompt has always said "reply <strong>yes</strong>
-    to run it". The claim came from a paragraph in <code>confirm.py</code>'s docstring, which was
-    wrong and has been corrected at the source.</p>
-    <p>What actually stops a stray "yeah" three messages later, since it is not the token:</p>
+    <p class="note"><strong>Changed 2026-08-17, and the history matters.</strong> This page used
+    to claim only an affirmative <em>naming the token</em> fires. That was false when it was
+    written — the token was always optional, and a bare "yes" fired anything parked, on every
+    tier. An audit caught the false claim; Tyler's answer was not to make the token mandatory but
+    to require that the yes <em>name what it is confirming</em>, which is the rule now enforced
+    for tier 3. So the page was wrong, and is now right for a different reason than it originally
+    claimed.</p>
+    <p>Tiers 1–2 still take a bare "yes". What stops a stray "yeah" three messages later
+    <em>there</em>:</p>
     <ul>
       <li><strong>A whitelist, not a guess.</strong> <code>read_reply()</code> matches the phrase
       against a fixed affirmative set with any token removed, and returns <code>None</code> for
@@ -46,9 +49,11 @@
       <li><strong>A short clock.</strong> The window is ten minutes on the DM path (below), not
       an hour, so the interval in which a bare "yes" can hit anything is small.</li>
     </ul>
-    <p>Whether the token <em>should</em> be mandatory for tier 3 is a live question, and it is a
-    behaviour change rather than a documentation fix — so it is written down here rather than
-    quietly made.</p>
+    <p>On tier 3 all of that still applies, and the reference requirement sits on top of it.
+    The refusal is <strong>spoken, not silent</strong>: an affirmative that names nothing gets
+    told what is missing, because an unexplained no-op on a destructive action is answered by
+    saying yes again, louder. Cancelling never got harder — a bare "no" still works on every
+    tier, so the safe direction stays the convenient one.</p>
     <p>Previews expire: expired = cancelled, silence is never assent. The TTL depends on which
     path parked it — <strong><code>confirm.conversation_ttl_seconds</code> (600 = 10 min) for
     the DM flow</strong>, <code>confirm.ttl_seconds</code> (3600 = 1h) for everything else, per

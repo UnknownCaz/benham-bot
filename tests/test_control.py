@@ -195,6 +195,54 @@ check("'ok' alone IS a yes", confirm.read_reply("ok")[0], "yes")
 verdict, token = confirm.read_reply(f"yes {p.token}")
 check("token-targeted yes parses", (verdict, token), ("yes", p.token))
 
+section("Confirmations — tier 3 needs a yes that names what it is")
+# Tyler's rule, 2026-08-17: "a bare yes should not work it should work with a
+# yes, xyz to confirm thats what the sender is talking about, so 'yes, purge
+# that channel.' would work but, 'yes, your totally right' wouldnt."
+#
+# Note every check above passes NO pending, which is the old behaviour and stays
+# exactly as it was. The rule only engages when the caller hands over the action,
+# so nothing that used to fire has quietly stopped firing except tier 3.
+confirm.cancel()
+d3 = confirm.park("purge_messages", {"channel_id": 1},
+                  {"channel": "general", "count": 42}, TYLER, "dm")
+
+check("bare 'yes' does NOT fire tier 3",
+      confirm.read_reply("yes", d3)[0], "needs_reference")
+check("his example that SHOULD work",
+      confirm.read_reply("yes, purge that channel.", d3)[0], "yes")
+check("his example that should NOT",
+      confirm.read_reply("yes, your totally right", d3)[0], None)
+check("'yes, do it' names nothing",
+      confirm.read_reply("yes, do it", d3)[0], "needs_reference")
+check("naming the target works too",
+      confirm.read_reply("yes general", d3)[0], "yes")
+check("the token is itself a reference",
+      confirm.read_reply(f"yes {d3.token}", d3)[0], "yes")
+check("a reference without a yes is still not a yes",
+      confirm.read_reply("purge it", d3)[0], None)
+
+# Cancelling must never get harder than confirming. If "no" needed to name the
+# action too, the safe direction would be the inconvenient one.
+check("bare 'no' still cancels tier 3", confirm.read_reply("no", d3)[0], "no")
+
+# The refusal has to be a distinct verdict rather than a None: the caller says
+# WHY nothing happened, because an unexplained no-op on a destructive action just
+# gets answered with a louder yes.
+check("refusal is distinguishable from ambiguity",
+      confirm.read_reply("yes", d3)[0] != confirm.read_reply("hmm", d3)[0], True)
+
+# The prompt must state the rule it will actually enforce.
+check("tier-3 prompt warns a bare yes will not work",
+      "bare \"yes\" will not fire" in confirm.describe(d3), True)
+
+confirm.cancel()
+d2 = confirm.park("add_role", {"user_id": 1, "role": "Streamer"},
+                  {"name": "Streamer"}, TYLER, "dm")
+check("tier 2 still accepts a bare yes", confirm.read_reply("yes", d2)[0], "yes")
+check("tier-2 prompt does not warn", "will not fire" in confirm.describe(d2), False)
+confirm.cancel()
+
 section("Confirmations — lifecycle")
 p2 = confirm.park("delete_channel", {"channel_id": 2}, {"summary": "x"}, TYLER, "dm")
 check("parking supersedes the previous", confirm.get(p.token), None)
