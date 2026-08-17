@@ -68,7 +68,15 @@ def main(argv):
     ap = argparse.ArgumentParser(
         prog="benham.py ask",
         description="Ask Tyler something from a running session and wait for the answer.")
-    ap.add_argument("question", help="What to ask him, in plain language")
+    # Optional so that `ask --queue` works on its own. It was required, while
+    # --queue's own help said "print what is waiting and exit" - so the documented
+    # way to read the queue crashed on a missing positional, and the workaround
+    # (a dummy question nobody ever asks) had propagated as far as Tyler's global
+    # CLAUDE.md: `ask --queue "x"`. Reading the line before joining it is the one
+    # step that makes self-assessed priority mean anything; it should not need a
+    # placeholder argument.
+    ap.add_argument("question", nargs="?", default=None,
+                    help="What to ask him, in plain language. Omit it with --queue.")
     ap.add_argument("--purpose", default=None,
                     help="One line on what the answer is FOR (shown in reports, "
                          "defaults to the question)")
@@ -117,6 +125,9 @@ def main(argv):
     if a.queue:
         _print_queue(q)
         return 0
+    if not a.question:
+        ap.error("a question is required unless you are just reading the queue "
+                 "(--queue)")
     if q:
         print(f"Already waiting on him ({len(q)}) - place yourself accordingly:",
               file=sys.stderr)
