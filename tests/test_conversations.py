@@ -3,9 +3,13 @@ test_conversations.py - the ask survives the session that made it.
 
 Stage 3's primitive. The checks that matter are the invariants, not the getters:
 
-  ONE LIVE ASK PER PERSON, because that is what makes a reply bindable. If two
-  can be open at once, "which question is this answering" has no code-level
-  answer and the whole reverse channel rests on a guess.
+  THE SLOT IS THE BINDING HANDLE. There used to be one live ask per person, which
+  made a reply bindable by having exactly one candidate. Asks queue now, so the
+  numbering carries that weight instead: slots are recomputed, never stored, and
+  a reply naming one binds with no model involved.
+
+  ANSWERING SEVERAL AT ONCE WORKS, because a numbered list invites exactly that
+  and the first version could not parse the input it asked for.
 
   A DEFER ONLY EVER EXTENDS. An away signal is information about when to ask
   again; if it could move a deadline closer, "brb" would become a reason to
@@ -130,6 +134,69 @@ def main():
         check("...and the answered one has no slot at all", C.slot_of(urgent["id"]), None)
         C.forget(tie["id"])
         C.forget(second["id"])
+
+        section("Answering several at once - the thing the numbered list invites")
+        # Regression, 2026-08-17. Tyler answered all three of his queued questions
+        # in one numbered message - the obvious response to a numbered list, and
+        # exactly what the batch message asks for. A greedy `.+` bound slot 1 to
+        # the WHOLE message: c7 swallowed the answers to c8 and c9, and both went
+        # on being nudged for questions he had already answered.
+        real = ("1. use the global one\n"
+                "2. Item 14 is starting to seem redundant why do we even need it anymore?\n"
+                "3. the callouts seem fine to me honestly.")
+        got = C.parse_slot_answers(real)
+        check("all three parse", sorted(got), [1, 2, 3])
+        check("slot 1 stops at slot 2", "Item 14" in got[1], False)
+        check("slot 2 is its own answer", got[2].startswith("Item 14"), True)
+        check("slot 3 survives", got[3], "the callouts seem fine to me honestly.")
+
+        # Must fail toward "not a list". Finding structure in prose would shred
+        # ordinary messages, which is far worse than missing a numbered one.
+        check("a mid-sentence number is prose, not a slot",
+              C.parse_slot_answers("I think option 2. is better honestly"), {})
+        check("normal chat parses as nothing",
+              C.parse_slot_answers("hey what's up"), {})
+        check("one number alone is left to the single-slot path",
+              C.parse_slot_answers("1. sqlite"), {})
+        check("dashes work as separators too",
+              sorted(C.parse_slot_answers("1 - yes\n2 - no\n3 - maybe")), [1, 2, 3])
+
+        # Slots are resolved BEFORE anything is answered. Answering renumbers the
+        # queue, so resolving slot 2 after answering slot 1 would find a different
+        # conversation than the message showed him.
+        #
+        # A counterparty of its own, so this section cannot disturb the fixtures
+        # the later sections rely on. The first version called a bare C.forget()
+        # and wiped them.
+        SOMEONE = 999000111
+        a1 = C.open_conversation(SOMEONE, "one", "first?", now=NOW)
+        a2 = C.open_conversation(SOMEONE, "two", "second?", now=NOW)
+        a3 = C.open_conversation(SOMEONE, "three", "third?", now=NOW)
+        done = C.answer_slots(SOMEONE, {1: "AAA", 2: "BBB", 3: "CCC"})
+        check("all three bound in one go", len(done), 3)
+        check("slot 1 got its own answer", C.get(a1["id"])["answer"], "AAA")
+        check("slot 2 did NOT get slot 1's", C.get(a2["id"])["answer"], "BBB")
+        check("slot 3 landed on the right one", C.get(a3["id"])["answer"], "CCC")
+        check("nothing is left waiting", C.queue_for(SOMEONE), [])
+        # How it bound lives in the event log, not as a field - so the record can
+        # never disagree with itself about which route was taken.
+        check("and it is recorded as a slot binding, not judged",
+              [e["detail"] for e in C.get(a2["id"])["log"]
+               if e["event"] == "answered"], ["via slot"])
+
+        # Answering a subset must leave the rest alone and renumbered.
+        ELSE = 999000222
+        b1 = C.open_conversation(ELSE, "one", "first?", now=NOW)
+        b2 = C.open_conversation(ELSE, "two", "second?", now=NOW)
+        b3 = C.open_conversation(ELSE, "three", "third?", now=NOW)
+        C.answer_slots(ELSE, {2: "only this one"})
+        check("the answered one is out of the queue",
+              [x["id"] for x in C.queue_for(ELSE)], [b1["id"], b3["id"]])
+        check("the untouched ones have no answer", C.get(b3["id"])["answer"], None)
+        check("and the last one renumbers to slot 2", C.slot_of(b3["id"]), 2)
+        # A slot past the end is ignored rather than wrapping onto something real.
+        C.answer_slots(ELSE, {9: "nowhere"})
+        check("an out-of-range slot binds nothing", C.get(b1["id"])["answer"], None)
 
         section("Nudges: 15 minutes, twice, then bank")
         check("nothing is due yet", C.due(now=NOW), [])
