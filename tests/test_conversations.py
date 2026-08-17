@@ -709,6 +709,94 @@ def main():
               C.get(judged["id"])["log"][-1]["detail"], "via judged")
         C.forget()
 
+        section("An answer 75 seconds late is still an answer")
+        # Tyler's call, 2026-08-17, after it cost him a real one. c11 banked at
+        # 08:10:28; he answered it at 08:11:43 and the answer went nowhere,
+        # silently - then Benham told him it had been recorded. Giving up WAITING
+        # and refusing to HEAR are different things, and only the first was ever
+        # meant: bank() keeps the question precisely because it is still a real
+        # question. He was answering something still on his screen; nothing about
+        # that moment told him it had expired.
+        C.forget()
+        late = C.open_conversation(TYLER, "room identity", "declare it or infer it?",
+                                   now=NOW)
+        C.record_ask_message(late["id"], 6001)
+        C.bank(late["id"])
+        # .get() rather than ["id"], so backing the grace window out REPORTS
+        # instead of dying on a None - the lesson this file already learned once,
+        # where one diagnosis was followed by a traceback that hid the rest.
+        def bound_to(mid):
+            hit = C.by_ask_message(mid)
+            return hit["id"] if hit else None
+
+        check("it really did bank", C.get(late["id"])["state"], C.BANKED)
+        check("...and a reply to it still finds it inside the grace window",
+              bound_to(6001), late["id"])
+        try:
+            C.answer(late["id"], "Claude should infer it", bound_by="reply")
+        except ValueError as e:
+            check("the answer is accepted at all", f"refused: {e}", "accepted")
+        check("the answer lands rather than being thrown away",
+              C.get(late["id"])["answer"], "Claude should infer it")
+        check("...and it is ANSWERED, so it surfaces as uncollected",
+              [C.get(late["id"])["state"],
+               [c["id"] for c in C.uncollected(TYLER)]], [C.ANSWERED, [late["id"]]])
+        check("...and the record says the deadline had passed when it arrived",
+              "after banking" in C.get(late["id"])["log"][-1]["detail"], True)
+
+        # The window is a window. Past it, the refusal has to be LOUD - a model
+        # told only "no" reaches for a plausible sentence instead of the true one,
+        # which is how "Locked c11 in" got said about a call never made.
+        stale = C.open_conversation(TYLER, "old thing", "still relevant?", now=NOW)
+        C.record_ask_message(stale["id"], 6002)
+        C.bank(stale["id"])
+        C._mutate(stale["id"], lambda cv: cv.__setitem__(
+            "closed_at", C._iso(C._now() - C.BANK_GRACE - timedelta(minutes=1))))
+        check("a bank older than the grace window is closed for good",
+              C.answerable(C.get(stale["id"])), False)
+        check("...so nothing binds to it by reply either", bound_to(6002), None)
+        try:
+            C.answer(stale["id"], "too late", bound_by="reply")
+            took = True
+        except ValueError:
+            took = False
+        check("...and answering it is refused rather than silently accepted",
+              took, False)
+        check("the question is still preserved, which is what banking is for",
+              C.get(stale["id"])["question"], "still relevant?")
+
+        # ANSWERED and CLOSED are shut for a different reason, and timing does not
+        # reopen them: quietly overwriting an answer is the silent misfiling the
+        # whole slot design exists to prevent.
+        done = C.open_conversation(TYLER, "db", "sqlite or json?", now=NOW)
+        C.answer(done["id"], "sqlite", bound_by="slot")
+        check("an already-answered question is not answerable again",
+              C.answerable(C.get(done["id"])), False)
+        C.close(done["id"], "went with sqlite")
+        check("...and neither is a closed one", C.answerable(C.get(done["id"])), False)
+        C.forget()
+
+        section("What just died is offered to the model, not hidden from it")
+        # The condition behind the fabrication. The volatile prompt block only ever
+        # described LIVE questions, so at 08:11:52 it named c12 and nothing else -
+        # while c11's text was still on his screen and c11 had banked 75 seconds
+        # earlier. The model had no true account of the thing he was plainly
+        # talking about, and asserted one instead.
+        C.forget()
+        gone = C.open_conversation(TYLER, "room identity", "declare it or infer it?",
+                                   now=NOW)
+        check("nothing has ended yet", C.recently_terminal(TYLER), [])
+        C.bank(gone["id"])
+        check("a question that just banked is offered as context",
+              [c["id"] for c in C.recently_terminal(TYLER)], [gone["id"]])
+        C._mutate(gone["id"], lambda cv: cv.__setitem__(
+            "closed_at", C._iso(C._now() - C.STILL_ON_SCREEN - timedelta(minutes=1))))
+        check("...but not forever - the block is context, not a changelog",
+              C.recently_terminal(TYLER), [])
+        check("and it is per person, not global",
+              C.recently_terminal(DOOM), [])
+        C.forget()
+
         section("Direction: a report we OWE is not an ask we are waiting on")
         # Item 9. Doom filed three reports in two days. If a report counted as an
         # "ask", his second would have been refused by the one-live-per-person rule
