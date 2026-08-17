@@ -321,6 +321,32 @@ def main():
               C.get(judged["id"])["log"][-1]["detail"], "via judged")
         C.forget()
 
+        section("Direction: a report we OWE is not an ask we are waiting on")
+        # Item 9. Doom filed three reports in two days. If a report counted as an
+        # "ask", his second would have been refused by the one-live-per-person rule
+        # and Benham would have nudged him about a bug HE reported.
+        C.forget()
+        r1 = C.open_conversation(DOOM, "report", "lore button 404s",
+                                 direction=C.OWED, now=NOW)
+        r2 = C.open_conversation(DOOM, "report", "spoke another language",
+                                 direction=C.OWED, now=NOW)
+        check("two reports from one person are both allowed",
+              [r1["id"], r2["id"]], ["c1", "c2"])
+        check("an owed report is NOT the live ask for binding", C.live_for(DOOM), None)
+        C._mutate(r1["id"], lambda cv: cv.__setitem__("due_at", C._iso(NOW - timedelta(minutes=1))))
+        check("...and it is never due for a nudge, however old", C.due(now=NOW), [])
+        # An ask to the same person still works and is still capped.
+        q = C.open_conversation(DOOM, "ask", "did that fix it?", now=NOW)
+        check("an ask alongside reports is still found for binding",
+              C.live_for(DOOM)["id"], q["id"])
+        try:
+            C.open_conversation(DOOM, "second ask", "and this?", now=NOW)
+            two_asks = True
+        except ValueError:
+            two_asks = False
+        check("but a SECOND ask is still refused", two_asks, False)
+        C.forget()
+
         section("It outlives the process that opened it")
         kept = C.open_conversation(DOOM, "next thing", "and the party vote?", now=NOW)
         cid = kept["id"]

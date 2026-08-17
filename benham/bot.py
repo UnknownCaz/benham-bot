@@ -986,8 +986,32 @@ async def handle_guest_dm(message):
             f"{'FILED' if ok else 'refused'}: {_idea[:150]!r}")
         await reply_in(message.channel, reply)
         if ok:
+            # Stage 3 item 9: the filing becomes a tracked OWED conversation, so
+            # the report is a thing that must reach a terminal state rather than a
+            # line in a jsonl someone has to remember to sweep. Doom filed three in
+            # two days and heard back on one, because closing the loop depended on
+            # a human recalling it. Now the record itself is unfinished until he is
+            # told - which is the only version of "silence must never be the
+            # message" that survives a tired night.
+            #
+            # OWED, so it never nudges him and never blocks his next report.
             try:
-                await ask_owner_dm(f"💡 idea from {message.author.name}: {_idea}")
+                conv = conversations.open_conversation(
+                    message.author.id,
+                    purpose=f"report from {message.author.name}",
+                    question=_idea,
+                    origin=f"idea.. in DM {message.channel.id}",
+                    direction=conversations.OWED)
+                log(f"guest idea tracked as {conv['id']} (owed to "
+                    f"{message.author.id})")
+            except Exception as e:  # noqa: BLE001 - filing already succeeded
+                conv = None
+                log(f"guest idea: could not open a conversation ({e}) - the idea is "
+                    "safe in guest_ideas.jsonl")
+            try:
+                await ask_owner_dm(
+                    f"💡 idea from {message.author.name}"
+                    + (f" [{conv['id']}]" if conv else "") + f": {_idea}")
             except Exception as e:  # noqa: BLE001 - the filing already succeeded
                 log(f"guest idea: owner DM ping failed ({e}) - idea is safe in "
                     "guest_ideas.jsonl, sweep will surface it")

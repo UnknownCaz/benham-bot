@@ -897,6 +897,45 @@ async def _answer_conversation(ctx, p):
                     "is not announced is the failure mode this exists to avoid."}
 
 
+@action("tell_conversation", identity.SPEAK,
+        "Tell the counterparty how their report or question turned out, and record "
+        "that they were told. Use the conversation's own outcome - close it first. "
+        "This is the beat Doom asked for: he wants to hear when it is solved, and "
+        "equally when it is a wont-fix or not a bug.",
+        {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"},
+         "note": {"type": "str",
+                  "desc": "Optional extra line - detail, or an apology for the wait"}},
+        # Same bounded shape as advance_conversation: the recipient comes from the
+        # record and the substance is the outcome already written there, so an
+        # automated caller cannot choose either. SYSTEM is included because the
+        # whole point is that a loop closes without anyone remembering to.
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
+        outward=True)
+async def _tell_conversation(ctx, p):
+    from benham.core import conversations
+    conv = conversations.get(str(p["id"]))
+    if conv is None:
+        raise ActionError(f"no conversation {p['id']!r}")
+    outcome = (conv.get("outcome") or "").strip()
+    if conv.get("state") not in conversations.TERMINAL_STATES or not outcome:
+        # Refusing here is the point. "Told them" without a decided outcome would
+        # be a message that says nothing, and the failure this stage exists to end
+        # is a loop that looks shut from the inside.
+        raise ActionError(
+            f"{conv['id']} has no outcome to report yet (state {conv['state']}). "
+            "Close it with an outcome first.")
+
+    user = await ctx.user(int(conv["counterparty"]))
+    ch = user.dm_channel or await user.create_dm()
+    lines = ["about the one you flagged:", f"> {conv['question'][:600]}", "", outcome]
+    if p.get("note"):
+        lines += ["", str(p["note"])]
+    await ch.send("\n".join(lines))
+    conversations.mark_told(conv["id"], outcome)
+    return {"status": "told", "id": conv["id"],
+            "counterparty": int(conv["counterparty"]), "outcome": outcome}
+
+
 @action("advance_conversation", identity.SPEAK,
         "Move one waiting conversation to its next beat: ASK the question if it has "
         "never been delivered, send the nudge that is due, or - once its nudge "

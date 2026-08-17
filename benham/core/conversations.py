@@ -63,6 +63,24 @@ OPEN, NUDGED, ANSWERED, CLOSED, BANKED = (
 LIVE_STATES = (OPEN, NUDGED)          # still waiting on a human
 TERMINAL_STATES = (CLOSED, BANKED)    # worth telling the counterparty about
 
+# --- direction: who owes whom -----------------------------------------------
+# A conversation has a counterparty, but the OBLIGATION can run either way, and
+# almost every rule here depends on which:
+#
+#   ASKING  we asked them something. We are waiting. Nudges apply, and only one
+#           may be live per person - that one-at-a-time rule is what makes their
+#           reply bindable.
+#   OWED    they told US something (a bug, an idea) and we owe them an outcome.
+#           Nudging would mean chasing someone for an answer we owe them, which
+#           is absurd; and capping them at one would mean Doom's second report of
+#           the day is refused, when he filed three in two days.
+#
+# Adding this rather than a separate Report type is what makes INTENT.md's claim
+# true - that the collaborator loop and the reverse channel are one machinery
+# with a different counterparty. The state machine is shared; only the timing
+# rules and the invariant differ.
+ASKING, OWED = "asking", "owed"
+
 # --- nudge policy -----------------------------------------------------------
 # Tyler's, retuned 2026-08-15 and proven against Doom before it was ever code.
 NUDGE_AFTER = timedelta(minutes=15)
@@ -119,7 +137,7 @@ def _next_id(data):
 # --------------------------------------------------------------------------
 
 def open_conversation(counterparty, purpose, question, project=None, origin=None,
-                      now=None):
+                      now=None, direction=ASKING):
     """Start one. Returns the conversation dict.
 
     Raises ValueError if this counterparty already has a live one - the caller
@@ -136,7 +154,10 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
     now = now or _now()
     with _lock:
         data = _load()
-        existing = _live_for(data, counterparty)
+        # Only ASKING is capped at one per person. An OWED conversation is a report
+        # we owe an answer to, and refusing someone's second bug report because
+        # their first is unresolved would be exactly backwards.
+        existing = _live_for(data, counterparty) if direction == ASKING else None
         if existing:
             raise ValueError(
                 f"{counterparty} already has a live conversation ({existing['id']}: "
@@ -147,6 +168,7 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "id": cid,
             "seq": seq,
             "counterparty": int(counterparty),
+            "direction": direction,
             "purpose": str(purpose),
             "question": str(question),
             "project": (str(project) if project else None),
@@ -215,8 +237,16 @@ def by_ask_message(message_id):
 
 
 def _live_for(data, counterparty):
+    """The one ASKING conversation waiting on this person.
+
+    OWED is excluded deliberately: it is what makes binding unambiguous. If a
+    report Doom filed counted as "live" for him, his next message would be a
+    candidate answer to his own bug report.
+    """
     for c in data.values():
-        if int(c.get("counterparty", 0)) == int(counterparty) and c.get("state") in LIVE_STATES:
+        if (int(c.get("counterparty", 0)) == int(counterparty)
+                and c.get("state") in LIVE_STATES
+                and c.get("direction", ASKING) == ASKING):
             return c
     return None
 
@@ -264,6 +294,11 @@ def due(now=None):
     out = []
     for c in _load().values():
         if c.get("state") not in LIVE_STATES:
+            continue
+        # An OWED conversation has no deadline on the other person - the deadline
+        # is on US, and nothing here should ever nudge someone about a thing we
+        # have not done yet.
+        if c.get("direction", ASKING) != ASKING:
             continue
         deadline = _parse(c.get("due_at"))
         if not deadline or now < deadline:

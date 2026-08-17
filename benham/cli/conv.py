@@ -15,9 +15,16 @@ the answer, and shut the loop.
 A silent close is the bug this stage exists to end: work that looks finished from
 the inside and reads as silence from the outside.
 
-Closing here does NOT tell the counterparty - conversations.close records the
-decision, and telling them is a separate, deliberate act (`mark_told`, or a real
-message). Collapsing the two would let a failed delivery look like a shut loop.
+    python benham.py conv close c7 "fixed" --tell        # and DM them the outcome
+
+Closing and TELLING stay two things even behind one flag. close() records the
+decision here and now; --tell queues a message the running bot delivers, and the
+"told" event is written by the capability when it actually goes out. So a failed
+delivery can never look like a shut loop - which is the exact failure this stage
+exists to end.
+
+Direction shows in `list` as an arrow: `->` is something we asked them, `<-` is
+something they told us and we owe an answer to.
 """
 
 import argparse
@@ -35,12 +42,13 @@ def _line(c):
     mark = _STATE_MARK.get(c.get("state"), " ")
     q = " ".join(str(c.get("question", "")).split())[:80]
     who = c.get("counterparty")
+    arrow = "<-" if c.get("direction") == C.OWED else "->"
     extra = ""
     if c.get("state") == C.ANSWERED:
         extra = f"  -> {' '.join(str(c.get('answer','')).split())[:60]}"
     elif c.get("state") in C.TERMINAL_STATES and c.get("outcome"):
         extra = f"  -> {c['outcome'][:60]}"
-    return f"  {mark:2} {c['id']:<5} [{c.get('state'):8}] {who}  {q}{extra}"
+    return f"  {mark:2} {c['id']:<5} [{c.get('state'):8}] {arrow} {who}  {q}{extra}"
 
 
 def main(argv):
@@ -56,6 +64,11 @@ def main(argv):
     p_close = sub.add_parser("close", help="Shut the loop, with an outcome")
     p_close.add_argument("id")
     p_close.add_argument("outcome", help="What happened - required, and it is the point")
+    p_close.add_argument("--tell", action="store_true",
+                         help="Also DM the counterparty the outcome (the beat Doom "
+                              "asked for). Needs the bot running.")
+    p_close.add_argument("--note", default=None,
+                         help="Extra line for them - detail, or sorry about the wait")
 
     p_bank = sub.add_parser("bank", help="Give up waiting, keep the question")
     p_bank.add_argument("id")
@@ -105,8 +118,22 @@ def main(argv):
         if a.cmd == "close":
             c = C.close(a.id, a.outcome)
             print(f"{c['id']} closed: {c['outcome']}")
-            print("(this records the decision - it does NOT tell them. Send that "
-                  "yourself, or the loop is only shut from your side.)")
+            if a.tell:
+                # Through the outbox so the RUNNING bot delivers it; this process
+                # has no Discord connection. Queued, not sent - the "told" event is
+                # written by the capability when the message actually goes out, so
+                # a delivery failure can never look like a shut loop.
+                from benham.core import outbox
+                fields = {"action": "tell_conversation", "id": c["id"]}
+                if a.note:
+                    fields["note"] = a.note
+                outbox.enqueue(**fields)
+                print(f"queued the outcome to {c['counterparty']} - "
+                      f"`conv show {c['id']}` will show a counterparty-told event "
+                      "once it lands")
+            else:
+                print("(this records the decision - it does NOT tell them. Use "
+                      "--tell, or the loop is only shut from your side.)")
         elif a.cmd == "bank":
             c = C.bank(a.id, a.reason)
             print(f"{c['id']} banked: {a.reason}  (the question is kept)")
