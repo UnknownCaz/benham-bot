@@ -83,9 +83,8 @@ whitelist-usernames.txt
 # a new one has to be added here deliberately. This is that.
 conversations.json
 
-# The ask queue's batch pointer: {discord user id: message id} for the DM currently
-# showing that person their queue. No message text in it, unlike conversations.json
-# above - but it still names real people and points into a private DM thread, and
-# it is bot-written state, which is never committable whatever it holds. Listed by
-# name because that is the rule directly above, and this file shipped without it.
+# The batch-message pointer: counterparty id -> the Discord message currently
+# showing them their queue. Bot-mutated state, and it names whose DM thread is
+# whose. Added the day it was created (2026-08-17) rather than the day someone
+# nearly committed it - the per-file policy above only works if that happens.
 ask_batches.json
