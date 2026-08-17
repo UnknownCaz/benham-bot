@@ -192,6 +192,21 @@ tr:nth-child(even) td { background: var(--panel); }
   margin-top: 10px;
 }
 
+/* A correction to something this page previously asserted. Deliberately loud and
+   deliberately kept rather than quietly edited away: the wrong version was
+   published, someone may be acting on it, and "this page used to tell you X" is
+   more useful to that reader than a silent fix they will never notice. */
+p.note {
+  background: var(--panel);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 8px 8px 0;
+  padding: 10px 16px;
+  margin: 14px 0;
+  color: var(--muted);
+}
+p.note strong { color: var(--warn); }
+p.note code { color: var(--text); }
+
 @media (max-width: 760px) {
   /* sidebar becomes an overlay drawer; JS defaults it closed on small screens */
   #sidebar { box-shadow: 4px 0 24px rgba(0,0,0,.5); }
