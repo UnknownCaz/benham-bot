@@ -9,8 +9,20 @@ the same mistake.
 
 Three properties do the real work:
 
-  Bound to an id. A confirmation fires only when the reply names its token, so a
-  stray "yeah" three messages later in an unrelated thread cannot trigger anything.
+  Bound to an id, OPTIONALLY. A reply naming the token targets that exact action
+  even if something else was parked in between. A bare "yes" is also accepted and
+  fires whatever is currently parked - see read_reply() and bot.py's
+  `target = confirm.get(token) if token else pending`.
+
+  CORRECTED 2026-08-17: this paragraph used to claim a confirmation fires ONLY
+  when the reply names its token. It does not, and never did. The claim was
+  copied out of here into two manual pages, where it was published as a safety
+  property of the delete/purge/kick/ban path. What actually keeps a stray "yeah"
+  from firing something is the pair of properties below - one live confirmation
+  at a time, and a short TTL - plus read_reply()'s whitelist, which matches only
+  a bare affirmative phrase and returns None for anything it does not recognise.
+  If the token SHOULD be mandatory for tier 3, that is a behaviour change and
+  belongs in a commit that says so, not in a comment that assumes it.
 
   One at a time. Parking a new confirmation supersedes the old one rather than
   queueing it. Two live confirmations means an ambiguous "yes", and an ambiguous

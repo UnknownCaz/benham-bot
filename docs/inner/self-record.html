@@ -29,7 +29,7 @@
     <p>Nothing new is recorded to make this work. <code>capabilities.run()</code> has always
     logged every invocation, every refusal (<code>DENIED</code>) and every preview
     (<code>PROPOSED</code>); <code>codesession</code> logs each PC permission prompt. The record
-    existed and had no reader — the same discovery <code>watch_pc.py</code> made about Claude
+    existed and had no reader — the same discovery <code>benham.py watch_pc</code> made about Claude
     Code's own transcripts.</p>
     <p><code>core/selfrecord.py</code> is the reader; <code>what_i_did</code> is the capability on
     top of it. It filters by action, actor and time window.</p>

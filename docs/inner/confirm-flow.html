@@ -22,14 +22,40 @@
       <li><strong>Mandatory dry-run.</strong> The first call performs nothing and returns real
       facts: counts, date spans, author breakdowns, who currently holds the role. This is what
       catches a wrong channel id or an <code>older_than_days</code> off by 10×.</li>
-      <li><strong>Explicit confirm.</strong> In a DM: preview + a token, and only a narrow
-      affirmative naming it fires. From the CLI: re-run with <code>confirm_token=</code>.
-      No inline shortcut exists in either path.</li>
+      <li><strong>Explicit confirm.</strong> In a DM: preview + a token, then a narrow
+      affirmative. Naming the token targets that exact action; a bare "yes" fires whatever is
+      parked right now. From the CLI: re-run with <code>confirm_token=</code>. No inline
+      shortcut exists in either path.</li>
     </ol>
-    <p>Previews expire (<code>confirm.ttl_seconds</code>, 1h): expired = cancelled, silence is
-    never assent. The token is bound to the parameters captured at preview time — editing the
-    arguments between the two calls invalidates it rather than silently running something
-    else.</p>
+    <p class="note"><strong>Corrected 2026-08-17 — read this if you relied on the old text.</strong>
+    This page used to say only an affirmative <em>naming the token</em> fires. That is not what
+    the code does and never was: <code>bot.py</code> resolves
+    <code>target = confirm.get(token) if token else pending</code>, so the token is optional
+    disambiguation, not a requirement. Benham's own prompt has always said "reply <strong>yes</strong>
+    to run it". The claim came from a paragraph in <code>confirm.py</code>'s docstring, which was
+    wrong and has been corrected at the source.</p>
+    <p>What actually stops a stray "yeah" three messages later, since it is not the token:</p>
+    <ul>
+      <li><strong>A whitelist, not a guess.</strong> <code>read_reply()</code> matches the phrase
+      against a fixed affirmative set with any token removed, and returns <code>None</code> for
+      anything it does not recognise. A <code>None</code> is treated as no action — ambiguity is
+      never consent.</li>
+      <li><strong>One at a time.</strong> Parking a new confirmation supersedes the old one
+      rather than queueing it, so "yes" is never ambiguous <em>between two destructive
+      actions</em> — which is the case that would actually hurt.</li>
+      <li><strong>A short clock.</strong> The window is ten minutes on the DM path (below), not
+      an hour, so the interval in which a bare "yes" can hit anything is small.</li>
+    </ul>
+    <p>Whether the token <em>should</em> be mandatory for tier 3 is a live question, and it is a
+    behaviour change rather than a documentation fix — so it is written down here rather than
+    quietly made.</p>
+    <p>Previews expire: expired = cancelled, silence is never assent. The TTL depends on which
+    path parked it — <strong><code>confirm.conversation_ttl_seconds</code> (600 = 10 min) for
+    the DM flow</strong>, <code>confirm.ttl_seconds</code> (3600 = 1h) for everything else, per
+    <code>_ttl_for()</code>. The agent parks with origin <code>"dm"</code>, so ten minutes is the
+    number you actually live with; <code>confirm.describe</code> prints the real one. The token
+    is bound to the parameters captured at preview time — editing the arguments between the two
+    calls invalidates it rather than silently running something else.</p>
 
     <h2 id="why">Why we chose this</h2>
     <p><strong>The model cannot confirm its own actions — structurally.</strong> A tier-3 tool
@@ -54,7 +80,7 @@
     <h2 id="paper-trail">Paper trail</h2>
     <div class="paper-trail">
       <p>Dry-runs and confirmations print in full in the CLI / DM; parked and fired
-      confirmations log in the bot log; <code>usage.py</code> counts proposed vs confirmed.
+      confirmations log in the bot log; <code>benham.py usage</code> counts proposed vs confirmed.
       Sample dry-run output: <a href="../outer/cli.html#universal">CLI → do.py</a>.</p>
     </div>
   </main>

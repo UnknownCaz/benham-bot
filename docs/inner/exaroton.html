@@ -34,9 +34,10 @@
     can widen.</p>
     <p><strong>Slash commands, not chat parsing:</strong> plain text is never
     command-triggered — the bot records what it sees and stays quiet. It engages only when
-    addressed: an owner DM, an @-mention, or a guest DM. The one thing that acts without
-    being addressed is the conversation tick loop, which can only deliver an ask a human
-    already opened.</p>
+    addressed: an owner DM, an @-mention, or a guest DM. Two things act without being
+    addressed, and both are timers rather than models: the conversation tick loop, which can
+    only deliver an ask a human already opened, and <strong>the watchdog described below</strong>,
+    which is the one component here that both speaks and acts on its own.</p>
     <p><strong>The watchdog posts outside the chokepoint</strong> (straight
     <code>channel.send</code>) — tolerable where webhook.py is tolerable and for the same
     reason: a fixed, code-authored message shape ("server X crashed") with no model and no

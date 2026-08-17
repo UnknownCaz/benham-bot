@@ -43,12 +43,32 @@ EXAMPLES = {
     2: ["pin_message", "add_role", "pc_task", "triage_conversation"],
     3: ["delete_message", "purge_messages", "kick_member", "ban_member"],
 }
+# The base gate per tier. The SYSTEM note is DERIVED and appended below - the
+# column used to read a flat "owner only" for tiers 1 and 2, which was wrong:
+# five capabilities admit Origin.SYSTEM and run on the 60s timer with no human
+# anywhere. A hardcoded value inside a GENERATED block is the worst of both,
+# because the marker makes a reader trust it.
 GATES = {
     0: "none",
     1: "owner only",
     2: "owner only",
     3: "guild allowlist + dry-run + explicit confirm",
 }
+
+
+def _gate(tier):
+    from benham.core import policy
+    timer = sorted(
+        n for n, a in capabilities.REGISTRY.items()
+        if a.tier == tier
+        and policy.Origin.SYSTEM in (a.origins if a.origins is not None
+                                     else policy.DEFAULT_ORIGINS))
+    gate = GATES[tier]
+    if timer:
+        names = ", ".join(f"<code>{html.escape(n)}</code>" for n in timer)
+        gate += (f" — except {names}, which also admit "
+                 f"<code>Origin.SYSTEM</code> and run on the timer")
+    return gate
 
 
 def _counts():
@@ -68,7 +88,7 @@ def block_tier_table():
                              "Update EXAMPLES in scripts/gen_manual.py.")
         ex = ", ".join(f"<code>{html.escape(e)}</code>" for e in EXAMPLES[t])
         rows.append(f"      <tr><td><strong>{identity.TIER_NAMES[t]}</strong> "
-                    f"({by[t]})</td><td>{ex}</td><td>{GATES[t]}</td></tr>")
+                    f"({by[t]})</td><td>{ex}</td><td>{_gate(t)}</td></tr>")
     return "\n".join(rows)
 
 
@@ -82,11 +102,28 @@ def block_cli():
 
     Read from benham.py rather than imported: importing the dispatcher would run
     it, and the table it holds is a plain literal that is trivial to parse.
+
+    Matches any benham.* target, not benham.cli.* - the first version of this
+    regex hardcoded the cli package and silently dropped `guest`, which lives at
+    benham.guest.guest. The table then rendered 16 of 17 commands while still
+    claiming to be generated, which is worse than not generating it at all: a
+    hand-written table gets doubted, a generated one gets believed.
     """
     src = open(os.path.join(paths.ROOT, "benham.py"), encoding="utf-8").read()
-    pairs = re.findall(r'"([a-z_]+)":\s*\("benham\.cli\.[a-z_]+",\s*"([^"]+)"\)', src)
+    pairs = re.findall(r'"([a-z_-]+)":\s*\("benham\.[a-z_.]+",\s*"([^"]+)"\)', src)
     if not pairs:
         raise SystemExit("gen_manual: could not parse the command table from benham.py")
+
+    # Cross-check against the raw dispatcher literal, so a future entry whose
+    # target has an unexpected shape fails loudly instead of vanishing.
+    block = re.search(r"COMMANDS\s*=\s*\{(.*?)\n\}", src, re.DOTALL)
+    if block:
+        declared = len(re.findall(r'^\s+"[a-z_-]+":\s*\(', block.group(1), re.M))
+        if declared != len(pairs):
+            raise SystemExit(
+                f"gen_manual: parsed {len(pairs)} commands but the dispatcher "
+                f"declares {declared}. block_cli()'s regex is dropping some.")
+
     rows = []
     for name, desc in pairs:
         rows.append(f"      <tr><td><code>python benham.py {html.escape(name)}</code></td>"

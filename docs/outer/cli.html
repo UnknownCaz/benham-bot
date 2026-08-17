@@ -20,7 +20,7 @@
 python benham.py do list --tier destructive # just one tier
 python benham.py do help &lt;action&gt;           # one action's params, which are required, its tier
 python benham.py do &lt;action&gt; key=value ...  # run it</code></pre>
-    <p><code>do.py</code> covers all 56 registered capabilities — one CLI for the whole registry,
+    <p><code>benham.py do</code> covers all 56 registered capabilities — one CLI for the whole registry,
     because the old one-file-per-action pattern meant a new capability was three edits and
     usually got only two (which is how <code>purge</code> went so long with no CLI at all).
     Values parse as JSON when they look like it, so <code>fields='[{...}]'</code> works.</p>
@@ -55,38 +55,39 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
       <tr><td><code>python benham.py usage</code></td><td>token and cost accounting from the logs</td></tr>
       <tr><td><code>python benham.py watch_pc</code></td><td>watch, live, what Benham is doing on the PC</td></tr>
       <tr><td><code>python benham.py webhook</code></td><td>post via a saved webhook / manage webhooks</td></tr>
+      <tr><td><code>python benham.py guest</code></td><td>guest chat admin: status | forget &lt;user_id&gt; | forget-all</td></tr>
       <tr><td><code>python benham.py ideas</code></td><td>guest ideas inbox: new since sweep | --all | --sweep</td></tr><!-- /GENERATED:cli-commands -->
     </table>
 
     <h2 id="everyday">Everyday shortcuts</h2>
     <table>
       <tr><th>command</th><th>does</th></tr>
-      <tr><td><code>send.py &lt;channel_id&gt; "msg"</code></td><td>send</td></tr>
-      <tr><td><code>draft.py &lt;channel_id&gt; "msg"</code></td><td>review-first send</td></tr>
-      <tr><td><code>dm.py &lt;user_id&gt;|--tyler "msg"</code></td><td>DM someone</td></tr>
-      <tr><td><code>delete.py &lt;channel_id&gt; &lt;message_id&gt;</code></td><td>delete one message — permanent</td></tr>
-      <tr><td><code>fetch.py &lt;channel_id&gt; [limit]</code></td><td>history → result file</td></tr>
-      <tr><td><code>catchup.py &lt;channel_id&gt; [limit]</code></td><td>invisible read, one channel</td></tr>
-      <tr><td><code>read_history.py [limit|all]</code></td><td>invisible read, every non-Testing guild</td></tr>
+      <tr><td><code>python benham.py send &lt;channel_id&gt; "msg"</code></td><td>send</td></tr>
+      <tr><td><code>python benham.py draft &lt;channel_id&gt; "msg"</code></td><td>review-first send</td></tr>
+      <tr><td><code>python benham.py dm &lt;user_id&gt;|--tyler "msg"</code></td><td>DM someone</td></tr>
+      <tr><td><code>python benham.py delete &lt;channel_id&gt; &lt;message_id&gt;</code></td><td>delete one message — permanent</td></tr>
+      <tr><td><code>python benham.py fetch &lt;channel_id&gt; [limit]</code></td><td>history → result file</td></tr>
+      <tr><td><code>python benham.py catchup &lt;channel_id&gt; [limit]</code></td><td>invisible read, one channel</td></tr>
+      <tr><td><code>benham.py read_history [limit|all]</code></td><td>invisible read, every non-Testing guild</td></tr>
     </table>
 
-    <h3><code>send.py</code></h3>
+    <h3><code>benham.py send</code></h3>
     <p>Args: <code>&lt;channel_id&gt;</code> then the message — everything after the id is
     joined into one text, so quotes are only needed to protect shell characters. Writes an
     atomic request into <code>outbox/</code>; the running bot delivers within ~2s and files the
     request + result pair under <code>outbox/sent/</code> (or <code>failed/</code>).</p>
     <pre><code>python benham.py send 8093…8612 "world's up at UnknownCaz-Gt25.exaroton.me"</code></pre>
 
-    <h3><code>draft.py</code></h3>
+    <h3><code>benham.py draft</code></h3>
     <p>Args: <code>&lt;target_channel_id&gt; "reply text"</code>. Posts a clearly-labeled DRAFT
-    into Testing #asd for your eyeball, and prints the exact <code>send.py</code> command that
+    into Testing #asd for your eyeball, and prints the exact <code>benham.py send</code> command that
     delivers it for real. <strong>Nothing reaches the target channel until you run that
     printed command yourself</strong> — the human-in-the-loop is the point.</p>
     <pre><code>python benham.py draft 1491…0261 "yo xavier, sounds good"
 # → DRAFT lands in Testing #asd; it prints:
 #   python benham.py send 1491…0261 "yo xavier, sounds good"</code></pre>
 
-    <h3><code>dm.py</code></h3>
+    <h3><code>benham.py dm</code></h3>
     <p>Args: <code>&lt;user_id&gt; "text"</code>, or <code>--tyler "text"</code> as the owner
     shorthand. Discord only lets a bot DM someone who shares a guild with it and hasn't
     disabled member DMs — when that fails, the request lands in <code>outbox/failed/</code>
@@ -94,20 +95,20 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
     <pre><code>python benham.py dm --tyler "backup finished, all green"
 python benham.py dm 2739…5952 "hey"</code></pre>
 
-    <h3><code>delete.py</code></h3>
+    <h3><code>benham.py delete</code></h3>
     <p>Args: <code>&lt;channel_id&gt; &lt;message_id&gt;</code>. Deletes ONE specific message.
     Benham's own messages always work; someone else's needs Manage Messages. Deletion is
-    <strong>permanent</strong>. For bulk delete-by-filter use <code>do.py purge_messages</code>
+    <strong>permanent</strong>. For bulk delete-by-filter use <code>benham.py do purge_messages</code>
     (which gets the dry-run + confirm gate).</p>
     <pre><code>python benham.py delete 8093…8612 1531…4876</code></pre>
 
-    <h3><code>fetch.py</code></h3>
+    <h3><code>benham.py fetch</code></h3>
     <p>Args: <code>&lt;channel_id&gt; [limit]</code>, default 20. Pulls the last N messages via
     the running bot into <code>outbox/sent/&lt;name&gt;_result.json</code>. For live messages,
     tail <code>inbox.jsonl</code> instead.</p>
     <pre><code>python benham.py fetch 8093…8612 50</code></pre>
 
-    <h3><code>catchup.py</code></h3>
+    <h3><code>benham.py catchup</code></h3>
     <p>Args: <code>&lt;channel_id&gt; [limit]</code>, default 40. Run with <code>-u</code> for
     unbuffered output. Logs in as Benham with an <em>invisible presence</em> (no green dot),
     prints the last N messages oldest→newest, exits. The process contains no send / react /
@@ -115,7 +116,7 @@ python benham.py dm 2739…5952 "hey"</code></pre>
     recent activity and vibe, not deep profiles.</p>
     <pre><code>python -u benham.py catchup 1525…9072 15     # what's happening in #minecraft-chat</code></pre>
 
-    <h3><code>read_history.py</code></h3>
+    <h3><code>benham.py read_history</code></h3>
     <p>Args: <code>[limit]</code> per channel, default 100 — or <code>all</code> /
     <code>full</code> / <code>0</code> for everything. Same invisible client as catchup, but
     sweeps every readable text channel in every guild <strong>except Testing</strong> (always
@@ -147,7 +148,7 @@ python -u benham.py read_history all        # no limit</code></pre>
     asked them, <code>&lt;-</code> is something they told us and we owe an answer to.</p>
 
     <h2 id="webhooks">Webhooks — posting without the bot</h2>
-    <p>A different animal from everything above: <code>webhook.py</code> posts straight to
+    <p>A different animal from everything above: <code>benham.py webhook</code> posts straight to
     Discord's webhook API from a saved URL in <code>webhooks.json</code> (gitignored — the URLs
     are secrets). <strong>No bot involved</strong> — no gateway, no token, works while
     <code>benham/bot.py</code> is stopped, and the post appears under the webhook's own name/avatar,
@@ -193,21 +194,21 @@ python benham.py webhook --list                       # configured webhooks (nev
     <h2 id="ops">Ops</h2>
     <table>
       <tr><th>command</th><th>does</th></tr>
-      <tr><td><code>status.py</code></td><td>read-only health check</td></tr>
-      <tr><td><code>usage.py</code></td><td>what it's actually costing</td></tr>
-      <tr><td><code>watch_pc.py</code></td><td>watch a PC session live</td></tr>
-      <tr><td><code>guest.py</code></td><td>guest allowlist / spend / forget</td></tr>
+      <tr><td><code>benham.py status</code></td><td>read-only health check</td></tr>
+      <tr><td><code>benham.py usage</code></td><td>what it's actually costing</td></tr>
+      <tr><td><code>benham.py watch_pc</code></td><td>watch a PC session live</td></tr>
+      <tr><td><code>benham.py guest</code></td><td>guest allowlist / spend / forget</td></tr>
       <tr><td><code>scripts\supervise_bot.bat</code></td><td>hand-run the supervisor — see <a href="tray-restart.html">Tray, restart &amp; supervision</a></td></tr>
     </table>
 
-    <h3><code>status.py</code></h3>
+    <h3><code>benham.py status</code></h3>
     <p>No args. Answers "is Benham up and what is it doing" without touching Discord: running
     <code>benham/bot.py</code> pid, guilds/channels seen (from <code>channels.json</code>)
     state + allowlist, last login / command-sync lines from the newest log. Never prints
     tokens.</p>
     <pre><code>python benham.py status</code></pre>
 
-    <h3><code>usage.py</code></h3>
+    <h3><code>benham.py usage</code></h3>
     <table>
       <tr><th>flag</th><th>scope</th></tr>
       <tr><td>(none)</td><td>the newest log</td></tr>
@@ -222,7 +223,7 @@ python benham.py webhook --list                       # configured webhooks (nev
     output says so — PC sessions actually bill the plan, not per-token.</p>
     <pre><code>python benham.py usage --today</code></pre>
 
-    <h3><code>watch_pc.py</code></h3>
+    <h3><code>benham.py watch_pc</code></h3>
     <table>
       <tr><th>flag</th><th>does</th></tr>
       <tr><td>(none)</td><td>follow the active session live</td></tr>
@@ -234,7 +235,7 @@ python benham.py webhook --list                       # configured webhooks (nev
     this observable; the record existed and just had no reader. Strictly read-only: it cannot
     affect a running session, so watching is always safe mid-task.</p>
 
-    <h3><code>guest.py</code></h3>
+    <h3><code>benham.py guest</code></h3>
     <table>
       <tr><th>subcommand</th><th>does</th></tr>
       <tr><td><code>status</code> (default)</td><td>enabled + mode, allowlist, model + max_tokens, caps + cooldown, today's per-guest and global counts, conversations stored</td></tr>
@@ -247,10 +248,10 @@ python benham.py guest forget 1097…1815</code></pre>
     <h2 id="needs-bot">What needs the bot running</h2>
     <p>Everything that rides the outbox queue needs the bot up:
     <code>send</code>, <code>draft</code>, <code>dm</code>, <code>delete</code>,
-    <code>fetch</code>, <code>do.py</code> actions, and all three voice commands.</p>
-    <p>Standalone — work with the bot down: <code>webhook.py</code>, <code>status.py</code>,
-    <code>catchup.py</code>, <code>read_history.py</code>, <code>usage.py</code>,
-    <code>watch_pc.py</code>, <code>guest.py</code>. The invisible readers log in briefly as
+    <code>fetch</code>, and <code>do</code> actions.</p>
+    <p>Standalone — work with the bot down: <code>webhook</code>, <code>status</code>,
+    <code>catchup</code>, <code>read_history</code>, <code>usage</code>,
+    <code>watch_pc</code>, <code>guest</code>, <code>ideas</code>, <code>conv</code>. The invisible readers log in briefly as
     Benham with an <em>invisible presence</em> — no green dot, and the process contains no
     send/react/reply code at all, so it cannot post or trigger anything.</p>
   </main>
