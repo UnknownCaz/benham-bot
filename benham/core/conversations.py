@@ -52,6 +52,7 @@ reportable and ANSWERED is not - progress is not the message. That is why
 `close()` takes an outcome string and `answer()` does not.
 """
 
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -330,6 +331,65 @@ def queue_for(counterparty):
     """The full ordered queue waiting on this person. Read before you ask."""
     with _lock:
         return _queue(_load(), counterparty)
+
+
+def parse_slot_answers(text):
+    """Split a reply that answers several numbered questions at once.
+
+        "1. sqlite
+2. drop it
+3. looks fine"  ->  {1: "sqlite", 2: "drop it", ...}
+
+    Returns {} when the text is not a numbered list, so a normal message is
+    untouched.
+
+    This exists because the first version did not, and the failure was total
+    rather than partial. The batch message says "answer any of them by number",
+    Tyler answered all three at once - the obvious thing to do with a numbered
+    list - and a greedy `.+` bound slot 1 to the ENTIRE message: c7 swallowed the
+    answers to c8 and c9, and both of those went on being nudged for questions he
+    had already answered. The feature invited exactly the input it could not
+    parse.
+
+    Segments are cut at line starts only. A "2." mid-sentence is prose, and
+    treating it as a slot marker would shred ordinary messages - the parse has to
+    fail toward "this is not a list" rather than toward finding structure that
+    is not there.
+    """
+    if not text:
+        return {}
+    marks = list(re.finditer(r"(?m)^[ 	]*#?(\d{1,2})[ 	]*[:.)\-][ 	]*", text))
+    if len(marks) < 2:
+        return {}
+    out = {}
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        body = text[m.end():end].strip()
+        if body:
+            out[int(m.group(1))] = body
+    return out
+
+
+def answer_slots(counterparty, mapping, bound_by="slot"):
+    """Answer several queued questions in one go. Returns [(slot, conv), ...].
+
+    THE SLOTS ARE ALL RESOLVED BEFORE ANYTHING IS ANSWERED, which is the whole
+    reason this is a function rather than a loop at the call site. Answering
+    renumbers the queue, so resolving slot 2 *after* answering slot 1 would find a
+    different conversation than the one the message showed him - silently filing
+    his answer against the wrong question, which is the exact failure slots exist
+    to prevent.
+    """
+    q = queue_for(counterparty)
+    resolved = []
+    for slot, body in sorted(mapping.items()):
+        if 1 <= slot <= len(q):
+            resolved.append((slot, q[slot - 1], body))
+    done = []
+    for slot, conv, body in resolved:
+        answer(conv["id"], body, bound_by=bound_by)
+        done.append((slot, conv))
+    return done
 
 
 def uncollected(counterparty=None):

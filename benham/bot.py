@@ -1323,25 +1323,44 @@ async def on_message(message):
     # other Benham message is not an answer, and treating it as one would swallow
     # exactly the thing this design exists to protect.
     bound_conv = None
+    bound_all = []
     answer_text = text
     if is_dm:
         queue = conversations.queue_for(message.author.id)
 
-        # SLOT FIRST. "2: sqlite" names which question it answers, which is exactly
-        # as certain as a reply used to be and survives him answering out of order.
-        # This is what pays for allowing a queue at all - see slot_of().
-        m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
-        if not m:
-            m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
-        if m and len(queue) > 1:
-            hit = conversations.by_slot(message.author.id, m.group(1))
-            if hit:
-                answer_text = m.group(2).strip()
-                conversations.answer(hit["id"], answer_text, bound_by="slot")
-                bound_conv = hit
-                log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
-                    f"- {answer_text[:120]!r}")
+        # SLOTS FIRST, and ALL of them. "2: sqlite" names which question it answers,
+        # which is exactly as certain as a reply used to be and survives him
+        # answering out of order. This is what pays for allowing a queue at all.
+        #
+        # Plural because the batch message says "answer any of them by number" and
+        # the natural response to a numbered list is to answer the whole list in
+        # one message. The first version handled exactly one, and greedily: slot 1
+        # swallowed the answers to 2 and 3, which then went on being nudged for
+        # questions he had already answered.
+        multi = conversations.parse_slot_answers(text) if len(queue) > 1 else {}
+        if multi:
+            done = conversations.answer_slots(message.author.id, multi)
+            if done:
+                bound_conv = done[0][1]
+                bound_all = [c for _s, c in done]
+                answer_text = multi.get(done[0][0], text)
+                log(f"answered {len(done)} by slot in one message: "
+                    + ", ".join(f"{s}->{c['id']}" for s, c in done))
                 await react(message, "✅")
+        if bound_conv is None and len(queue) > 1:
+            m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
+            if not m:
+                m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
+            if m:
+                hit = conversations.by_slot(message.author.id, m.group(1))
+                if hit:
+                    answer_text = m.group(2).strip()
+                    conversations.answer(hit["id"], answer_text, bound_by="slot")
+                    bound_conv = hit
+                    bound_all = [hit]
+                    log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
+                        f"- {answer_text[:120]!r}")
+                    await react(message, "✅")
 
         ref = message.reference
         ref_id = getattr(ref, "message_id", None) if ref is not None else None
