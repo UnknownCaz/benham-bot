@@ -23,6 +23,7 @@ Read recent messages by tailing inbox.jsonl, or pull backlog with fetch.py.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -1322,17 +1323,46 @@ async def on_message(message):
     # other Benham message is not an answer, and treating it as one would swallow
     # exactly the thing this design exists to protect.
     bound_conv = None
+    answer_text = text
     if is_dm:
+        queue = conversations.queue_for(message.author.id)
+
+        # SLOT FIRST. "2: sqlite" names which question it answers, which is exactly
+        # as certain as a reply used to be and survives him answering out of order.
+        # This is what pays for allowing a queue at all - see slot_of().
+        m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
+        if not m:
+            m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
+        if m and len(queue) > 1:
+            hit = conversations.by_slot(message.author.id, m.group(1))
+            if hit:
+                answer_text = m.group(2).strip()
+                conversations.answer(hit["id"], answer_text, bound_by="slot")
+                bound_conv = hit
+                log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
+                    f"- {answer_text[:120]!r}")
+                await react(message, "✅")
+
         ref = message.reference
         ref_id = getattr(ref, "message_id", None) if ref is not None else None
-        if ref_id:
+        if bound_conv is None and ref_id:
             hit = conversations.by_ask_message(ref_id)
             if hit and int(hit["counterparty"]) == message.author.id:
-                conversations.answer(hit["id"], text, bound_by="reply")
-                bound_conv = hit
-                log(f"conversation {hit['id']}: answered by reply "
-                    f"(msg {ref_id}) - {text[:120]!r}")
-                await react(message, "✅")
+                # A reply is only CERTAIN while it has one candidate. Once the batch
+                # message shows several, replying to it says "one of these" and not
+                # which - so it stops being the certain path and becomes the model's
+                # job, announced. Auto-binding here would silently attach an answer
+                # to whichever happened to be at the front, which is the precise
+                # failure the old one-live-ask rule existed to prevent.
+                if len(queue) <= 1:
+                    conversations.answer(hit["id"], text, bound_by="reply")
+                    bound_conv = hit
+                    log(f"conversation {hit['id']}: answered by reply "
+                        f"(msg {ref_id}) - {text[:120]!r}")
+                    await react(message, "✅")
+                else:
+                    log(f"reply to the batch message with {len(queue)} live - "
+                        f"leaving it to the model to say which one it means")
 
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
@@ -1352,7 +1382,11 @@ async def on_message(message):
                 conversation=(bound_conv if bound_conv
                               else (conversations.live_for(message.author.id)
                                     if is_dm else None)),
-                already_bound=bool(bound_conv))
+                already_bound=bool(bound_conv),
+                # The whole queue, so the model judges among the real candidates
+                # instead of only ever seeing the front one. Suppressed once
+                # something has already bound - that turn is finished deciding.
+                queue=(None if bound_conv else (queue if is_dm else None)))
     except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
         log(f"agent failed:\n{traceback.format_exc()}")
         await react(message, "⚠️")
