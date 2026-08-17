@@ -207,6 +207,27 @@ def record_ask_message(cid, message_id):
     return _mutate(cid, go)
 
 
+def record_diagnosis(cid, text, confidence=None):
+    """Store what a read-only triage session concluded about this report.
+
+    Kept ON the conversation rather than in a side file, so the thing Tyler is
+    asked to approve a fix for and the thing Doom eventually gets told about are
+    the same record. A diagnosis in a separate place is a diagnosis that can drift
+    from the report it explains.
+
+    Explicitly NOT an outcome. It is a hypothesis until a human acts on it, and
+    close() still needs a real outcome - "we think it is X" is not something
+    anyone should be told is resolved.
+    """
+    def go(conv):
+        conv["diagnosis"] = str(text)
+        if confidence:
+            conv["diagnosis_confidence"] = str(confidence)
+        _event(conv, "triaged", (str(confidence) + ": " if confidence else "")
+               + str(text)[:200])
+    return _mutate(cid, go)
+
+
 def restart_clock(cid, now=None):
     """Start the nudge countdown from now - called when the question is delivered.
 

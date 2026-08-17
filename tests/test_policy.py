@@ -283,6 +283,13 @@ check("exactly the expected capabilities are origin-restricted",
 # may do while nobody is watching.
 #
 #   set_presence         - cosmetic, applied on login by on_ready.
+#   triage_conversation  - added for stage 3 item 13. A read-only Claude Code
+#                          session investigating a report. SYSTEM-reachable because
+#                          triage that waits for a human to remember is the loop
+#                          this stage exists to close, and safe because the session
+#                          it runs has Read/Glob/Grep and NOTHING else - a non-read
+#                          tool is denied outright rather than asked about, so a
+#                          stranger's report cannot reach a write OR buzz his phone.
 #   notify_owner         - added for stage 3 item 11. The recipient is ALWAYS the
 #                          owner and cannot be chosen, so the worst an automated
 #                          caller can do is talk to Tyler - and a watchdog noticing
@@ -307,7 +314,7 @@ check("exactly the expected capabilities are origin-restricted",
 #
 # A third name appearing here without a deliberate decision is what this asserts on.
 EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
-                   "notify_owner"}
+                   "notify_owner", "triage_conversation"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
