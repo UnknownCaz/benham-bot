@@ -33,14 +33,15 @@
     its only record was a corrupted turn list. A conversation object <em>is</em> a record: state,
     history, log. "What did I do?" stops being a memory question and becomes a lookup.</p>
 
-    <h2 id="invariants">The five invariants</h2>
+    <h2 id="invariants">The invariants</h2>
     <p>Each of these is enforced in <code>conversations.py</code> rather than documented and
     hoped for.</p>
     <table>
       <tr><th>Invariant</th><th>Why it is code, not a convention</th></tr>
-      <tr><td><strong>One live ask per person</strong></td><td>This is what makes an answer
-        <em>bindable</em>. When a DM arrives, "which question is this answering" has exactly one
-        candidate. <code>open_conversation</code> raises rather than silently reusing.</td></tr>
+      <tr><td><strong>An answer names its question</strong></td><td>The one that pays for
+        everything else. Until 2026-08-17 it was spelled "one live ask per person" — with a single
+        candidate, binding could not be wrong. Asks queue now, so
+        <a href="#queue">the slot</a> carries that weight instead.</td></tr>
       <tr><td><strong>A defer only ever extends</strong></td><td>An away signal is information
         about when to ask again, not permission to ask sooner. Capped at one hour.</td></tr>
       <tr><td><strong>A close carries an outcome</strong></td><td>A silent close is the exact bug
@@ -51,6 +52,11 @@
       <tr><td><strong>Banking keeps the question</strong></td><td>Giving up waiting is not
         deleting. The question stays readable and can be asked again later.</td></tr>
     </table>
+    <p class="note"><strong>This page said "one live ask per person" for a day after that stopped
+    being true.</strong> It is recorded here rather than quietly corrected, because the failure is
+    the recurring one in this project: a confident claim with nothing checking it. The rule was
+    real, it was load-bearing, and replacing it was deliberate — but a reader who trusted this page
+    would have believed a safety property the code no longer had.</p>
 
     <h2 id="direction">Direction — who owes whom</h2>
     <p>A conversation has a counterparty, but the <em>obligation</em> can run either way, and
@@ -58,15 +64,100 @@
     <table>
       <tr><th>direction</th><th>meaning</th><th>rules</th></tr>
       <tr><td><code>ASKING</code></td><td>we asked them something; we are waiting</td><td>nudges
-        apply; only one live per person</td></tr>
+        apply; several may be live, and they queue</td></tr>
       <tr><td><code>OWED</code></td><td>they told <em>us</em> something (a bug, an idea) and we
-        owe an outcome</td><td>never nudged, never capped</td></tr>
+        owe an outcome</td><td>never nudged, never queued</td></tr>
     </table>
-    <p>Without the distinction, the one-per-person rule would have <strong>refused Doom's second
-    bug report of the day</strong> — he filed three in two days — and the nudge loop would have
-    chased him for an answer to a bug <em>he</em> reported. <code>_live_for</code> excludes
-    <code>OWED</code> deliberately: if a report counted as live for its author, his next message
-    would be a candidate answer to his own bug report.</p>
+    <p>Nudging someone about a bug <em>they</em> reported is chasing them for an answer we owe
+    them, which is why <code>OWED</code> is never nudged. It is excluded from
+    <a href="#queue">the queue</a> for a sharper reason: if a report counted as waiting-on-its-author,
+    <strong>his next message would be a candidate answer to his own bug report</strong>. Doom filed
+    three reports in two days — every one of them would have been sitting in his line.</p>
+
+    <h2 id="queue">The queue — several sessions, one message</h2>
+    <p>Sessions cannot see each other and never will. Before 2026-08-17 the second one to need
+    Tyler was simply <em>refused</em>, because one live ask per person was what made an answer
+    bindable. Tyler's call was to let them queue and replace the guarantee rather than drop it.</p>
+    <p>Every <code>ASKING</code> conversation waiting on one person forms a line, and it is
+    delivered as <strong>one numbered DM</strong> rather than <em>N</em> separate ones:</p>
+    <pre><code><strong>3 things waiting on you.</strong> Answer any of them by number - "2: sqlite" -
+or just reply and I'll work it out.
+
+<strong>1.</strong> restart prod? ⚠️ <em>blocking a session</em>
+     <em>deploy is wedged</em>
+<strong>2.</strong> sqlite or json?
+<strong>3.</strong> drop the cache? <em>(no rush)</em></code></pre>
+
+    <h3 id="priority">Priority is self-assessed, and that is deliberate</h3>
+    <p>Tyler's design, over a recommendation to derive it from whether the session was blocked —
+    and he was right. <strong>Inflation is what happens when you rank yourself in a vacuum</strong>,
+    where "important" is the only safe answer. The queue is the one place unrelated sessions can
+    meet, so a session that reads it first (<code>ask --queue</code>) is ranking
+    <em>comparatively</em> — and claiming <code>blocking</code> next to two existing
+    <code>blocking</code>s is visibly worthless. Nothing enforces looking first; the shared file is
+    what makes looking useful.</p>
+    <table>
+      <tr><th>level</th><th>the claim it makes</th></tr>
+      <tr><td><code>blocking</code></td><td>this session cannot continue without an answer</td></tr>
+      <tr><td><code>normal</code></td><td>it gates something, but there is other work meanwhile</td></tr>
+      <tr><td><code>whenever</code></td><td>no rush; answer it when convenient</td></tr>
+    </table>
+    <p>Named rather than numeric because <strong>there is always a bigger integer</strong>, and an
+    arms race is the failure mode. These three are a claim about the <em>asker's own state</em> —
+    something a session actually knows, and something Tyler can sanity-check at a glance.</p>
+    <p>It is advisory but <strong>recorded</strong>: nothing stops a session claiming the top, and
+    nothing hides it either. The level and the reason it gave both appear next to the question.
+    Line-jumping costs visibility rather than being impossible. Within a level the order is
+    strictly first-come-first-served, so the only way past someone is to claim a higher level —
+    which shows up in the queue and in Tyler's message.</p>
+
+    <h3 id="slots">The slot is the binding handle</h3>
+    <p>The number is not decoration. It is what replaced the one-live-ask rule: <code>"2: sqlite"</code>
+    names its question exactly, with no model involved. Two properties keep that true.</p>
+    <p><strong>Slots are recomputed, never stored.</strong> A stored slot would go stale the moment
+    anything ahead of it was answered, and a stale number is worse than no number — it binds an
+    answer to the wrong question <em>silently</em>.</p>
+    <p><strong>They are recomputed against the screen, not against the live queue.</strong> This is
+    the half that was missing until 2026-08-18, and the bug it caused is worth spelling out because
+    the fix looks like the thing it fixes:</p>
+    <pre><code>on screen:   1. which database?   2. drop the cache?   3. ready to deploy?
+he answers   "1: sqlite"        → live queue is now [drop, deploy]
+he answers   "2: yeah drop it"  → live slot 2 is READY TO DEPLOY</code></pre>
+    <p>Nothing re-renders the message when he answers, so the list he can still read renumbers
+    underneath him. <code>shown_queue()</code> resolves against the ids the message actually
+    displayed, so <code>2</code> keeps meaning the second thing he can see. A slot whose question
+    has since been answered resolves to <em>nothing</em> rather than to its neighbour, and falls
+    through to the model — which then has to say how it read the message.</p>
+
+    <h3 id="batch">Edited in place, replaced when it matters</h3>
+    <p>One message, kept current, so the numbering a reply refers to is the numbering on screen.
+    The catch that shapes the whole design: <strong>a Discord edit fires no notification.</strong></p>
+    <table>
+      <tr><th>what happened</th><th>what the message does</th><th>why</th></tr>
+      <tr><td>a question joins the <em>back</em></td><td>edited in place, silently</td><td>nothing
+        at the top changed; a fresh ping for a low-priority addition is noise</td></tr>
+      <tr><td>a question lands at the <em>front</em></td><td>the old message is deleted and a new
+        one sent</td><td>it must arrive visibly — a <code>blocking</code> claim delivered silently
+        is the opposite of what claiming it is for</td></tr>
+    </table>
+    <p>The stale message is deleted rather than left above the new one, so <code>3</code> cannot
+    mean two different things depending on how far he scrolls.</p>
+    <p class="note"><strong>The front-of-line rule used to require a queue longer than one</strong>,
+    on the assumption that a lone question had no message to edit yet. It does: the batch id is
+    never cleared when a queue empties, so the first question after a quiet spell found the old
+    message, took the edit path, and arrived <em>with no notification at all</em>. The one case
+    most likely to be urgent was the one guaranteed to be silent. Caught by writing the test the
+    delivery path never had — the stub could not be edited or fetched, so every attempt threw into
+    a bare <code>except</code> and fell through to sending. It looked tested and was not.</p>
+
+    <h3 id="uncollected">Answers nobody collected</h3>
+    <p>A session that asks with <code>--no-wait</code>, or that simply exits before he replies,
+    leaves the answer sitting in the store with nothing to deliver it to. <code>ANSWERED</code>-but-not-<code>CLOSED</code>
+    already meant exactly "an answer arrived and nobody acted on it", so this needed no new state —
+    only a surface. <code>ask --queue</code> prints them <strong>first</strong>, above the
+    questions, because an answer already given is worth more than a question about to be asked, and
+    the commonest way to waste his time is to re-ask something he has already answered to a session
+    that has since exited.</p>
 
     <h2 id="beats">The beats</h2>
     <p>Code owns timing; the model owns meaning. Nothing in <code>conversations.py</code> asks a
@@ -90,15 +181,31 @@
     <p>Tyler's rule, and the asymmetry is the point:</p>
     <table>
       <tr><th>route</th><th>certainty</th><th>recorded as</th></tr>
-      <tr><td>A Discord <strong>reply</strong> to the ask (or to a nudge)</td><td>certain — no
-        model involved</td><td><code>bound_by="reply"</code></td></tr>
+      <tr><td>He types the <strong>number</strong> — <code>"2: sqlite"</code></td><td>certain,
+        resolved against the message on his screen</td><td><code>bound_by="slot"</code></td></tr>
+      <tr><td>A Discord <strong>reply</strong> to the ask (or to a nudge)</td><td>certain —
+        <em>while that message names one question</em></td><td><code>bound_by="reply"</code></td></tr>
       <tr><td>Anything else</td><td>the model judges, and <strong>must say so</strong> in the
         same breath</td><td><code>bound_by="judged"</code></td></tr>
     </table>
     <p>Requiring a reply every time is friction; letting the model silently decide is how an
     instruction gets swallowed as an answer. Judging <em>and announcing</em> keeps the fast path
-    fast while making a wrong guess visible. The record stores which route was taken, so the two
+    fast while making a wrong guess visible. The record stores which route was taken, so the three
     are never confused later.</p>
+    <p><strong>A reply stops being certain once the message lists several questions.</strong>
+    Replying to a batch of three says "one of these" without saying which, so it hands off to the
+    model rather than attaching to whatever happens to be at the front — which is precisely the
+    failure the old one-live-ask rule existed to prevent.</p>
+    <p><strong>Answering several at once works</strong>, because a numbered list invites exactly
+    that. Tyler broke the first version within minutes of it shipping by doing the obvious thing —
+    answering all three in one numbered message, which is literally what the message asks for. A
+    greedy pattern bound slot 1 to the <em>whole</em> message, so one question swallowed the
+    answers to the other two and both went on being nudged for things he had already answered.
+    Both layers had failed, and the second is the instructive one: <strong>the model read all three
+    correctly</strong> and recorded none of them, because nothing had told it it could bind more
+    than one. Slot markers are now cut at line starts only — a "2." mid-sentence is prose, and the
+    parse has to fail toward "this is not a list" rather than toward finding structure that is not
+    there.</p>
 
     <h2 id="triage">Read-only triage</h2>
     <p>A filed report can be investigated by a real Claude Code session restricted to
@@ -115,13 +222,32 @@
 
     <h2 id="drive">Driving it</h2>
     <p>See <a href="../outer/cli.html#conversations">CLI shorthands</a>. In short:
-    <code>ask</code> from a running session, <code>conv list</code> / <code>show</code> to read,
-    <code>conv close … --tell</code> to shut the loop and say so.</p>
+    <code>ask --queue</code> to read the line before joining it, <code>ask</code> from a running
+    session, <code>conv list</code> / <code>show</code> to read, <code>conv close … --tell</code>
+    to shut the loop and say so.</p>
+
+    <h2 id="next">Where this goes next</h2>
+    <p>Deliberately <em>not</em> built here. Tyler, 2026-08-17: <em>"i think this idea is its own
+    monster so lets start with the ask queue with the expectations this will grow into a later
+    form."</em> The later form is a <strong>session-to-session channel</strong> — sessions reading
+    and replying to each other rather than only reading a queue: deferring, merging duplicate
+    questions, handing off work. The shape he has in mind is rooms, not a flat channel: "a shared
+    group chat for sessions with rooms for each, kinda like a discord server for active claude
+    sessions that could need to communicate."</p>
+    <p>The queue is about coordinating questions <em>to Tyler</em>; that is about sessions
+    coordinating <em>with each other</em>, which is a different system with its own failure modes —
+    loops, deadlock, sessions talking each other out of asking at all. Conflating them would have
+    dragged the queue down. <strong>The queue is already the degenerate case of it</strong>: one
+    room, one member, and every message a question. Whatever gets built should be able to look at
+    the queue and see itself.</p>
 
     <h2 id="trail">Paper trail</h2>
     <ul>
       <li><code>state/conversations.json</code> — the store. Gitignored: it holds what real people
         said.</li>
+      <li><code>state/ask_batches.json</code> — which message is showing each person their queue,
+        and <em>which questions it shows</em>, in order. That second half is the numbering a reply
+        is resolved against.</li>
       <li>Each conversation carries its own append-only <code>log</code> — opened, delivered,
         nudged, answered (with the binding route), closed, counterparty-told, banked.</li>
       <li><code>supervise.log</code> — one line per beat the loop fires.</li>

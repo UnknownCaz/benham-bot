@@ -131,12 +131,52 @@ python -u benham.py read_history all        # no limit</code></pre>
     <a href="../inner/conversations.html">the Inner page</a> for why it works that way.</p>
     <table>
       <tr><th>command</th><th>does</th></tr>
+      <tr><td><code>ask --queue</code></td><td>What is already waiting on you, plus any answers nobody collected. Read this <em>before</em> asking.</td></tr>
       <tr><td><code>ask "question"</code></td><td>Ask Tyler from a running session and wait. <code>--no-wait</code> to fire and read later.</td></tr>
       <tr><td><code>conv list</code></td><td>Everything still open. <code>--all</code> includes closed and banked.</td></tr>
       <tr><td><code>conv show c7</code></td><td>One conversation with its full event log.</td></tr>
       <tr><td><code>conv close c7 "outcome"</code></td><td>Shut the loop. <code>--tell</code> also DMs them the outcome.</td></tr>
       <tr><td><code>conv bank c7 "reason"</code></td><td>Give up waiting, keep the question.</td></tr>
     </table>
+
+    <h3 id="ask-flags">Joining the queue</h3>
+    <p>Several sessions can be waiting on you at once. They arrive as <strong>one numbered DM</strong>,
+    and you answer by number — in any order, including all of them in a single message. See
+    <a href="../inner/conversations.html#queue">the Inner page</a> for the slot rules that make
+    that safe.</p>
+    <table>
+      <tr><th>flag</th><th>does</th></tr>
+      <tr><td><code>--queue</code></td><td>Print the line and exit. Prints uncollected answers first.</td></tr>
+      <tr><td><code>--priority blocking|normal|whenever</code></td><td>Where the session puts itself. Default <code>normal</code>.</td></tr>
+      <tr><td><code>--why "…"</code></td><td>One line on why it placed itself there. Shown to you next to the question.</td></tr>
+      <tr><td><code>--purpose "…"</code></td><td>What the answer is <em>for</em>. Defaults to the question.</td></tr>
+      <tr><td><code>--project "…"</code></td><td>Which project it is about.</td></tr>
+      <tr><td><code>--timeout 900</code></td><td>Seconds this process waits. Default 900 — one nudge cycle.</td></tr>
+      <tr><td><code>--no-wait</code></td><td>Send it and exit. The answer waits in the store.</td></tr>
+    </table>
+<pre><code>python benham.py ask --queue                       # ALWAYS first
+python benham.py ask "sqlite or json?" \
+    --priority blocking --why "cannot pick a schema without this"
+python benham.py ask "ready to deploy?" --no-wait</code></pre>
+    <p><strong>The priority is the session's own claim, and you see every one of them.</strong>
+    That is the design, not an oversight: a session that has read the queue is ranking itself
+    against visible claims rather than in a vacuum, which is where inflation comes from. Nothing
+    stops one claiming <code>blocking</code>, and nothing hides it — a blocking question is marked
+    <em>⚠️ blocking a session</em> in your DM, a <code>whenever</code> one is marked
+    <em>(no rush)</em>, unmarked means <code>normal</code>, and whatever it said in
+    <code>--why</code> is printed underneath. Within a level it is strictly
+    first-come-first-served, so the only way past someone is to claim a higher level, in writing,
+    where you can see it.</p>
+    <p><code>ask</code> prints the queue on every call, but by then the priority is already on the
+    command line — which is what <code>--queue</code> is for. A session that has not looked first is
+    guessing.</p>
+    <p><strong>A timeout is not a failure.</strong> Only that process stopped watching — the bot
+    keeps nudging on its own schedule, and your answer is recorded whenever it arrives. A session
+    that dies mid-wait loses the asker, never the question.</p>
+    <p><strong>Uncollected answers are printed first</strong>, above the queue. An answer you have
+    already given is worth more than a question about to be asked, and the commonest way to waste
+    your time is a fresh session re-asking something you answered to a session that has since
+    exited. Act on it, then <code>conv close &lt;id&gt; "what happened"</code>.</p>
     <p><strong>An outcome is required.</strong> <code>close</code> refuses without one, because a
     silent close is the exact failure this was built to end — work that looks finished from the
     inside and reads as silence from the outside.</p>
