@@ -283,6 +283,12 @@ check("exactly the expected capabilities are origin-restricted",
 # may do while nobody is watching.
 #
 #   set_presence         - cosmetic, applied on login by on_ready.
+#   notify_owner         - added for stage 3 item 11. The recipient is ALWAYS the
+#                          owner and cannot be chosen, so the worst an automated
+#                          caller can do is talk to Tyler - and a watchdog noticing
+#                          a dead server is the archetypal case, with nobody to ask.
+#                          It also cannot pick its own volume: callers state the
+#                          KIND and notify.py maps it to a tier.
 #   tell_conversation    - added for stage 3 item 9. Same bounded shape: it takes
 #                          a conversation id, the recipient comes from the record,
 #                          and the substance is the OUTCOME already written there.
@@ -300,7 +306,8 @@ check("exactly the expected capabilities are origin-restricted",
 #                          handed a loop the ability to message anyone anything.
 #
 # A third name appearing here without a deliberate decision is what this asserts on.
-EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation"}
+EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
+                   "notify_owner"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
