@@ -27,12 +27,23 @@ sufficient, which project a report belongs to, whether two reports are the same
 bug - those are judgment, they belong to a caller with a model attached, and
 keeping them out of here is what lets the loop close with no session running.
 
-ONE OPEN CONVERSATION PER COUNTERPARTY, enforced in code. This is not politeness
-about not pestering people, though it is that too. It is what makes an answer
-BINDABLE: when someone replies in a DM, "which question is this answering" has
-exactly one candidate. The discord-outreach skill already worked this way as a
-rule that a human had to remember; here it is an invariant that open() refuses to
-violate.
+ASKS QUEUE, AND THE SLOT IS THE BINDING HANDLE. Until 2026-08-17 there was one
+open conversation per counterparty, enforced in code, and the reason was never
+politeness - it was what made an answer BINDABLE: "which question is this
+answering" had exactly one candidate.
+
+Tyler replaced it with a queue, so several sessions can be waiting on him at once
+without the second one being refused. The binding guarantee had to be REPLACED
+rather than dropped, and that is slot_of(): the queue is delivered as one
+numbered message and "2: sqlite" names its question exactly, with no model
+involved. Slots are recomputed rather than stored, because a stored slot goes
+stale the moment anything ahead of it is answered - and a stale number binds an
+answer to the WRONG question, which is the precise failure the old rule prevented.
+
+The corollary lives in bot.py: a Discord reply is certain only while there is one
+candidate. Once the batch shows several, replying to it says "one of these"
+without saying which, so it stops being the certain path and becomes a judgement
+the model must announce.
 
 TERMINAL STATES ONLY. Doom, asked directly on 2026-08-16 what he wanted back:
 "sorta i kinda want to know when it gets solved", and separately that a wont-fix
@@ -67,13 +78,14 @@ TERMINAL_STATES = (CLOSED, BANKED)    # worth telling the counterparty about
 # A conversation has a counterparty, but the OBLIGATION can run either way, and
 # almost every rule here depends on which:
 #
-#   ASKING  we asked them something. We are waiting. Nudges apply, and only one
-#           may be live per person - that one-at-a-time rule is what makes their
-#           reply bindable.
+#   ASKING  we asked them something. We are waiting. Nudges apply, and several may
+#           be live per person - they form a queue (see _queue), delivered as one
+#           numbered message. The SLOT is what makes their reply bindable now.
 #   OWED    they told US something (a bug, an idea) and we owe them an outcome.
 #           Nudging would mean chasing someone for an answer we owe them, which
-#           is absurd; and capping them at one would mean Doom's second report of
-#           the day is refused, when he filed three in two days.
+#           is absurd. OWED is also excluded from the queue entirely: if a report
+#           Doom filed counted as waiting-on-him, his next message would be a
+#           candidate answer to his own bug report.
 #
 # Adding this rather than a separate Report type is what makes INTENT.md's claim
 # true - that the collaborator loop and the reverse channel are one machinery
@@ -318,6 +330,27 @@ def queue_for(counterparty):
     """The full ordered queue waiting on this person. Read before you ask."""
     with _lock:
         return _queue(_load(), counterparty)
+
+
+def uncollected(counterparty=None):
+    """Answers that came back and that nobody has acted on yet.
+
+    ANSWERED-but-not-CLOSED already meant exactly this, so there is no new state:
+    the answer is on the record and no session has turned it into an outcome.
+
+    It needs surfacing because of a hole Tyler found on 2026-08-17: a session that
+    asks with --no-wait, or that simply exits before he replies, leaves the answer
+    sitting in the store with nothing to deliver it to. ask.py's docstring already
+    said this - "it just gets read by whoever asks next" - but nothing ever showed
+    it to whoever asked next, so "read by whoever asks next" was aspirational. The
+    queue view is where a session already looks, so it is where these belong.
+    """
+    with _lock:
+        out = [c for c in _load().values()
+               if c.get("state") == ANSWERED
+               and (counterparty is None
+                    or int(c.get("counterparty", 0)) == int(counterparty))]
+    return sorted(out, key=lambda c: c.get("answered_at") or "")
 
 
 def slot_of(cid):
