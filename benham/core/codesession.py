@@ -87,6 +87,16 @@ _pending = {}                # request_id -> asyncio.Future[bool]
 # `asks` is the runaway detector: "request 8 for this task" is the signal no
 # individual command can carry.
 _task_ctx = {"task": None, "narration": None, "asks": 0, "last_why": None}
+
+# READ-ONLY mode (stage 3 item 13). A triage session investigating someone else's
+# bug report must cost ZERO approval prompts - otherwise a stranger's report can
+# make Tyler's phone buzz, which turns a helpful feature into a way to pester him.
+#
+# So in this mode a non-read tool is DENIED OUTRIGHT rather than asked about. That
+# is a stronger guarantee than "he will probably say no": there is no path from a
+# report to a write, so the taint wall pc_task sits behind is not crossed - it is
+# not needed, because nothing here can act.
+_read_only = [False]
 _seq = [0]
 
 
@@ -209,7 +219,11 @@ def pending_request():
 
 
 async def _can_use_tool(tool_name, tool_input, context):
-    """The SDK permission callback. Free for reads, ask for everything else."""
+    """The SDK permission callback. Free for reads, ask for everything else.
+
+    In read-only mode, "everything else" is refused instead of asked. See
+    _read_only above for why that distinction is the whole safety story of triage.
+    """
     from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
     if tool_name == "Read":
@@ -220,6 +234,17 @@ async def _can_use_tool(tool_name, tool_input, context):
 
     if tool_name in READ_ONLY_TOOLS:
         return PermissionResultAllow()
+
+    if _read_only[0]:
+        # Deny, and say why in a way the model can act on: it should report what it
+        # could not check rather than looking for another route, which is the same
+        # rule the prompt gives it about a human denial.
+        log(f"READ-ONLY session refused {tool_name}")
+        return PermissionResultDeny(
+            message=(f"{tool_name} is not available - this is a read-only "
+                     "investigation. Do not look for another way to do it. Read, "
+                     "Glob and Grep are available; if something cannot be settled "
+                     "without writing or running, say so and stop."))
 
     if _ask_owner is None:
         return PermissionResultDeny(message="No owner channel is available to approve this.")
@@ -382,7 +407,7 @@ suite" cost him SIX approvals - four of them probing for a Python. So:
 """
 
 
-async def run_task(prompt, on_progress=None):
+async def run_task(prompt, on_progress=None, read_only=False):
     """Run one task in a Claude Code session and return its final text.
 
     A fresh session per task, deliberately. A long-lived one would accumulate the
@@ -404,6 +429,7 @@ async def run_task(prompt, on_progress=None):
 
     parts, tools_used = [], []
     _task_ctx.update(task=str(prompt), narration=None, asks=0, last_why=None)
+    _read_only[0] = bool(read_only)
     async with ClaudeSDKClient(options=_options()) as session:
         await session.query(prompt)
         async for msg in session.receive_response():
