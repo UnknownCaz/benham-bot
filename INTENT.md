@@ -451,6 +451,44 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     manual audit and the `rule_owner` comment - the claim was plausible, adjacent to something
     real, and nothing checked it.
 
+18. **The slot binds against the SCREEN, not the live queue** (2026-08-18). Slots are recomputed
+    rather than stored, which is right - but recomputing is only honest while the message on
+    screen still matches the queue, and **nothing re-renders it when he answers**. So the list he
+    can still read renumbers underneath him:
+
+    ```
+    on screen:   1. which database?   2. drop the cache?   3. ready to deploy?
+    he answers   "1: sqlite"        -> live queue is now [drop, deploy]
+    he answers   "2: yeah drop it"  -> live slot 2 is READY TO DEPLOY
+    ```
+
+    That is the exact failure item 15 said slots exist to prevent, arriving through the one gap
+    the rule did not cover: it forbade a *stored slot* and said nothing about a *stale screen*.
+    `ask_batches.json` now records which questions the message displays, in order, and `by_slot` /
+    `answer_slots` resolve against that. A slot whose question has since been answered resolves to
+    nothing rather than to its neighbour, so it falls through to the model - which must announce
+    how it read the message. **Fails closed, in the direction that gets announced.**
+
+    Two settled points this adds to item 15:
+    - **A number means what it means on his screen.** Anything that changes what he can see must
+      change what the number resolves to, in the same operation.
+    - **A reply is ambiguous while the MESSAGE shows several**, however many are still open. It
+      does not become certain again just because he answered the other two.
+
+    Found alongside a second bug in the same delivery path: an edit fires no Discord notification,
+    and the batch message id is never cleared when a queue empties - so the first question after a
+    quiet spell found the stale message, took the edit path, and **arrived silently**. The case
+    most likely to be urgent was the one guaranteed not to buzz.
+
+    **Both lived in the same blind spot, and it is the pattern again in a new costume.** The queue
+    primitive was well covered from the day it shipped; its *delivery* had no test, because the
+    Discord stub could not be fetched, edited or deleted - every attempt threw into a bare
+    `except Exception` and fell through to sending a fresh message. So the tests were green, the
+    edit path had never once executed, and **a loose stub reads exactly like a passing one**. The
+    same stub had also been writing fake message ids into the live `state/ask_batches.json` on
+    every run. Not a comment this time, and not a docstring: **a test that made a confident claim
+    with nothing checking it.**
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
