@@ -489,6 +489,55 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     every run. Not a comment this time, and not a docstring: **a test that made a confident claim
     with nothing checking it.**
 
+19. **Two facts shared one field, and the quieter one lost** (2026-08-17). Three sessions asked
+    within 300ms. Whichever delivery job ran first stamped its batch message id onto every
+    question the message showed — correct, and load-bearing, because a reply to a numbered list
+    may answer any line of it. But `ask_message_ids` was *also* the "has this ever been delivered"
+    flag, so the other two concluded their question had already gone out and sent a **nudge** one
+    second after it appeared:
+
+    ```
+    c11  07:38:42 opened -> 07:38:43 nudged #1
+    c12  07:38:42 opened -> 07:38:43 delivered   (won the race; the control case)
+    c13  07:38:42 opened -> 07:38:45 nudged #1
+    ```
+
+    `MAX_NUDGES` is 2, so two of the three burned one on a question nobody had had time to read,
+    hit the cap early, and banked ~15 minutes ahead of schedule. Tyler also got *"still after this
+    one when you get a sec:"* about questions he had never been shown.
+
+    Delivery is its own fact now (`delivered_at`), and one batch message delivers **every**
+    question it displays — all marked, all clocks started together. Marking only the winner is the
+    same bug in a hat: an unmarked sibling keeps counting from when it was *opened*, so a bot that
+    was down at ask time would deliver three questions and nudge two of them on the next tick.
+    Second net: **nothing nudges before its deadline**, stated once in `beat_due()`. The tick loop
+    only ever advances what `due()` hands it, but `ask` fires an advance the instant a conversation
+    opens in order to deliver it, and that path trusted the caller completely.
+
+    **The settled decision — a bank is not a door slamming** (Tyler): giving up *waiting* and
+    refusing to *hear* are different things, and only the first was ever meant. `bank()` preserves
+    the question precisely because it is still a real question, so discarding a real answer to it
+    is incoherent. A banked conversation accepts an answer for ten minutes, through every binding
+    route. `ANSWERED` and `CLOSED` stay shut — those already have an answer, and quietly replacing
+    one is the silent misfiling slots exist to prevent.
+
+    **And §3.3 recurred, through a route nothing was watching.** At 08:11:52 Benham said *"Locked
+    c11 in as 'Claude should infer it'"*. It had called nothing: one round, no action in the log,
+    `answer: None` on the record. Five minutes later it summarised "all four queue items landed"
+    and listed c9, closed an hour earlier by a different session. The prompt block described only
+    **live** conversations, so when he answered a question that had banked 75 seconds before —
+    text still on his screen — the model had no true account of the thing he was talking about and
+    produced a plausible one. It is now told what recently stopped waiting on him, and told in as
+    many words never to claim a recording a tool did not return.
+
+    That is a mitigation and is not sold as more than one. What actually shrinks the failure is
+    making the honest path the working one: the answer he gave 75 seconds late would now *land*,
+    so "I recorded that" becomes true rather than merely sayable. c11's real answer was recovered
+    from the source Discord message and is collectable again.
+
+    **The pattern, one more costume.** Not a comment, a docstring, a manual page or a test this
+    time — a **field** making a confident claim, with nothing checking that it was entitled to.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
@@ -525,6 +574,7 @@ All from Tyler, 2026-08-16.
 | 19 | **The conversation is the primitive.** Conversations sit *above* actions and do not replace them — one-shot verbs stay one-shot |
 | 20 | **Code owns timing, the model owns meaning.** The state machine is code so the loop closes with no session running; judgment stays with the model |
 | 21 | **Participants: Doom only.** The other three whitelisted guests can talk to Benham; guest access is not project participation |
+| 22 | **A bank is not a door slamming** (2026-08-17). Giving up *waiting* and refusing to *hear* are different things. A banked question still accepts an answer for ten minutes; past that the refusal is loud, never silent |
 
 ### Baseline — clean as of 2026-08-16
 
