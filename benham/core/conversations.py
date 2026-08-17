@@ -185,6 +185,22 @@ def record_ask_message(cid, message_id):
     return _mutate(cid, go)
 
 
+def restart_clock(cid, now=None):
+    """Start the nudge countdown from now - called when the question is delivered.
+
+    open() sets a deadline assuming the ask goes out promptly, which is usually
+    true and occasionally very wrong: if the bot is down when a session asks, the
+    conversation sits undelivered and its fifteen minutes elapse before the person
+    has seen a word. Then the first thing they ever receive about it is a nudge.
+    """
+    now = now or _now()
+
+    def go(conv):
+        conv["due_at"] = _iso(now + NUDGE_AFTER)
+        _event(conv, "delivered")
+    return _mutate(cid, go)
+
+
 def by_ask_message(message_id):
     """The live conversation whose question was carried by this message, or None.
 

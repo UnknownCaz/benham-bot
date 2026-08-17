@@ -228,14 +228,16 @@ def main():
 
         import asyncio
         r = asyncio.run(advance(conv["id"]))
-        check("a due conversation nudges", r["status"], "nudged")
-        check("the nudge went to the counterparty", sent[-1][0], DOOM)
-        check("...and quotes the question verbatim rather than rephrasing it",
+        check("the first beat asks", r["status"], "asked")
+        check("the question went to the counterparty", sent[-1][0], DOOM)
+        check("...and quotes it verbatim rather than rephrasing it",
               "does the lore button work?" in sent[-1][1], True)
-        check("the nudge itself becomes repliable",
+        check("the ask becomes repliable",
               len(C.get(conv["id"])["ask_message_ids"]), 1)
 
-        asyncio.run(advance(conv["id"]))          # second nudge
+        asyncio.run(advance(conv["id"]))          # nudge 1
+        asyncio.run(advance(conv["id"]))          # nudge 2
+        check("both nudges were spent", C.get(conv["id"])["nudges"], 2)
         sent.clear()
         r = asyncio.run(advance(conv["id"]))      # budget spent -> bank
         check("once the budget is spent it banks", r["status"], "banked")
@@ -255,8 +257,9 @@ def main():
         C.forget()
         sent.clear()
         own = C.open_conversation(owner_id, "which way", "A or B?", now=NOW)
-        asyncio.run(advance(own["id"]))
-        asyncio.run(advance(own["id"]))
+        asyncio.run(advance(own["id"]))          # ask
+        asyncio.run(advance(own["id"]))          # nudge 1
+        asyncio.run(advance(own["id"]))          # nudge 2
         sent.clear()
         r = asyncio.run(advance(own["id"]))
         check("it still banks", r["status"], "banked")
@@ -264,6 +267,29 @@ def main():
         # not reply to himself is noise, and the banked question stays readable.
         check("but he is not told he failed to answer himself", r["owner_told"], False)
         check("...so nothing was sent", sent, [])
+        C.forget()
+
+        section("Beat zero: the question actually gets ASKED")
+        # This was missing when the loop first shipped. A conversation was opened
+        # and never delivered, so the first tick sent "still after this one when you
+        # get a sec" about a question the person had never seen. Delivering is not a
+        # nudge and must not spend the budget.
+        C.forget()
+        fresh = C.open_conversation(DOOM, "check the fix", "does the lore button work?",
+                                    now=NOW)
+        check("a new conversation has nothing delivered yet",
+              C.get(fresh["id"])["ask_message_ids"], [])
+        r = asyncio.run(advance(fresh["id"]))
+        check("the first beat ASKS rather than nudging", r["status"], "asked")
+        check("...and it does not read as a reminder",
+              "still after this one" in (sent[-1][1] or ""), False)
+        check("...and the question itself went out",
+              "does the lore button work?" in sent[-1][1], True)
+        check("delivering does NOT spend a nudge", C.get(fresh["id"])["nudges"], 0)
+        check("the delivery is on the record",
+              [e["event"] for e in C.get(fresh["id"])["log"]][-1], "delivered")
+        r = asyncio.run(advance(fresh["id"]))
+        check("only the SECOND beat is a nudge", r["status"], "nudged")
         C.forget()
 
         section("Binding: a reply is certain, everything else is judged")

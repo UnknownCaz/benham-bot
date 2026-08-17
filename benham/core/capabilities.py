@@ -898,10 +898,11 @@ async def _answer_conversation(ctx, p):
 
 
 @action("advance_conversation", identity.SPEAK,
-        "Move one waiting conversation to its next beat: send the nudge that is "
-        "due, or - once its nudge budget is spent - bank it and tell the owner it "
-        "went unanswered. Takes only a conversation id; the recipient and the words "
-        "both come from the stored record.",
+        "Move one waiting conversation to its next beat: ASK the question if it has "
+        "never been delivered, send the nudge that is due, or - once its nudge "
+        "budget is spent - bank it and tell the owner it went unanswered. Takes only "
+        "a conversation id; the recipient and the words both come from the stored "
+        "record.",
         {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"}},
         # SYSTEM, because the whole point of stage 3 is that a loop closes with no
         # session running. This is the ONLY outward action an automated caller can
@@ -924,6 +925,24 @@ async def _advance_conversation(ctx, p):
     who = int(conv["counterparty"])
     user = await ctx.user(who)
     ch = user.dm_channel or await user.create_dm()
+
+    # BEAT ZERO - the question has never actually been sent. This was missing when
+    # the loop shipped, and the symptom was ugly: the first tick greeted a question
+    # nobody had been asked with "still after this one", which reads as a reminder
+    # about a conversation the other person has no memory of. Delivering is NOT a
+    # nudge and must not consume the budget.
+    if not (conv.get("ask_message_ids") or []):
+        body = f"{conv['question']}"
+        if conv.get("project"):
+            body += f"\n\n_(about {conv['project']})_"
+        sent = await ch.send(body)
+        conversations.record_ask_message(conv["id"], sent.id)
+        # Restart the nudge clock from DELIVERY, not from opening. open() assumes
+        # prompt delivery; if the bot was down when the ask was made, the 15 minutes
+        # would otherwise have elapsed before the person ever saw it.
+        conversations.restart_clock(conv["id"])
+        return {"status": "asked", "id": conv["id"], "counterparty": who,
+                "message_id": sent.id}
 
     if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
         # Quote the question rather than paraphrasing it. A nudge that restates the
