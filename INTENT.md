@@ -387,9 +387,10 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     owner-vs-guest. **Extend the `policy.py` origin matrix to cover guests before merging any
     lanes** — today the physical file split is doing real security work, and merging converts a
     physics guarantee into a policy guarantee.
-14. Split `bot.py` (2345 lines) and `capabilities.py` (2139 lines) along the same seam.
-    **Note 2026-08-17:** item 13 was deliberately narrowed to the turnmemory extraction, so the
-    seam item 14 was meant to follow was never cut. What remains available is mechanical size
+14. ~~Split `bot.py` and `capabilities.py` along the same seam.~~ **DROPPED 2026-08-17**
+    (Tyler, answering c8: *"Item 14 is starting to seem redundant why do we even need it
+    anymore?"*). Item 13 was deliberately narrowed to the turnmemory extraction, so the seam this
+    was meant to follow was never cut - the item outlived its own premise. What remains available is mechanical size
     reduction along seams that already exist — bot.py's fenced exaroton block is genuinely
     self-contained; splitting capabilities.py by tier costs the property that every gate is
     readable in one place, which is what made this session's security bugs findable.
