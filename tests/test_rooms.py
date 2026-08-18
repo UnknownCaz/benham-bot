@@ -152,6 +152,34 @@ def main():
               rooms.worker("scratch")["session_id"], "sess-aaa")
         rooms.record_run("scratch", "sess-bbb", resumed=False)
         check("fresh id restarts the count", rooms.worker("scratch")["runs"], 1)
+
+        section("registry: the taint split item 22 settled")
+        from benham.core import capabilities, policy
+        for name in ("list_rooms", "read_room", "create_room", "post_room"):
+            check(f"{name} is registered", name in capabilities.REGISTRY, True)
+        check("the LISTING does not taint (metadata only)",
+              capabilities.REGISTRY["list_rooms"].taints, False)
+        check("CONTENT taints (20.7 as settled)",
+              capabilities.REGISTRY["read_room"].taints, True)
+        for name in ("list_rooms", "read_room", "create_room", "post_room"):
+            act = capabilities.REGISTRY[name]
+            check(f"{name} is not a guest capability", act.guest, False)
+            check(f"{name} is unreachable by SYSTEM (pull-only has no timer)",
+                  policy.Origin.SYSTEM in (act.origins or policy.DEFAULT_ORIGINS),
+                  False)
+            check(f"{name} is not outward (a room is a file, not a surface)",
+                  act.outward, False)
+
+        section("the agent prompt carries names+counts and never room content")
+        from benham.core import agent
+        rooms.post("scratch", "tyler", "SECRET-SAUCE-DO-NOT-LEAK")
+        _static, vol = agent._system_blocks("a DM", "Tyler")
+        check("## Rooms section present when rooms exist", "## Rooms" in vol, True)
+        check("the scratch count is shown", "`scratch`" in vol, True)
+        check("message text NEVER reaches the prompt",
+              "SECRET-SAUCE" in (vol + _static), False)
+        check("purpose text NEVER reaches the prompt",
+              "default room" in vol, False)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

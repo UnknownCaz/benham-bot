@@ -69,8 +69,16 @@ POISON = (
 
 section("Registry wiring — the flags the defence keys on")
 reads = [n for n, a in capabilities.REGISTRY.items() if a.tier == identity.READ]
-check("every read taints",
-      all(capabilities.REGISTRY[n].taints for n in reads), True)
+# Every read taints, MINUS a named exception list - not a loophole, a review
+# gate. list_rooms is the one reviewed exception (INTENT item 22): its output
+# is charset-limited names and integers, no free text at all, and test_rooms
+# pins that absence - while a listing that tainted would leave every session
+# born tainted at startup. Any NEW non-tainting read fails here by name until
+# it has been argued into this set the way that one was.
+NO_TAINT_READS = {"list_rooms"}
+check("every read taints (metadata exceptions named, reviewed, and exact)",
+      sorted(n for n in reads if not capabilities.REGISTRY[n].taints),
+      sorted(NO_TAINT_READS))
 check("read_channel taints", capabilities.REGISTRY["read_channel"].taints, True)
 check("pc_task taints (file + web content re-enters Discord)",
       capabilities.REGISTRY["pc_task"].taints, True)

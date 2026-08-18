@@ -112,6 +112,19 @@
     "taints": false,
     "tier": 2
   },
+  "create_room": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "create_thread": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -385,6 +398,19 @@
     "taints": true,
     "tier": 0
   },
+  "list_rooms": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 0
+  },
   "list_threads": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -459,6 +485,19 @@
     "taints": false,
     "tier": 2
   },
+  "post_room": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "purge_messages": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -499,6 +538,19 @@
     "tier": 0
   },
   "read_channel": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
+  "read_room": {
     "always_confirm": false,
     "blocked_when_tainted": false,
     "destructive": false,
