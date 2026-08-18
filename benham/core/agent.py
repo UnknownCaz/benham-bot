@@ -314,11 +314,18 @@ it deliberately instead.
 
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
-                  already_bound=False, queue=None):
+                  already_bound=False, queue=None, content=None):
     """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
 
     `reply_text` is what Benham should say. The pending confirmation, if any, has
     already been parked in confirm.py - the caller sends its prompt as a follow-up.
+
+    `content` is the user turn as API content BLOCKS, for a message that carried
+    more than text - an image to look at, a quoted message, an embed. bot.py
+    builds it; None means an ordinary text turn and nothing changes. `text` stays
+    required either way and stays the thing that is REMEMBERED, so history holds
+    a description of the picture rather than the picture: history_turns is 20
+    here, and a remembered image would be re-sent and re-billed on all twenty.
     """
     if not ENABLED:
         return None, None
@@ -332,7 +339,12 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     _last_call[conversation_key] = time.monotonic()
 
     turns = list(_history(conversation_key))
-    turns.append({"role": "user", "content": text})
+    # The BLOCKS go to the API and the TEXT goes to history. They differ only
+    # when the message carried an image: the blocks hold the picture, the text
+    # holds a line saying a picture was there and is no longer visible. Keeping
+    # them apart is what makes an image cost once instead of on every one of the
+    # next twenty turns.
+    turns.append({"role": "user", "content": content or text})
 
     api = _get_client()
     tools = build_tools()
