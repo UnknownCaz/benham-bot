@@ -178,10 +178,23 @@ class CallContext:
                            self.tainted)
 
     def with_taint(self, tainted=True):
-        """A copy with the taint flag set. Contexts are treated as immutable so a
-        nested call cannot quietly clear a taint its caller had set."""
+        """A copy with the taint flag set. MONOTONIC - it can only ever add.
+
+        The old body assigned the argument straight through, so `with_taint(False)`
+        on a tainted context handed back a clean one. agent.py's tool loop did
+        exactly that on every call, from a local `tainted` that started at False
+        whatever the caller had already established, so a turn that arrived tainted
+        was laundered clean by the first tool call it made.
+
+        The docstring already claimed this guarantee - "a nested call cannot quietly
+        clear a taint its caller had set". It was a sentence, not a mechanism, and
+        the test section quoting it only checked that the ORIGINAL object came back
+        unchanged, which is a different property and one the broken version had too.
+        The sentence is now true because the arithmetic makes it true: a cleared
+        taint is unrepresentable, so no future edit can reintroduce the clearing.
+        """
         return CallContext(self.origin, self.actor_id, self.guild_id,
-                           self.channel_id, tainted)
+                           self.channel_id, bool(tainted) or self.tainted)
 
     def __repr__(self):
         return (f"CallContext(origin={self.origin!r}, actor={self.actor_id}, "
