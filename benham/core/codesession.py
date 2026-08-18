@@ -33,6 +33,7 @@ there is no block.
 import asyncio
 import os
 import re
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -356,7 +357,7 @@ PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
 
 def _persona():
     """The shared personality, so the Benham running commands is the same character
-    as the one in DMs and voice. Appended to Claude Code's own preset prompt, which
+    as the one in DMs. Appended to Claude Code's own preset prompt, which
     keeps its tool knowledge intact and only changes who is doing the talking."""
     try:
         with open(PERSONA_FILE, "r", encoding="utf-8") as f:
@@ -394,10 +395,11 @@ suite" cost him SIX approvals - four of them probing for a Python. So:
 - `py -3` and `py -3.x` resolve to a Windows Store Python with NOTHING installed.
   Never reach for them; a ModuleNotFoundError from one means the launcher, not a
   missing dependency.
-- **pytest is not installed.** benham-bot's tests are standalone scripts:
-  `python tests/test_policy.py`, one file at a time. Running the lot is a shell
-  loop over `tests/test_*.py`, and `python scripts/gen_readme.py --check` verifies
-  the README's generated blocks.
+- **pytest is not installed.** benham-bot's tests are standalone scripts.
+  `python run_tests.py` runs the whole suite with one command and one exit code
+  (one approval instead of a loop's worth); `python run_tests.py policy` narrows
+  to matching files, and `python scripts/gen_readme.py --check` verifies the
+  README's generated blocks.
 - If you do not know something about this machine, READ for it (Read/Glob/Grep are
   free) or say you do not know. Do not run a command to find out - that is the one
   case where the shell costs him something and returns nothing he asked for.
@@ -408,12 +410,32 @@ suite" cost him SIX approvals - four of them probing for a Python. So:
 
 
 async def run_task(prompt, on_progress=None, read_only=False):
-    """Run one task in a Claude Code session and return its final text.
+    """Run one task in a Claude Code session and return FACTS, not only prose.
 
     A fresh session per task, deliberately. A long-lived one would accumulate the
     context of every unrelated thing Tyler asked over days, and the Discord side
     already carries the conversational thread - this layer is for doing, not for
     remembering.
+
+    Returns a dict rather than a string, because a string was the mechanism of
+    INTENT §7 Bug 2's surviving half: the result arrived as narration, so nothing
+    structured ever said "this fired, here is its id", and Benham told Tyler "I
+    can't independently verify it, I'm relying on the session's own self-report"
+    while the send sat in its own action log. The keys:
+
+      text        what the session said, joined - the half callers relay
+      session_id  the Claude Code session id off ResultMessage. run_task used to
+                  read is_error and total_cost_usd from that object and throw
+                  this away; it is the handle ClaudeAgentOptions.resume takes,
+                  so keeping it is also step one of the rooms wake design
+                  (INTENT item 20.6)
+      cost_usd    what the task cost, or None when the SDK does not say
+      is_error    the session ended in an error
+      tools_used  tool names in the order the session used them
+      asks        how many approval prompts the task sent Tyler - the runaway
+                  detector, on the record instead of only in the prompt footer
+      started/ended  UTC ISO bounds of the run; the window callers hold against
+                  the action log to say what verifiably happened during it
     """
     # ClaudeSDKClient rather than the simpler query() helper: can_use_tool only works
     # in streaming mode, and query() with a plain string prompt is not streaming.
@@ -423,11 +445,20 @@ async def run_task(prompt, on_progress=None, read_only=False):
     from claude_agent_sdk import (AssistantMessage, ClaudeSDKClient, ResultMessage,
                                   TextBlock, ToolUseBlock)
 
+    def _facts(text, session_id=None, cost=None, is_error=False, tools=(),
+               started=None, ended=None):
+        return {"text": text, "session_id": session_id, "cost_usd": cost,
+                "is_error": bool(is_error), "tools_used": list(tools),
+                "asks": int(_task_ctx.get("asks") or 0),
+                "started": started, "ended": ended}
+
     if not ENABLED:
-        return ("PC access is turned off. Set pc.enabled to true in control.json "
-                "and restart me.")
+        return _facts("PC access is turned off. Set pc.enabled to true in "
+                      "control.json and restart me.")
 
     parts, tools_used = [], []
+    session_id, cost, is_error = None, None, False
+    started = datetime.now(timezone.utc).isoformat()
     _task_ctx.update(task=str(prompt), narration=None, asks=0, last_why=None)
     _read_only[0] = bool(read_only)
     async with ClaudeSDKClient(options=_options()) as session:
@@ -453,11 +484,19 @@ async def run_task(prompt, on_progress=None, read_only=False):
                         if on_progress:
                             await on_progress("tool", _progress_label(block))
             elif isinstance(msg, ResultMessage):
-                if getattr(msg, "is_error", False):
+                is_error = bool(getattr(msg, "is_error", False))
+                if is_error:
                     parts.append(f"(the session ended with an error: "
                                  f"{getattr(msg, 'result', 'unknown')})")
                 cost = getattr(msg, "total_cost_usd", None)
+                # The same object run_task always read is_error and cost from.
+                # The id was being thrown away; it is the resume handle.
+                session_id = getattr(msg, "session_id", None)
                 log(f"PC task finished: "
-                    f"{('$%.4f' % cost) if cost else 'cost n/a'}, tools: {tools_used}")
+                    f"{('$%.4f' % cost) if cost else 'cost n/a'}, "
+                    f"session {session_id or '?'}, tools: {tools_used}")
 
-    return "\n\n".join(parts).strip() or "(the session returned nothing)"
+    return _facts("\n\n".join(parts).strip() or "(the session returned nothing)",
+                  session_id=session_id, cost=cost, is_error=is_error,
+                  tools=tools_used, started=started,
+                  ended=datetime.now(timezone.utc).isoformat())
