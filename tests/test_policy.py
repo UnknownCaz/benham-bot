@@ -26,6 +26,7 @@ from benham.core import policy
 from benham.core.policy import CallContext, Origin
 
 TYLER = 273967061619965952
+DOOM = 777000777000777000
 TESTING = 736988645562646619
 CHILLBAR = 1491485711076167711
 
@@ -170,10 +171,30 @@ check("a capability called from a non-agent guild is refused too",
       allowed("send_message", Origin.OWNER_GUILD, guild_id=CHILLBAR), False)
 
 section("Immutability — a nested call cannot clear its caller's taint")
+# This section named the guarantee and then checked something else. Both of its
+# original assertions pass against a with_taint that assigns straight through:
+# "returns a new object" and "the ORIGINAL keeps its taint" are true of a copy
+# that came back clean. The property in the heading - the DERIVED context still
+# being tainted - was the one nobody asserted, and agent.py was relying on the
+# clearing every turn. Same shape as the manual page and the rule_owner comment:
+# a confident claim with nothing checking it.
 base = CallContext.owner_dm(TYLER, 111, tainted=True)
 derived = base.with_taint(False)
 check("with_taint returns a new object", derived is base, False)
 check("the original keeps its taint", base.tainted, True)
+check("...and so does the COPY - with_taint cannot clear", derived.tainted, True)
+check("a bare with_taint() still clears nothing",
+      base.with_taint().tainted, True)
+check("with_taint(False) on a clean context leaves it clean",
+      CallContext.owner_dm(TYLER, 111).with_taint(False).tainted, False)
+check("with_taint(True) on a clean context taints it",
+      CallContext.owner_dm(TYLER, 111).with_taint(True).tainted, True)
+# for_target carries taint across the second authorization phase too - the
+# target rules include rule_outward_tainted, so losing it there would matter.
+check("for_target carries the taint",
+      base.for_target(TESTING, 111).tainted, True)
+check("a guest context cannot be laundered either",
+      CallContext.guest_dm(DOOM, 111).with_taint(False).tainted, True)
 
 section("Stage 3 — the destructive guild allowlist, now a policy rule")
 purge = capabilities.REGISTRY["purge_messages"]

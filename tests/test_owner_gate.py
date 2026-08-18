@@ -105,6 +105,14 @@ class _Message:
         # reply), and the pc.. branch reads it. test_pc_reply.py owns the non-None
         # cases.
         self.reference = None
+        # And these three, which on_message now reads on the way into the agent -
+        # a link preview, a Discord sticker, a forwarded message. They were absent
+        # here for as long as nothing looked at them, which is exactly how a stub
+        # drifts from the class it stands in for: not by being wrong, by being
+        # incomplete in the direction nobody had needed yet.
+        self.embeds = []
+        self.stickers = []
+        self.message_snapshots = []
         self.reactions_added = []
 
     async def add_reaction(self, emoji):

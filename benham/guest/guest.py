@@ -414,7 +414,7 @@ def _get_client():
     return _client
 
 
-def respond(user_id, text, log=None):
+def respond(user_id, text, log=None, content=None):
     """One guest turn: their message in, Benham's reply out.
 
     Requires that check() already returned ALLOW, which is also where the message was
@@ -423,6 +423,41 @@ def respond(user_id, text, log=None):
 
     If this raises, the caller should call refund() - the reservation was made on the
     assumption of a turn that then did not happen.
+
+    `content` is the user turn as API content BLOCKS, for a message that carried
+    more than text - a picture to look at, a quoted message, a link preview.
+    bot.py builds it (msgparts does the encoding); None means an ordinary text
+    turn and nothing here changes.
+
+    THIS DOES NOT ADD A TOOL, and the distinction is the whole of this file's
+    security story rather than a technicality. The blocks are finished before the
+    call - assembled from the message that was just sent to us, by code the model
+    never talks to - so there is still no tool definition here, no name for a
+    model to emit, and no tool-result loop to steer. A guest gains the ability to
+    be LOOKED AT; they do not gain the ability to make Benham fetch anything. The
+    question the docstring above asks - "could a guest reach capability X" - has
+    exactly the same answer it had before, for the same reason.
+
+    `text` stays required and stays the thing that is REMEMBERED. History holds a
+    description of the picture, never the picture: HISTORY_TURNS is 5 here, so a
+    remembered image would be re-sent and re-billed on the next five turns of the
+    conversation. This way it costs once, on the turn it arrives.
+
+    COST, because Tyler pays for these. An image is charged by visual tokens,
+    ceil(w/28) x ceil(h/28), and this surface runs a standard-resolution model
+    (claude-haiku-4-5), which downscales anything past 1568px on the long edge
+    and so caps at 1568 visual tokens per image whatever gets sent. At Haiku
+    input rates that is about $0.0016 - roughly one extra ordinary turn's worth
+    of input. Even the absurd case, every one of a guest's 100 daily messages
+    carrying a full-size picture, is about $0.16 for that guest and $0.63 across
+    the 400-message global cap.
+
+    So images are NOT charged extra against the cap, unlike a web search. That is
+    deliberate and it is Tyler's to overrule: a search costs double because it is
+    a second API round trip, where an image is only a bigger first one, and
+    charging double for the exact gesture this was built to support would tax
+    Doom for reaching for a screenshot. The ceilings that DO hold are msgparts'
+    four-images-per-message and 4MB-each, which bound the worst turn.
     """
     def _log(msg):
         if log:
@@ -430,7 +465,9 @@ def respond(user_id, text, log=None):
 
     key = _key(user_id)
     turns = list(_history(key))
-    turns.append({"role": "user", "content": text})
+    # Blocks to the API, text to history. See the docstring: they differ only when
+    # a picture came in, and keeping them apart is what makes it cost once.
+    turns.append({"role": "user", "content": content or text})
 
     # The cooldown clock is started by check(), not here: it has to advance for a
     # message that was accepted even if this call then fails, or a guest whose turns

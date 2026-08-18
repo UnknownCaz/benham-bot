@@ -25,7 +25,6 @@ thread mid-conversation - the whole point is being reachable while Tyler is away
 and "sorry, who are you" after a crash defeats that.
 """
 
-import base64
 import os
 import re
 import time
@@ -36,6 +35,7 @@ from dotenv import load_dotenv
 from benham.core import capabilities
 from benham.core import confirm
 from benham.core import identity
+from benham.core import msgparts
 from benham.core import policy
 from benham.core import jsonio
 from benham.core import shared_tools
@@ -390,11 +390,18 @@ it deliberately instead.
 
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
-                  already_bound=False, queue=None, recent=None):
+                  already_bound=False, queue=None, recent=None, content=None):
     """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
 
     `reply_text` is what Benham should say. The pending confirmation, if any, has
     already been parked in confirm.py - the caller sends its prompt as a follow-up.
+
+    `content` is the user turn as API content BLOCKS, for a message that carried
+    more than text - an image to look at, a quoted message, an embed. bot.py
+    builds it; None means an ordinary text turn and nothing changes. `text` stays
+    required either way and stays the thing that is REMEMBERED, so history holds
+    a description of the picture rather than the picture: history_turns is 20
+    here, and a remembered image would be re-sent and re-billed on all twenty.
     """
     if not ENABLED:
         return None, None
@@ -408,7 +415,12 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     _last_call[conversation_key] = time.monotonic()
 
     turns = list(_history(conversation_key))
-    turns.append({"role": "user", "content": text})
+    # The BLOCKS go to the API and the TEXT goes to history. They differ only
+    # when the message carried an image: the blocks hold the picture, the text
+    # holds a line saying a picture was there and is no longer visible. Keeping
+    # them apart is what makes an image cost once instead of on every one of the
+    # next twenty turns.
+    turns.append({"role": "user", "content": content or text})
 
     api = _get_client()
     tools = build_tools()
@@ -432,7 +444,15 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # Set once Benham has read anything a third party could have written. Never
     # cleared within a turn: you cannot un-read something, and a later "clean" read
     # does not undo the fact that attacker-controlled text is already in context.
-    tainted = False
+    #
+    # SEEDED FROM THE CALLER rather than from False. Some turns arrive already
+    # tainted - a guest context is born that way, and bot.py sets it when the
+    # inbound message itself carried an image, an embed or a quoted message, all of
+    # which are in context before the model has chosen anything at all. Starting at
+    # False threw that away on the first tool call, which passed with_taint(False)
+    # and handed the gate a context claiming to be clean. Two independent
+    # guarantees now: this seed, and with_taint being monotonic.
+    tainted = bool(call_ctx is not None and call_ctx.tainted)
 
     for round_no in range(MAX_TOOL_ROUNDS):
         resp = api.messages.create(
@@ -754,29 +774,23 @@ def _log_usage(log, resp, label):
     log(f"agent usage [{label}] {' '.join(parts)} model={MODEL}")
 
 
-# Types the API will accept as an image. Anything else - bmp, tiff, heic, svg - is
-# a file Benham can describe but not look at, and saying which is the difference
-# between a useful answer and "I can't see it" with no reason attached.
-_VIEWABLE_MEDIA = {"image/jpeg", "image/png", "image/gif", "image/webp"}
-_EXT_MEDIA = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-              ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
-              ".tif": "image/tiff", ".tiff": "image/tiff", ".heic": "image/heic",
-              ".svg": "image/svg+xml"}
-MAX_IMAGE_BYTES = 4 * 1024 * 1024   # per image, before base64
-MAX_IMAGES_PER_RESULT = 4           # per tool call; each one costs real tokens
+# The media table, the size ceiling and the per-call image budget live in
+# msgparts now, shared with the inbound path that inlines images off the message
+# itself. Same numbers as before; one place to change them, and one answer to
+# "can Benham look at a .heic" whichever direction the file arrived from.
+_VIEWABLE_MEDIA = msgparts.VIEWABLE_MEDIA
+MAX_IMAGE_BYTES = msgparts.MAX_IMAGE_BYTES
+MAX_IMAGES_PER_RESULT = msgparts.MAX_IMAGES
 
 
 def _media_type(rec):
-    """The attachment's media type, falling back to its extension.
+    """The media type of one read_attachments record.
 
-    Discord usually reports one, but not always - and a png that arrives typed as
-    application/octet-stream is still a png. Guessing from the extension here is
-    safe because the only decision it feeds is whether to try showing the file.
+    A thin adapter and nothing more: read_attachments returns dicts, the inbound
+    path has attachment objects, and msgparts.media_type takes the two fields
+    both of them have.
     """
-    media = (rec.get("content_type") or "").split(";")[0].strip().lower()
-    if media and media != "application/octet-stream":
-        return media
-    return _EXT_MEDIA.get(os.path.splitext((rec.get("filename") or "").lower())[1], media)
+    return msgparts.media_type(rec.get("content_type"), rec.get("filename"))
 
 
 def _image_blocks(result):
@@ -821,12 +835,11 @@ def _image_blocks(result):
                                f"{MAX_IMAGE_BYTES // 1048576}MB limit for viewing")
                 continue
             with open(path, "rb") as fh:
-                data = base64.standard_b64encode(fh.read()).decode("ascii")
+                data = fh.read()
         except OSError as e:
             skipped.append(f"{name}: {e}")
             continue
-        blocks.append({"type": "image",
-                       "source": {"type": "base64", "media_type": media, "data": data}})
+        blocks.append(msgparts.block(media, data))
     return blocks, skipped
 
 
