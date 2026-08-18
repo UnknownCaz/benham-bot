@@ -394,10 +394,11 @@ suite" cost him SIX approvals - four of them probing for a Python. So:
 - `py -3` and `py -3.x` resolve to a Windows Store Python with NOTHING installed.
   Never reach for them; a ModuleNotFoundError from one means the launcher, not a
   missing dependency.
-- **pytest is not installed.** benham-bot's tests are standalone scripts:
-  `python tests/test_policy.py`, one file at a time. Running the lot is a shell
-  loop over `tests/test_*.py`, and `python scripts/gen_readme.py --check` verifies
-  the README's generated blocks.
+- **pytest is not installed.** benham-bot's tests are standalone scripts.
+  `python run_tests.py` runs the whole suite with one command and one exit code
+  (one approval instead of a loop's worth); `python run_tests.py policy` narrows
+  to matching files, and `python scripts/gen_readme.py --check` verifies the
+  README's generated blocks.
 - If you do not know something about this machine, READ for it (Read/Glob/Grep are
   free) or say you do not know. Do not run a command to find out - that is the one
   case where the shell costs him something and returns nothing he asked for.
