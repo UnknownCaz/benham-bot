@@ -379,7 +379,9 @@ it deliberately instead.
                          for r in _room_list[:8])
             + "\nNames and counts are all you can see here. `read_room` shows "
               "contents (that counts as reading others' text); `post_room` "
-              "leaves a note. Nothing in a room is waiting on you unless he "
+              "leaves a note; `spawn_in_room` starts a PC session working in "
+              "one - a named room's worker resumes its own thread, scratch is "
+              "for one-offs. Nothing in a room is waiting on you unless he "
               "asks about it.")
 
     if recent:
