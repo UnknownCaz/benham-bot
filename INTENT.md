@@ -844,6 +844,38 @@ participant before the build, not after it.
 Open defects observed live, queued for another session to pick up. Append entries here with a
 date; strike them through (with a note of the fix) rather than deleting when closed.
 
+### 2026-08-18 — images are single-turn, found by the human test that passed
+
+**The feature works.** Doom was asked to test the image support that shipped at 05:05Z and did it
+within twenty seconds. Benham described a victory screen correctly and then read the numbers
+straight off the JPEG — *"Vehicles: 115 killed, 9 lost = 12.78:1. Infantry: 119 killed, 93 lost =
+1.28:1"* — which is OCR plus arithmetic on an image a guest sent. That is the thing that was
+impossible two days ago.
+
+**The defect: an image is visible only on the message it is attached to.** Thirty seconds later he
+asked a follow-up about the same picture and got *"I can't see the image anymore - it's visible
+when you send it, but I lose it after."* He re-sent the identical file (`2026084.JPG`) **three
+times** — 05:47:27, 05:48:14, 06:02:46 — to keep asking about it.
+
+The mechanism is not a mystery and is stated in the injected note itself: *"I was shown X on this
+message and looked at them then. They are NOT in this history."* Images are inlined per-turn and
+never enter conversation memory, so every follow-up needs the file again.
+
+**Why this matters more than it looks.** The ORIGINAL bug was that Doom re-sent an image for
+nothing because Benham promised it could see it. The fix removed the false promise and made the
+first look real — and then reproduced the re-sending, for a different reason, in the first thirty
+seconds of use. Nobody had asked what happens on turn two.
+
+**Expected behavior, for whoever picks this up:** a follow-up question about an image already sent
+in the conversation should work without re-sending. Costs are the whole question — re-inlining an
+image on every subsequent turn would multiply token spend against the guest caps, so this is
+probably a bounded window (keep the last N images, or the last one) rather than full retention.
+That trade is Tyler's, not the implementer's.
+
+**Minor, same incident:** at 06:02:50 Benham said *"Ah, I can see the actual numbers now. Let me
+recalculate"* and then produced the identical figures it had already given. Nothing changed, so
+there was nothing to recalculate — a small instance of narrating a correction that did not happen.
+
 ### 2026-08-17 — two bugs from the DOSSIER.md send attempts
 
 **Bug 1 — Benham narrated dm_user confirmations it never issued.** Across one conversation,
