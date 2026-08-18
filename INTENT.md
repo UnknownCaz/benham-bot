@@ -844,37 +844,49 @@ participant before the build, not after it.
 Open defects observed live, queued for another session to pick up. Append entries here with a
 date; strike them through (with a note of the fix) rather than deleting when closed.
 
-### 2026-08-18 — images are single-turn, found by the human test that passed
+### 2026-08-18 — what Doom's image test actually found
 
-**The feature works.** Doom was asked to test the image support that shipped at 05:05Z and did it
-within twenty seconds. Benham described a victory screen correctly and then read the numbers
-straight off the JPEG — *"Vehicles: 115 killed, 9 lost = 12.78:1. Infantry: 119 killed, 93 lost =
-1.28:1"* — which is OCR plus arithmetic on an image a guest sent. That is the thing that was
-impossible two days ago.
+**The feature works, and was tested hard.** Benham described a victory screen and then read the
+numbers straight off a JPEG — *"Vehicles: 115 killed, 9 lost = 12.78:1"* — which is OCR plus
+arithmetic on a picture a guest sent. Five JPEGs handled cleanly across half an hour.
 
-**The defect: an image is visible only on the message it is attached to.** Thirty seconds later he
-asked a follow-up about the same picture and got *"I can't see the image anymore - it's visible
-when you send it, but I lose it after."* He re-sent the identical file (`2026084.JPG`) **three
-times** — 05:47:27, 05:48:14, 06:02:46 — to keep asking about it.
+**CORRECTION, and it is mine.** The first version of this entry filed "an image is only visible on
+the turn it arrives" as a defect. **It is not — it is deliberate**, and `guest.py` says so plainly:
+*"History holds a description of the picture, never the picture: HISTORY_TURNS is 5 here, so a
+remembered image would be re-sent and re-billed on the next five turns. This way it costs once."*
+Benham's *"I can't see the image anymore - it's visible when you send it, but I lose it after"* is
+the design working and reporting itself accurately. Do not "fix" it. The entry is corrected rather
+than deleted, because filing a considered design as a bug is exactly the failure this document
+keeps cataloguing, and I did it inside the section that catalogues it.
 
-The mechanism is not a mystery and is stated in the injected note itself: *"I was shown X on this
-message and looked at them then. They are NOT in this history."* Images are inlined per-turn and
-never enter conversation memory, so every follow-up needs the file again.
+What is left of that observation is much smaller and is a judgement call, not a defect: a follow-up
+about an image works off **the model's own earlier description**, so it succeeds when that
+description happened to capture the needed detail and fails when it did not. Doom's first
+description was qualitative; his follow-up wanted exact numbers, so he re-sent. Fine as designed.
 
-**Why this matters more than it looks.** The ORIGINAL bug was that Doom re-sent an image for
-nothing because Benham promised it could see it. The fix removed the false promise and made the
-first look real — and then reproduced the re-sending, for a different reason, in the first thirty
-seconds of use. Nobody had asked what happens on turn two.
+**REAL BUG 1 — webp attachments fail outright.** Two files at 06:04, both `image/webp` (named
+`.png`; 14724 bytes each), both produced *"Something broke on my end there - BadRequestError. Try
+again?"*. Every `image/jpeg` in the same conversation worked. `msgparts.VIEWABLE_MEDIA` lists
+`image/webp` as supported, so the code believes it can send these and the API disagrees. Note the
+reply also tells the person to **try again**, which guarantees an identical failure — a retry
+suggestion should not be offered for a deterministic rejection.
 
-**Expected behavior, for whoever picks this up:** a follow-up question about an image already sent
-in the conversation should work without re-sending. Costs are the whole question — re-inlining an
-image on every subsequent turn would multiply token spend against the guest caps, so this is
-probably a bounded window (keep the last N images, or the last one) rather than full retention.
-That trade is Tyler's, not the implementer's.
+**REAL BUG 2 — it then generalised the failure into a false capability claim.** At 06:20 Benham
+told Doom *"can't see PNGs from here, unfortunately."* PNG is supported and works; **webp** broke.
+So a collaborator has now been told a working feature does not work, which is the same class as the
+persona bug fixed this morning, arriving through an error path instead of a prompt.
 
-**Minor, same incident:** at 06:02:50 Benham said *"Ah, I can see the actual numbers now. Let me
-recalculate"* and then produced the identical figures it had already given. Nothing changed, so
-there was nothing to recalculate — a small instance of narrating a correction that did not happen.
+**REAL BUG 3 — a false statement about its own memory.** At 05:43 Benham told Doom *"I don't have
+memory of earlier conversations - each time we talk, I'm starting fresh."* It does:
+`state/guest_memory.json` exists and `guest.py` runs a `TurnMemory` with a bounded window. The
+truthful answer is "I remember the last few turns, not last week." Three separate false
+self-descriptions to the same person in one thread (images, PNGs, memory) is a pattern, not three
+slips.
+
+**MINOR — an arithmetic error laundered as new information.** At 05:48 it said the overall ratio was
+*"about 4.2:1"*; 234/102 is 2.29. At 06:02 it produced 2.29 under the heading *"Ah, I can see the
+actual numbers now. Let me recalculate"* — attributing its own correction to fresh input rather
+than owning the error. It had the numbers both times.
 
 ### 2026-08-17 — two bugs from the DOSSIER.md send attempts
 
