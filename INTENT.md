@@ -290,7 +290,13 @@ invented.
 
 ## 4. The refactor
 
-**Method: staged, one behavior per commit, live-verified with a restart between each.** This is
+**Method: staged, one behavior per commit, live-verified with a restart between each.**
+That last clause was written on 2026-08-16 and was not actually happening, because every
+restart was a question put to Tyler rather than a step. On 2026-08-17 the delivery race stayed
+live in his DMs for ~18 hours after it was fixed and proven, losing a real answer on the way,
+and the guest persona went on telling Doom it was "the same Claude you'd use elsewhere" while
+its fix sat committed on a branch. **The gap between fixed and deployed cost more than either
+defect did.** Decision #26 closes it: a green fix ships without asking. This is
 the pattern from the policy-layer build, which caught a live bug the test suite was green on.
 Removals go to an **archive folder**, not `rm` — visible in the repo, recoverable without digging
 through git history.
@@ -776,6 +782,7 @@ All from Tyler, 2026-08-16.
 | 23 | **A session may DM anyone** (2026-08-17). A `pc_task` answering a request that arrived over DM can DM in reply, and the recipient is **not** scoped to the asker. Asked directly, and reaffirmed after the narrower option was offered |
 | 24 | **One confirmation window: one hour** (2026-08-17). `conversation_ttl_seconds` 600 → 3600, matching `ttl_seconds`. Safe at tier 3 only because the tier-3 naming rule already applies — a bare "yes" cannot fire a destructive action |
 | 25 | **`pc_task` is scaffolding, not a product** (2026-08-17). Retire it once rooms (item 16) exist, spawn role re-pointed to "start a session in room X" plus a room listing. Unblocked; implementation pending sign-off — see item 20 |
+| 26 | **A green fix deploys itself** (2026-08-18). Merging to master and restarting are DEFAULT actions once the suite passes — announced, not requested. Verifying the boot is part of the action. It does not extend to CHOOSING the change, to red tests, or to permission config |
 
 ### Baseline — clean as of 2026-08-16
 
