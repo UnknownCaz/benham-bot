@@ -1546,6 +1546,17 @@ async def on_message(message):
                         message.author.id, message.channel.id))
             await live.finish(f"_done in {time.monotonic() - started:.0f}s_")
             answer = (result or {}).get("result") or "(the session returned nothing)"
+            # The record, not the session's word for it. Facts ride the result
+            # now (INTENT §7 Bug 2); the surface shows them so "did it actually
+            # send?" is answered before it is asked. Deliberately short - the
+            # full entries are in the tool result and the log.
+            acts = (result or {}).get("cli_actions") or []
+            if acts:
+                shown = ", ".join(f"`{a['action']}` @ {a['ts'][11:19]}Z"
+                                  for a in acts[:4])
+                more = f" (+{len(acts) - 4} more)" if len(acts) > 4 else ""
+                answer += f"\n\n**on the record:** {shown}{more}"
+            sess = (result or {}).get("session") or {}
             # An embed when it fits: title says which task this answers (a long
             # session can outlive several other messages), footer says what it
             # cost in wall-clock. Past embed limits, plain chunked text - the
@@ -1555,7 +1566,16 @@ async def on_message(message):
             # is FOR without Tyler having to reconstruct it.
             if len(answer) <= 4096:
                 emb = discord.Embed(title=label[:256], description=answer)
-                emb.set_footer(text=f"done in {time.monotonic() - started:.0f}s")
+                foot = f"done in {time.monotonic() - started:.0f}s"
+                if sess.get("cost_usd"):
+                    foot += f" · ${sess['cost_usd']:.2f}"
+                if sess.get("asks"):
+                    foot += f" · {sess['asks']} approval" + \
+                            ("s" if sess["asks"] != 1 else "")
+                if sess.get("id"):
+                    # The resume handle, and the rooms wake key (INTENT 20.6).
+                    foot += f" · session {str(sess['id'])[:8]}"
+                emb.set_footer(text=foot)
                 await message.channel.send(embed=emb, reference=message,
                                            mention_author=False)
             else:
