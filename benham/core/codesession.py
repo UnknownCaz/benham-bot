@@ -61,6 +61,78 @@ READ_ONLY_TOOLS = {
     "TodoWrite", "BashOutput", "ListMcpResourcesTool", "ReadMcpResourceTool",
 }
 
+# --------------------------------------------------------------------------
+# The bash command policy for spawned sessions - Tyler's answer, 2026-08-18,
+# to "should these sessions be able to message Doom?": may, VISIBLY, through
+# bounded shapes. Three classes, decided by _classify_bash:
+#
+#   denied     the raw send commands (dm / send / do dm_user / do send_message).
+#              Tyler denied these in his workspace settings on 2026-08-18, but a
+#              spawned session runs in Benhams-inbox - a different project root
+#              that never loads that file - so the wall has to live HERE, where
+#              every spawned session actually passes. Checked FIRST, greedily,
+#              on the raw string: a send smuggled into a compound command is
+#              still a send. A deny never asks - approval fatigue is how the
+#              2026-08-15 chain got approved.
+#
+#   read_only  the CLI reads a session needs reflexively (rooms, room read,
+#              conv list/show, status, ask --queue). These cost an approval
+#              today for no security - the same commands are allowlisted for
+#              keyboard sessions - and the rooms pointer tells every worker to
+#              read its room, which must not bill Tyler a tap per spawn. The
+#              match is STRICT: the whole command, no shell metacharacters, or
+#              it falls through to ask. Unnecessary question beats unreviewed
+#              write, same as the tool-class list below.
+#
+#   ask        everything else - unchanged, the existing DM approval flow.
+#              outreach, room post, conv close all stay here on purpose: one
+#              visible tap is the price of reaching a person or mutating state,
+#              and the prompt carries the why.
+# --------------------------------------------------------------------------
+
+_DENIED_SENDS = re.compile(
+    r"benham\.py\s+(?:dm|send)\b|benham\.py\s+do\s+(?:dm_user|send_message)\b")
+
+# Any of these anywhere in a command disqualifies the read-only fast path:
+# chaining, pipes, redirects, substitution, newlines. The command must BE the
+# read, not merely contain one.
+_SHELL_META = re.compile(r"[&|;<>`$\r\n]")
+
+_READ_ONLY_CMD = re.compile(
+    r"^\s*python\s+\S*benham\.py\s+"
+    r"(?:rooms\b|room\s+read\s+\S+|conv\s+(?:list|show)\b|status\b|"
+    r"ask\s+--queue\s*$)")
+
+
+def _classify_bash(command):
+    """'denied' | 'read_only' | 'ask' for one shell command. Pure, so the tests
+    can hold the whole matrix against it without touching the ask machinery.
+
+    Deny is greedy and first; allow is strict and last; everything unrecognised
+    asks, which is the fail-safe this module already promised for tools.
+    """
+    cmd = str(command or "")
+    if _DENIED_SENDS.search(cmd):
+        return "denied"
+    if _SHELL_META.search(cmd):
+        return "ask"
+    if _READ_ONLY_CMD.match(cmd):
+        return "read_only"
+    return "ask"
+
+
+_DENY_SEND_MESSAGE = (
+    "That command sends a Discord message with an unbounded recipient and "
+    "unbounded words, and sessions never get it - Tyler denied the raw send "
+    "paths on 2026-08-18. Do not look for another route to the same effect. "
+    "The bounded paths exist and are the right tool: "
+    "`benham.py outreach <collaborator> \"question\"` opens a tracked ask "
+    "(Tyler approves it, delivery and nudges are handled for you), and "
+    "`benham.py do tell_conversation id=<id> outcome=\"...\" tell=true` "
+    "delivers an outcome on a conversation that already exists. If the task "
+    "genuinely needs a raw DM, say so in your report and stop.")
+
+
 # Credential-shaped paths. Not a block - Tyler chose full access - purely so a
 # read of one is greppable in the log afterwards.
 _SECRET_RE = re.compile(
@@ -246,6 +318,20 @@ async def _can_use_tool(tool_name, tool_input, context):
                      "investigation. Do not look for another way to do it. Read, "
                      "Glob and Grep are available; if something cannot be settled "
                      "without writing or running, say so and stop."))
+
+    # The command policy, AFTER the triage wall above on purpose: a read-only
+    # investigation keeps its Read/Glob/Grep-only contract, and the pointed
+    # deny below is for full sessions, where the generic refusal would not say
+    # which door to use instead.
+    if tool_name == "Bash":
+        cmd = str((tool_input or {}).get("command", ""))
+        verdict = _classify_bash(cmd)
+        if verdict == "denied":
+            log(f"PC-DENIED-SEND (no ask): {cmd[:200]}")
+            return PermissionResultDeny(message=_DENY_SEND_MESSAGE)
+        if verdict == "read_only":
+            log(f"PC-AUTO-ALLOW read-only CLI: {cmd[:200]}")
+            return PermissionResultAllow()
 
     if _ask_owner is None:
         return PermissionResultDeny(message="No owner channel is available to approve this.")

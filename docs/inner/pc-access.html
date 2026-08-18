@@ -33,6 +33,8 @@
     <table>
       <tr><th>tool class</th><th>behaviour</th></tr>
       <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code>, <code>WebFetch</code>, <code>WebSearch</code>, <code>TodoWrite</code>, …</td><td>runs immediately</td></tr>
+      <tr><td>the read-only benham CLI as a whole command — <code>rooms</code>, <code>room read</code>, <code>conv list/show</code>, <code>status</code>, <code>ask --queue</code> (no shell operators)</td><td>runs immediately (2026-08-18 — your workspace allowlist does not reach Benhams-inbox sessions, so the gate carries it)</td></tr>
+      <tr><td>the raw send commands — <code>dm</code>, <code>send</code>, <code>do dm_user</code>, <code>do send_message</code>, anywhere in the command</td><td><strong>refused outright, never asked</strong> — the bounded paths are <code>outreach</code> (one approval, tracked) and <code>tell_conversation</code> (outcome on an existing loop)</td></tr>
       <tr><td>anything else — writes, edits, shell commands, subagents</td><td>DMs you the <strong>full command</strong> (up to 1200 chars) and <strong>blocks</strong> until you answer</td></tr>
       <tr><td>no answer within <code>permission_timeout_seconds</code> (300)</td><td><strong>denied</strong> — the session is told no and stops</td></tr>
     </table>
