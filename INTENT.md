@@ -635,3 +635,54 @@ Every answer moved the design in the same direction: **less than was planned.** 
 two, and a backlog view was cancelled. The one person the feature exists for wanted a smaller
 feature than either its owner or its builder had specified — which is an argument for asking the
 participant before the build, not after it.
+
+---
+
+## 7. Known bugs
+
+Open defects observed live, queued for another session to pick up. Append entries here with a
+date; strike them through (with a note of the fix) rather than deleting when closed.
+
+### 2026-08-17 — two bugs from the DOSSIER.md send attempts
+
+**Bug 1 — Benham narrated dm_user confirmations it never issued.** Across one conversation,
+Benham described "preview" confirmations for `dm_user` (sending `DOSSIER.md` and
+`convo-personal-dossier-takeout-talkback.md` to Tyler) multiple times — "here's a preview,
+confirm to send" — but **never actually called the `dm_user` tool**. No tool call occurred in any
+of those turns; the pending confirmation it kept describing did not exist. This is §3.3 again
+("claims things it didn't do") and the same shape as item 19's `answer: None` incident: a
+confident claim with nothing checking it.
+**Expected behavior:** every claim of "here's a preview, confirm to send" must correspond to an
+actual tool invocation in that same turn. Benham must never describe a tool result — including a
+pending-confirmation state — without the tool having been called.
+
+**Bug 2 — RESOLVED AS NOT-A-BUG (Tyler, 2026-08-17). One real defect survives inside it.**
+
+The original entry said a `pc_task` "bypassed dm_user and unilaterally sent a file", and that
+file-sending must always route through Benham's confirm path. **Asked directly, Tyler's call was
+that this is correct and expected behaviour:** *"the session 'responding' to the DM should be able
+to DM the asker, or at least get benham to do it."* A session answering a request that arrived
+over DM should be able to answer it over DM. **Do not "fix" this.**
+
+Two things the original entry had wrong on the facts, both checkable in `logs/supervise.log`:
+
+- **An approval WAS shown.** The pc_task PowerShell prompt at 22:22:59 carried the whole command,
+  including the file path and the recipient id, and Tyler approved it. What it did not pass
+  through is Benham's *own* `dm_user` confirmation — `benham.py do dm_user` runs at `LOCAL_CLI`
+  origin, which is untainted, so the `outward_tainted` rule never applies.
+- **The send is not unlogged.** `[2026-08-17 22:23:10Z] action dm_user by code-session` records it
+  with a real Discord message id.
+
+**What IS still a defect — part 2 of the original entry, and it stands.** Benham told Tyler *"I
+can't independently verify it, I'm relying on the session's own self-report."* That was false. The
+send was in **Benham's own action log** as `message_id 1539036895810555964`, and `what_i_did`
+exists precisely to read it (decision #14). It held the evidence and reached for the disclaimer
+instead. The mechanism underneath: **a pc_task returns prose, not facts.** The result arrives as a
+narration string, so nothing structured ever says "this action fired, here is its id" — which
+leaves Benham inferring from a session's say-so when its own record would settle it. That is the
+thing to fix, and it is the same family as §3.3: asked about something it cannot see, it produces
+a plausible account instead of looking.
+
+**Still open, and narrower than the original framing.** Tyler's sentence says "DM *the asker*".
+The mechanism today can DM *anyone*. Whether to scope it to the requesting party is undecided and
+is his call, not a bug to be closed unilaterally.
