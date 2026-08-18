@@ -871,24 +871,36 @@ about an image works off **the model's own earlier description**, so it succeeds
 description happened to capture the needed detail and fails when it did not. Doom's first
 description was qualitative; his follow-up wanted exact numbers, so he re-sent. Fine as designed.
 
-**REAL BUG 1 — webp attachments fail outright.** Two files at 06:04, both `image/webp` (named
-`.png`; 14724 bytes each), both produced *"Something broke on my end there - BadRequestError. Try
-again?"*. Every `image/jpeg` in the same conversation worked. `msgparts.VIEWABLE_MEDIA` lists
-`image/webp` as supported, so the code believes it can send these and the API disagrees. Note the
-reply also tells the person to **try again**, which guarantees an identical failure — a retry
-suggestion should not be offered for a deterministic rejection.
+~~**REAL BUG 1 — webp attachments fail outright.**~~ **FIXED in `00ef156` (2026-08-18), verified
+live the same morning.** The cause was subtler than the entry guessed: Discord reported
+`image/webp` for a file *named* `.png`, `media_type()` trusted the declared string, and the API
+was handed a type that did not match the bytes. `msgparts.sniff()` now re-derives the type from
+the magic bytes — the declared type only decides whether to download — and bytes that are not a
+picture are named rather than sent as a guess. The "Try again?" advice on a deterministic
+rejection went with it: the error reply now says what is known and that the message was refunded.
+**Verified against Doom's actual bytes, not just the synthetic case** (c15): `Alex_s_legion.png`,
+byte-for-byte the file that threw BadRequestError twice at 06:04, was read and described at 06:37.
+Original entry, for the record: two files at 06:04, both `image/webp` named `.png`, both produced
+*"Something broke on my end there - BadRequestError. Try again?"* while every JPEG worked.
 
-**REAL BUG 2 — it then generalised the failure into a false capability claim.** At 06:20 Benham
-told Doom *"can't see PNGs from here, unfortunately."* PNG is supported and works; **webp** broke.
-So a collaborator has now been told a working feature does not work, which is the same class as the
-persona bug fixed this morning, arriving through an error path instead of a prompt.
+~~**REAL BUG 2 — it then generalised the failure into a false capability claim.**~~ **FIXED in the
+same commit, verified in c14/c16.** At 06:20 Benham had told Doom *"can't see PNGs from here,
+unfortunately"* — PNG worked; webp broke. The guest persona now forbids widening one file's
+failure into a format or feature claim and quotes the sentence that was said. The closing message
+to Doom owned it in words (*"I shouldn't have turned one broken file into a claim about a whole
+format"*), and c16's re-test got the corrected capability claim in the same breath as the
+identity frame.
 
-**REAL BUG 3 — a false statement about its own memory.** At 05:43 Benham told Doom *"I don't have
-memory of earlier conversations - each time we talk, I'm starting fresh."* It does:
-`state/guest_memory.json` exists and `guest.py` runs a `TurnMemory` with a bounded window. The
-truthful answer is "I remember the last few turns, not last week." Three separate false
-self-descriptions to the same person in one thread (images, PNGs, memory) is a pattern, not three
-slips.
+~~**REAL BUG 3 — a false statement about its own memory.**~~ **FIXED in the same commit; the
+corrected shape observed live at 06:52 the same morning.** At 05:43 it had told Doom *"I don't
+have memory of earlier conversations - each time we talk, I'm starting fresh"* — false;
+`state/guest_memory.json` exists and `guest.py` runs a bounded `TurnMemory`. The persona now
+states the truth (the last few turns, not last week) and marks the denial as false so it cannot
+be reached for. Live at 06:52:50, asked about names from far outside the window, it answered
+*"that one's scrolled off. Can you recap?"* — the bounded truth instead of the blanket denial.
+Three false self-descriptions to one person in one thread was the pattern; all three doors are
+now closed, and the pattern note stays because §3.3 predicts a fourth through whichever store
+gets built next.
 
 **MINOR — an arithmetic error laundered as new information.** At 05:48 it said the overall ratio was
 *"about 4.2:1"*; 234/102 is 2.29. At 06:02 it produced 2.29 under the heading *"Ah, I can see the
@@ -947,15 +959,19 @@ Two things the original entry had wrong on the facts, both checkable in `logs/su
 - **The send is not unlogged.** `[2026-08-17 22:23:10Z] action dm_user by code-session` records it
   with a real Discord message id.
 
-**What IS still a defect — part 2 of the original entry, and it stands.** Benham told Tyler *"I
-can't independently verify it, I'm relying on the session's own self-report."* That was false. The
-send was in **Benham's own action log** as `message_id 1539036895810555964`, and `what_i_did`
-exists precisely to read it (decision #14). It held the evidence and reached for the disclaimer
-instead. The mechanism underneath: **a pc_task returns prose, not facts.** The result arrives as a
-narration string, so nothing structured ever says "this action fired, here is its id" — which
-leaves Benham inferring from a session's say-so when its own record would settle it. That is the
-thing to fix, and it is the same family as §3.3: asked about something it cannot see, it produces
-a plausible account instead of looking.
+~~**What IS still a defect — part 2 of the original entry, and it stands.**~~ **FIXED 2026-08-18
+(`pc: a task returns facts`).** The defect: Benham told Tyler *"I can't independently verify it,
+I'm relying on the session's own self-report"* while the send sat in **its own action log** as
+`message_id 1539036895810555964`. The mechanism was that **a pc_task returned prose, not facts** —
+nothing structured ever said "this action fired, here is its id". Now `run_task` returns facts
+(session id, cost, error state, approval count, the started/ended window) and `_pc_task` holds
+that window against the action log: the result carries `cli_actions` — what verifiably fired
+through the CLI during the task, with ids — in a separate field from the session's own words, and
+the `pc..` surface prints it under the answer. Deliberately **not** another wording check (the
+board's warning held): no prose is matched; the true account is co-delivered so the false sentence
+stops being load-bearing. The session id doubles as rooms step one — `resume` takes exactly it
+(item 20.6). Residual honesty: the model can still *ignore* facts in front of it; what changed is
+that "I can't check" is now false on arrival, not just checkable on request.
 
 **Still open, and narrower than the original framing.** Tyler's sentence says "DM *the asker*".
 The mechanism today can DM *anyone*. Whether to scope it to the requesting party is undecided and

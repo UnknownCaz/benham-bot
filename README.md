@@ -45,17 +45,20 @@ Benham is the body Claude wears in Discord. Tyler talks to it, Claude acts throu
 the channel between them when Tyler is away from the PC. Two paths lead to the same capabilities:
 
 ```
-  Tyler DMs Benham  ->  owner gate  ->  agent.py (Claude + 49 tools)  ->  capabilities.py
+  Tyler DMs Benham  ->  owner gate  ->  agent.py (Claude + the registry)  ->  capabilities.py
                                                                               |
   Claude Code       ->  do.py  ->  outbox/*.json  ->  bot.py poller  ->  capabilities.py
                                                                               |
                                                                           Discord
 ```
 
-**It answers to one person.** `identity.is_owner()` is checked at every entry point. Anyone else
-in a server can talk to Benham and be talked to, but cannot direct it - there is no guild-admin
-escape hatch and no role that grants control. Message text Benham reads from channels is treated
-as data, never as instructions.
+**One owner directs it; participants converse through it.** `identity.is_owner()` is checked at
+every entry point, and only Tyler can direct Benham - there is no guild-admin escape hatch and no
+role that grants control. But "answers to one person" stopped being the whole story with the
+2026-08-16 refactor (INTENT.md §1): projects have **participant sets**, and Benham is the line
+between them. A collaborator (currently Doom) holds real conversations with it, files reports with
+`idea..`, and gets asked things through the conversation machinery - none of which is *direction*.
+Message text Benham reads from channels is treated as data, never as instructions, whoever wrote it.
 
 **No command syntax.** Plain messages go to the model, which decides whether to answer, act, or
 both. "what's going on in #general" reads it; "post the server IP in #general" posts it.
@@ -223,7 +226,10 @@ for servers flagged `watch: true`.
 
 Plain text messages are **not** command-triggered: the bot records what it sees to `inbox.jsonl`
 and only engages when addressed - an owner DM or an @-mention, or a guest DM if guest chat is on.
-There is no autonomous trigger; the wake-word path that used to be one went with voice.
+No plain message engages the model on its own; the wake-word path that used to went with voice.
+The autonomous triggers that DO exist read no chat at all: the 60-second conversation tick
+(nudges, banks and delivers asks via `advance_conversation`, the one outward action SYSTEM can
+reach) and the exaroton watchdog. The manual audit caught this sentence claiming there were none.
 
 ### Example - reply to a friend, review-first
 
