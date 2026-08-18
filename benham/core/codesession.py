@@ -90,6 +90,15 @@ READ_ONLY_TOOLS = {
 #              and the prompt carries the why.
 # --------------------------------------------------------------------------
 
+# Both shell tools, because the FIRST live test of this gate failed: the gate
+# checked tool_name == "Bash", and a Windows session shells out through the
+# PowerShell tool - so the denied dm sailed through the ASK path with a polite
+# description ("Send test DM expected to be refused by policy") and got
+# approved. The classifier was never consulted at all. Same lesson as every
+# entry in INTENT §7: the wall you built is not the wall that runs until
+# something hits it for real.
+_SHELL_TOOLS = ("Bash", "PowerShell")
+
 _DENIED_SENDS = re.compile(
     r"benham\.py\s+(?:dm|send)\b|benham\.py\s+do\s+(?:dm_user|send_message)\b")
 
@@ -322,8 +331,9 @@ async def _can_use_tool(tool_name, tool_input, context):
     # The command policy, AFTER the triage wall above on purpose: a read-only
     # investigation keeps its Read/Glob/Grep-only contract, and the pointed
     # deny below is for full sessions, where the generic refusal would not say
-    # which door to use instead.
-    if tool_name == "Bash":
+    # which door to use instead. BOTH shell tools - see _SHELL_TOOLS for the
+    # live failure that made that plural.
+    if tool_name in _SHELL_TOOLS:
         cmd = str((tool_input or {}).get("command", ""))
         verdict = _classify_bash(cmd)
         if verdict == "denied":
