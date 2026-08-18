@@ -35,6 +35,7 @@ from dotenv import load_dotenv
 from benham.core import capabilities
 from benham.core import confirm
 from benham.core import identity
+from benham.core import rooms
 from benham.core import msgparts
 from benham.core import policy
 from benham.core import jsonio
@@ -362,6 +363,27 @@ it deliberately instead.
     # and pretending otherwise would be the same mistake one level up. It removes
     # the REASON: a true account of the thing he is plainly talking about is
     # available to it now instead of absent.
+    # THE ROOM LISTING - item 22's pre-answer to §3.3's standing prediction
+    # ("expect a fourth through whichever store gets built next"). Rooms is the
+    # next store, so it ships with its true account already in front of the
+    # model: names and unread counts, the two facts that cannot mislead. It is
+    # SAFE here without tainting the turn precisely because it carries no free
+    # text (item 22 records the reasoning; test_rooms pins the absence). In the
+    # volatile half because counts change between turns - same cache logic as
+    # the clock.
+    _room_list = rooms.listing("tyler")
+    if _room_list:
+        volatile += (
+            "\n\n## Rooms\n"
+            + " · ".join(f"`{r['name']}` ({r['unread']} unread)"
+                         for r in _room_list[:8])
+            + "\nNames and counts are all you can see here. `read_room` shows "
+              "contents (that counts as reading others' text); `post_room` "
+              "leaves a note; `spawn_in_room` starts a PC session working in "
+              "one - a named room's worker resumes its own thread, scratch is "
+              "for one-offs. Nothing in a room is waiting on you unless he "
+              "asks about it.")
+
     if recent:
         lines = []
         for c in recent:
