@@ -356,7 +356,15 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # Set once Benham has read anything a third party could have written. Never
     # cleared within a turn: you cannot un-read something, and a later "clean" read
     # does not undo the fact that attacker-controlled text is already in context.
-    tainted = False
+    #
+    # SEEDED FROM THE CALLER rather than from False. Some turns arrive already
+    # tainted - a guest context is born that way, and bot.py sets it when the
+    # inbound message itself carried an image, an embed or a quoted message, all of
+    # which are in context before the model has chosen anything at all. Starting at
+    # False threw that away on the first tool call, which passed with_taint(False)
+    # and handed the gate a context claiming to be clean. Two independent
+    # guarantees now: this seed, and with_taint being monotonic.
+    tainted = bool(call_ctx is not None and call_ctx.tainted)
 
     for round_no in range(MAX_TOOL_ROUNDS):
         resp = api.messages.create(
