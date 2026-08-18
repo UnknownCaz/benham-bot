@@ -515,8 +515,86 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
 
     reply = "\n\n".join(p.strip() for p in reply_parts if p and p.strip())
     reply = _verify_saved_claims(reply, log)
+    reply = _verify_confirmation_claims(reply, log)
     _remember(conversation_key, text, reply)
     return (reply or None), pending
+
+
+# A sentence claiming a confirmation is sitting in front of Tyler RIGHT NOW. Both
+# halves have to land in the SAME sentence: the thing, and the assertion that it is
+# presently there for him. Sentence-scoped because "that preview expired. Want me to
+# make another?" contains every word of a false claim, spread across two true ones.
+_CONFIRM_NOUN_RE = re.compile(
+    r"\b(?:confirmation|confirm prompt|preview|approval prompt)\b")
+_CONFIRM_HERE_RE = re.compile(
+    r"\b(?:waiting|pending|is up|it'?s up|should be up|on your end|in your dms|"
+    r"popped up|should show|shows up now|just sent|resent|sent it again)\b")
+# The same words appear in a denial, a hypothetical, or an offer. Checked last and
+# they win, because being wrong in THAT direction is noise on a true sentence, and
+# noise is how a correction gets trained into wallpaper.
+_CONFIRM_DENIED_RE = re.compile(
+    r"\b(?:expired|no longer|never|nothing|there'?s no|no confirmation|no preview|"
+    r"isn'?t|is not|wasn'?t|was not|didn'?t|did not|hasn'?t|has not|would)\b")
+
+
+def _verify_confirmation_claims(reply, log=None):
+    """Refuse to relay a confirmation prompt that was never parked.
+
+    2026-08-17, twice in one evening. Benham told Tyler "Retrying now - preview
+    should be waiting on your end" (22:21:06) and "Resent - preview should be up
+    now" (23:39:09). Neither turn called a tool: one round each, no `PROPOSED
+    dm_user` line, nothing in the action log. He waited over two hours for a button
+    that did not exist. It had even self-flagged the first one at 22:23:33 - "the
+    'previews' I described earlier were never real" - and then did it again
+    seventy-six minutes later. That is the part worth designing against: a model
+    noticing its own failure in one turn carries nothing into the next, so anything
+    that depends on it remembering is not a fix.
+
+    INTENT.md §3.3, third recurrence, and this one has a property the earlier ones
+    did not: THE HARNESS SENDS THE REAL PREVIEW ITSELF. When a call parks something,
+    bot.py renders `confirm.describe(parked)` with Approve/Deny buttons as its own
+    message, immediately after this reply. So a sentence pointing Tyler at a pending
+    confirmation is REDUNDANT when it is true, and load-bearing only when it is
+    false. There is no case in which correcting it costs him information.
+
+    That asymmetry is what makes prose-matching acceptable here, and it is worth
+    saying out loud because this file otherwise avoids it (see the module docstring
+    on why there is no intent classifier). The regex is the fuzzy half: it can
+    misjudge whether a sentence CLAIMS a pending confirmation. It cannot misjudge
+    whether one EXISTS - `confirm.current()` is the whole truth, it is checked
+    first, and a real preview short-circuits this function before any matching
+    happens. So the worst false positive appends a sentence that is true whenever it
+    fires. `_verify_saved_claims` had to lean the other way, because a false alarm
+    there brands a real save a lie; that is why it is forgiving and this is not.
+
+    What this does NOT do is make the claim impossible. A model can assert anything,
+    and believing a check on the words fixed model honesty would be the same mistake
+    one level up. It makes the false version self-correcting in the same message, so
+    the cost of the failure stops being two hours of silence.
+    """
+    if not reply:
+        return reply
+    low = reply.lower()
+    if "confirm" not in low and "preview" not in low and "approval" not in low:
+        return reply
+    # The certain half, and the cheap one. Anything parked - by this turn, or still
+    # live from an earlier one - makes the claim true enough to relay untouched.
+    if confirm.current() is not None:
+        return reply
+    claims = [s for s in re.split(r"(?<=[.!?\n])\s+", low)
+              if not s.rstrip().endswith("?")
+              and _CONFIRM_NOUN_RE.search(s)
+              and _CONFIRM_HERE_RE.search(s)
+              and not _CONFIRM_DENIED_RE.search(s)]
+    if not claims:
+        return reply
+    if log:
+        log("agent: reply claimed a pending confirmation with nothing parked - "
+            + repr(claims[0][:160]))
+    return (reply + "\n\n⚠️ Correction (automatic check): nothing is actually parked "
+            "for your confirmation right now, so there is no preview on your end and "
+            "no button to press. Disregard any claim above that one is waiting - it "
+            "was never created. Tell me to go ahead and I will run the tool for real.")
 
 
 # A downloads/ path as it would appear in a reply: "downloads/<message_id>/name.ext",
