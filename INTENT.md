@@ -656,6 +656,28 @@ confident claim with nothing checking it.
 actual tool invocation in that same turn. Benham must never describe a tool result — including a
 pending-confirmation state — without the tool having been called.
 
+**Status 2026-08-17: ADDRESSED, and deliberately not struck through.** PR #6 lands three layers -
+`agent._verify_confirmation_claims` appends a visible correction when a reply announces a
+confirmation while `confirm.current()` is empty, the prompt now states every turn whether one is
+parked, and a hard rule covers the direction the old one missed. Two exact log timestamps behind
+this entry: 22:21:06 and 23:39:09, neither with a `PROPOSED dm_user` line.
+
+It is not struck through **because the expected behavior above is stronger than what shipped, and
+saying otherwise here would be the exact defect this section is about.** The stated bar is that
+the claim can never be made without the call. What exists is a claim that corrects itself in the
+same message, plus a prompt that removes the reason to make it. A model can still say it. The
+residual hole is a paraphrase the wording match does not recognise - "check your DMs, it's there"
+has no noun to match on and sails through. Closing the entry properly needs either a check that
+does not depend on wording, or a decision that this is good enough; the second is Tyler's and has
+not been asked.
+
+Filed alongside it: §3.3 now carries the generalisation these keep pointing at - anywhere Benham
+can be asked about a store it cannot see, it will answer anyway - and the note that the
+post-turn-checker trick worked here **only** because the harness independently sends the real
+preview, so correcting the sentence could not destroy good information. That asymmetry is a
+precondition, not a licence. Bug 2's surviving half below is the same family and does **not** have
+it, which is why the same instrument will not work there.
+
 **Bug 2 — RESOLVED AS NOT-A-BUG (Tyler, 2026-08-17). One real defect survives inside it.**
 
 The original entry said a `pc_task` "bypassed dm_user and unilaterally sent a file", and that
