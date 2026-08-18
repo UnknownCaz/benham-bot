@@ -263,13 +263,17 @@ async def main():
     testing = _Guild(TESTING, "Testing Server")
     benham = bot.client.user
 
-    real = capabilities.REGISTRY["pc_task"].handler
+    # The pc.. surface routes through spawn_in_room since item 22b (pc_task's
+    # successor). The stub sits on the capability the surface actually calls -
+    # what these checks prove is the COMPOSITION of the task (fences, framing,
+    # attachment naming), which is identical through either name.
+    real = capabilities.REGISTRY["spawn_in_room"].handler
 
     async def fake_pc(ctx, p):
         ran.append(p.get("task"))
         return {"status": "completed", "result": "session answer"}
 
-    capabilities.REGISTRY["pc_task"].handler = fake_pc
+    capabilities.REGISTRY["spawn_in_room"].handler = fake_pc
     try:
         print("\nReply + typed task: instruction on top, quote fenced below as data")
         reset()
@@ -594,7 +598,7 @@ async def main():
               any("Couldn't read" in s for s in sent), False)
         check("...and does not stop the turn", len(agent_calls), 1)
     finally:
-        capabilities.REGISTRY["pc_task"].handler = real
+        capabilities.REGISTRY["spawn_in_room"].handler = real
 
     print()
     if _fails:

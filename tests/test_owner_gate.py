@@ -241,13 +241,16 @@ async def main():
     print("\nThe pc.. prefix - zero API calls is the entire point")
     reset()
     ran, agent_before = [], len(agent_calls)
-    real = capabilities.REGISTRY["pc_task"].handler
+    # spawn_in_room is what the pc.. surface calls since item 22b; the zero-API
+    # property being proven here is a property of the SURFACE, not of which
+    # spawn capability sits behind it.
+    real = capabilities.REGISTRY["spawn_in_room"].handler
 
     async def fake_pc(ctx, p):
         ran.append(p.get("task"))
         return {"status": "completed", "result": "31 .py files"}
 
-    capabilities.REGISTRY["pc_task"].handler = fake_pc
+    capabilities.REGISTRY["spawn_in_room"].handler = fake_pc
     try:
         await bot.on_message(_Message(TYLER, "pc.. count the py files"))
         check("the task reached the PC session", ran, ["count the py files"])
@@ -275,7 +278,7 @@ async def main():
         await bot.on_message(_Message(TYLER, "pc is short for personal computer"))
         check("'pc ...' without the dots is NOT the prefix", ran, [])
     finally:
-        capabilities.REGISTRY["pc_task"].handler = real
+        capabilities.REGISTRY["spawn_in_room"].handler = real
 
 
     print("\nDefence in depth — the capability refuses a stranger on its own")
