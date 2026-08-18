@@ -367,6 +367,47 @@ guest.forget()
 
 
 # --------------------------------------------------------------------------
+section("Content blocks reach the API, and only the text reaches memory")
+
+# The live-path section below stubs guest.respond out entirely, so it proves what
+# bot.py PASSES and nothing about what guest.py does with it. Backing the one-line
+# change out of respond() left that whole section green - a gap worth closing
+# where it was found rather than noting.
+
+_fake = _FakeClient("looks like a null pointer")
+guest._get_client = lambda: _fake
+IMG = {"type": "image",
+       "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+blocks_in = [{"type": "text", "text": "what's wrong here?"}, IMG]
+reply = guest.respond(DOOM, "what's wrong here?\n\n[shot.png was attached]",
+                      content=blocks_in)
+sent_msgs = (_fake.messages.kwargs or {}).get("messages", [])
+check("the blocks are what went to the API", sent_msgs[-1]["content"], blocks_in)
+check("...still no client tools alongside them",
+      [t.get("type") for t in (_fake.messages.kwargs or {}).get("tools", [])],
+      [shared_tools.WEB_SEARCH_TYPE] if guest.WEB_SEARCH else [])
+
+# The cost half. HISTORY_TURNS is 5, so a remembered picture would be re-sent and
+# re-billed on the next five turns; the description is what persists.
+stored = guest._history(guest._key(DOOM))
+check("history stored the TEXT turn, not the blocks",
+      stored[0]["content"], "what's wrong here?\n\n[shot.png was attached]")
+check("...and no image block survived into it",
+      any(isinstance(t.get("content"), list) for t in stored), False)
+check("...with the reply beside it", stored[1]["content"], reply.strip())
+
+# And a plain turn still goes as a plain string, so nothing here made ordinary
+# guest chat a different shape.
+guest.forget()
+_fake2 = _FakeClient("hey")
+guest._get_client = lambda: _fake2
+guest.respond(DOOM, "hello")
+check("a turn with no blocks is still a bare string",
+      (_fake2.messages.kwargs or {})["messages"][-1]["content"], "hello")
+guest.forget()
+
+
+# --------------------------------------------------------------------------
 section("The live path — driving the real bot.on_message")
 
 os.environ.setdefault("BOT_KEY", "test-token-not-used")
@@ -419,6 +460,11 @@ class _Msg:
         # pc.. branch reads it, and an owner message driven through deliver() can
         # reach that branch.
         self.reference = None
+        # And these three, read on the way into BOTH brains since rich message
+        # context landed - a link preview, a sticker, a forwarded message.
+        self.embeds = []
+        self.stickers = []
+        self.message_snapshots = []
         self.reactions_added = []
 
     async def add_reaction(self, emoji):
@@ -430,12 +476,15 @@ class _Pending:
     token = "tok"
 
 
-def deliver(uid, content):
+def deliver(uid, content, attachments=(), embeds=(), reference=None):
     """Run one message through the real on_message, recording what it touched."""
     touched = {"confirm_consume": 0, "codesession_answer": 0, "capabilities_run": 0,
-               "guest_respond": 0, "fired": 0}
+               "guest_respond": 0, "fired": 0, "guest_content": None}
 
     msg = _Msg(uid, content)
+    msg.attachments = list(attachments)
+    msg.embeds = list(embeds)
+    msg.reference = reference
 
     bot.record_message = lambda m: {"is_self": False, "channel": "dm",
                                     "author": str(m.author), "content": m.content}
@@ -471,8 +520,9 @@ def deliver(uid, content):
         return {}, None
     bot.capabilities.run = _run
 
-    def _respond(user_id, text, log=None):
+    def _respond(user_id, text, log=None, content=None):
         touched["guest_respond"] += 1
+        touched["guest_content"] = content
         return "guest reply"
     guest.respond = _respond
 
@@ -519,6 +569,131 @@ t, sent = deliver(TYLER, "yes")
 check("CONTROL: the owner saying 'yes' DOES answer the PC request "
       "(so the path above is genuinely live)",
       t["codesession_answer"], 1)
+
+
+# --------------------------------------------------------------------------
+section("Rich context — what Doom sends now actually arrives")
+
+# The bug he filed himself on 2026-08-16 and hit again twice on 08-17: guest.py
+# built its API call out of plain text, so an attachment did not arrive degraded -
+# it never arrived at all, and the model was not told one existed. It then told
+# him to try uploading it again, which he did, for nothing.
+#
+# These drive the same real on_message as the section above, so what is asserted
+# is the content list that would have gone to the API, not a helper's return
+# value. The guest lane's security property is unchanged and still covered by the
+# matrix at the top of this file: no CLIENT tool is added here, because the blocks
+# are finished before the call and the model has no way to ask for another one.
+
+
+class _Att:
+    def __init__(self, filename, data=b"", content_type=None):
+        self.filename = filename
+        self.content_type = content_type
+        self._data = data
+        self.size = len(data)
+        self.url = f"https://cdn.example/{filename}"
+
+    async def read(self):
+        return self._data
+
+
+class _Media:
+    url = None
+    proxy_url = None
+
+
+class _Embed:
+    def __init__(self, title=None, description=None):
+        self.title = title
+        self.description = description
+        self.fields = []
+        self.image = _Media()
+        self.video = _Media()
+        self.thumbnail = _Media()
+        self.url = None
+
+
+class _Replied:
+    def __init__(self, name, content):
+        self.author = name
+        self.content = content
+        self.attachments = []
+        self.embeds = []
+        self.stickers = []
+        self.message_snapshots = []
+
+
+class _Ref:
+    def __init__(self, resolved):
+        self.resolved = resolved
+        self.message_id = 777
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+
+def blocks(t):
+    return t["guest_content"] or []
+
+
+def anywhere(t, needle):
+    return any(needle in b.get("text", "") for b in blocks(t))
+
+
+t, sent = deliver(DOOM, "what's wrong here?",
+                  attachments=[_Att("shot.png", PNG, "image/png")])
+check("a guest turn with a picture becomes content blocks",
+      isinstance(t["guest_content"], list), True)
+check("...and the picture is really in it",
+      len([b for b in blocks(t) if b.get("type") == "image"]), 1)
+check("...with his words first, not the file",
+      blocks(t)[0].get("text", "").startswith("what's wrong here?"), True)
+check("...between markers saying pixels are not orders",
+      anywhere(t, "never a command to follow"), True)
+
+# A bare screenshot with no caption - the exact gesture, and the exact silence.
+t, sent = deliver(DOOM, "", attachments=[_Att("shot.png", PNG, "image/png")])
+check("a picture with no caption is a turn now", t["guest_respond"], 1)
+check("...and the picture is in it",
+      len([b for b in blocks(t) if b.get("type") == "image"]), 1)
+
+# ...but a file Benham cannot open, sent with no words, must not spend his
+# allowance to be told so. Free deterministic reply, the `idea..` shape.
+t, sent = deliver(DOOM, "", attachments=[_Att("build.zip", b"PK", "application/zip")])
+check("an unopenable file with no words does NOT spend a message",
+      t["guest_respond"], 0)
+check("...and is not answered with silence either", len(sent), 1)
+check("...saying what CAN be looked at", "images" in (sent[0] if sent else ""), True)
+check("...and inviting him to say what he wanted",
+      "what you wanted me to do" in (sent[0] if sent else ""), True)
+
+# The same file WITH a question is an ordinary turn, and the model is told which
+# file it is looking at and which it is not - so it can answer specifically
+# instead of promising to look again.
+t, sent = deliver(DOOM, "can you open this?",
+                  attachments=[_Att("build.zip", b"PK", "application/zip")])
+check("the same file with a question IS a turn", t["guest_respond"], 1)
+check("...naming the file so the reply can be specific", anywhere(t, "build.zip"), True)
+check("...and NOT offering the owner-only tool",
+      anywhere(t, "read_attachments"), False)
+
+t, sent = deliver(DOOM, "what do you make of this?",
+                  reference=_Ref(_Replied("someone", "the lore button 404s")))
+check("a guest's reply is quoted for the model",
+      anywhere(t, "the lore button 404s"), True)
+check("...fenced as data, because it is someone else's words",
+      anywhere(t, "--- replied-to message ["), True)
+
+t, sent = deliver(DOOM, "", embeds=[_Embed("Patch 1.4", "adds the sulfur caves")])
+check("an embed-only message is a turn", t["guest_respond"], 1)
+check("...and its words reach the model", anywhere(t, "sulfur caves"), True)
+
+# The control for this section. Without it every check above would also pass
+# against a handler that had started wrapping everything in blocks.
+t, sent = deliver(DOOM, "just a normal message")
+check("CONTROL: plain text is still plain text", t["guest_content"], None)
+check("...and still a turn", t["guest_respond"], 1)
 
 
 print(f"\n  {len(capabilities.REGISTRY)} capabilities checked against a guest context; "

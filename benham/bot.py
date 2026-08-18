@@ -1051,7 +1051,7 @@ def pc_label(typed, replied):
 async def inbound_content(message, typed, can_read_attachments=False, log=None):
     """Everything on one inbound message that the model should see.
 
-    Returns `(content, remembered, tainted)`.
+    Returns `(content, remembered, tainted, usable)`.
 
       content     the API content list for the user turn, or None when the
                   message is plain text and nothing has changed. None rather
@@ -1061,6 +1061,14 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
       remembered  the TEXT to store in history and to hand the agent as its
                   `text` argument. Never the images - see below.
       tainted     whether third-party content reached the model this turn.
+      usable      whether anything arrived that the model can actually WORK with
+                  - a picture it can see, or words it can read - as opposed to a
+                  note saying a file was sent and could not be opened. Returned
+                  rather than inferred from `content`, because inferring it is
+                  where I got it wrong first: a message carrying only a link
+                  preview has no image, and reading "no image" as "nothing
+                  usable" threw away the embed's text, which is the entire
+                  content of a forwarded announcement.
 
     Serves both DM surfaces. `can_read_attachments` is the only difference and
     it is an owner/guest split: the owner can be told the ids that
@@ -1143,7 +1151,7 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
                                      can_read=can_read_attachments))
 
     if not (quoted or images or notes):
-        return None, typed, False          # ordinary text: nothing changes
+        return None, typed, False, False   # ordinary text: nothing changes
 
     text_parts = [p for p in ([typed or None] + notes + quoted) if p]
     content = [{"type": "text", "text": "\n\n".join(text_parts)}]
@@ -1159,7 +1167,7 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
                        "and looked at them then. They are NOT in this history and "
                        "I cannot see them now - if I need to look again I have to "
                        "ask them to re-send, not describe them from memory.]")
-    return content, remembered, tainted
+    return content, remembered, tainted, bool(quoted or images)
 
 
 async def handle_guest_dm(message):
@@ -1240,11 +1248,48 @@ async def handle_guest_dm(message):
             f"({message.author.id}), {int(_quiet_until - time.time())}s left")
         return
 
-    text = strip_mention(message)
-    # A bare attachment is no longer a turn: nothing on this path can open a
-    # file now that the workspace is archived, so treating one as a message
-    # would spend a guest's quota to answer "I can't do anything with that".
-    if not text:
+    # `typed` stays separate from `text` all the way down. inbound_content returns
+    # an ENRICHED string - his words plus the file inventory plus any fenced quote
+    # - and the two guards below ask about his words alone. Reusing one name here
+    # made "did he type anything?" answer yes for a bare .zip, because the
+    # inventory line was in the string being tested.
+    typed = strip_mention(message)
+
+    # Everything the message carried besides his typed words: the picture, the
+    # message he replied to, the link preview, the forward. Built BEFORE the quota
+    # check on purpose - it decides whether there is a turn here at all, and a
+    # message with nothing Benham can use must not spend anyone's allowance.
+    #
+    # can_read_attachments=False: a guest reaches no capability, so naming
+    # read_attachments to them would advertise a tool that can only refuse. Their
+    # files are still named; only the instruction is dropped.
+    content, text, _tainted, usable = await inbound_content(
+        message, typed, can_read_attachments=False, log=log)
+    # The taint is discarded rather than plumbed, and saying why matters more than
+    # the line does: a guest context is born tainted at construction
+    # (policy.CallContext.guest_dm) whatever this returns, so there is nothing to
+    # raise - it is already at the top, and guests reach no capability anyway.
+
+    if not (typed or content):
+        return
+
+    # A bare attachment used to return here - "nothing on this path can open a
+    # file now that the workspace is archived, so treating one as a message would
+    # spend a guest's quota to answer I can't do anything with that". Half of that
+    # is now wrong: a picture IS something this path can use. The other half still
+    # holds for a .zip, so the split moved to whether anything usable arrived
+    # rather than whether he typed. A file Benham cannot open, sent with no words,
+    # gets a fixed reply and costs nothing - deterministic and free, the same
+    # shape as `idea..` filing. Silence was the bug Doom reported; spending one of
+    # his hundred messages to say "I can't open that" would be a second one.
+    if not typed and not usable:
+        await reply_in(message.channel,
+                       "I got that, but it's not something I can open - I can look "
+                       "at images (png, jpg, gif, webp) and read anything you type "
+                       "or paste. Tell me what you wanted me to do with it and "
+                       "I'll say straight out whether I can.")
+        log(f"guest sent nothing usable ({message.author.id}) - free reply, "
+            f"no message spent")
         return
 
     decision = guest.check(message.author.id, message.channel.id)
@@ -1262,7 +1307,7 @@ async def handle_guest_dm(message):
         files = []
         async with message.channel.typing():
             reply = await asyncio.to_thread(
-                guest.respond, message.author.id, text, log)
+                guest.respond, message.author.id, text, log, content)
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran
@@ -1611,7 +1656,7 @@ async def on_message(message):
     # Consequences are real and intended: outward actions need his approval and
     # pc_task is refused outright, which is INTENT's auto-triage wall working as
     # designed - he looks, then authorises the write from a fresh, clean message.
-    content, text, tainted = await inbound_content(
+    content, text, tainted, _usable = await inbound_content(
         message, text, can_read_attachments=True, log=log)
     if tainted:
         call_ctx = call_ctx.with_taint(True)
