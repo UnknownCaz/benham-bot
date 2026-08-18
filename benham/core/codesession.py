@@ -357,7 +357,7 @@ PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
 
 def _persona():
     """The shared personality, so the Benham running commands is the same character
-    as the one in DMs and voice. Appended to Claude Code's own preset prompt, which
+    as the one in DMs. Appended to Claude Code's own preset prompt, which
     keeps its tool knowledge intact and only changes who is doing the talking."""
     try:
         with open(PERSONA_FILE, "r", encoding="utf-8") as f:
