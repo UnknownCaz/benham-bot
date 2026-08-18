@@ -53,6 +53,7 @@ from benham.core import jsonio
 from benham.core import msgparts
 from benham.core import notify
 from benham.core import policy
+from benham.core import rooms
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -513,6 +514,16 @@ async def on_ready():
             log(f"presence setup failed:\n{traceback.format_exc()}")
 
     dump_channels()
+    # The one deliberate exception to "rooms are never created implicitly":
+    # SCRATCH exists so pc.. tasks always have somewhere to land (item 22b).
+    # Created here, once, logged - a known moment in code, not a typo at runtime.
+    try:
+        entry = rooms.ensure(rooms.SCRATCH,
+                             "default room - pc.. tasks land and resume here",
+                             "system")
+        log(f"room '{rooms.SCRATCH}' ready (seq {entry.get('seq', 0)})")
+    except Exception:  # noqa: BLE001 — a broken index must not block startup
+        log(f"scratch room setup failed:\n{traceback.format_exc()}")
     if not poll_outbox.is_running():
         poll_outbox.start()
     if not tick_conversations.is_running():
@@ -1455,6 +1466,13 @@ async def on_message(message):
     if is_dm and text.lower().startswith(PC_PREFIX):
         typed = text[len(PC_PREFIX):].strip()
 
+        # "pc.. continue: <task>" resumes the scratch worker with its context
+        # intact (item 22b) - stripped HERE, before reply/attachment blocks are
+        # composed around the instruction, so the framing stays intact either way.
+        continue_thread = typed.lower().startswith("continue:")
+        if continue_thread:
+            typed = typed[len("continue:"):].strip()
+
         # A reply is resolved first, and a reply that can't be read is a hard
         # stop: Tyler deliberately pointed at that message, and a session run
         # without it would confidently do the wrong work.
@@ -1538,8 +1556,17 @@ async def on_message(message):
         try:
             await live.start()
             async with message.channel.typing():
+                # Through spawn_in_room since item 22b: pc.. behaves exactly as
+                # it always has (scratch spawns FRESH per task, same as the
+                # pc_task this replaces) but every task now lands in the
+                # scratch room - a record, provenance, and a resumable id
+                # instead of a vapor trail. "pc.. continue: ..." picks the
+                # scratch thread back up with its context intact.
+                params = {"room": rooms.SCRATCH, "task": task}
+                if continue_thread:
+                    params["continue"] = True
                 result, _ = await capabilities.run(
-                    client, log, "pc_task", {"task": task},
+                    client, log, "spawn_in_room", params,
                     actor_id=message.author.id, force=True,
                     on_progress=live.add,
                     call_ctx=policy.CallContext.owner_dm(
@@ -1575,6 +1602,11 @@ async def on_message(message):
                 if sess.get("id"):
                     # The resume handle, and the rooms wake key (INTENT 20.6).
                     foot += f" · session {str(sess['id'])[:8]}"
+                if (result or {}).get("posted_seq"):
+                    room_name = (result or {}).get("room", rooms.SCRATCH)
+                    foot += f" · {room_name}#{result['posted_seq']}"
+                    if (result or {}).get("resumed"):
+                        foot += " (resumed)"
                 emb.set_footer(text=foot)
                 await message.channel.send(embed=emb, reference=message,
                                            mention_author=False)

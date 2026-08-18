@@ -302,7 +302,7 @@ async def _can_use_tool(tool_name, tool_input, context):
 # Running a task
 # --------------------------------------------------------------------------
 
-def _options():
+def _options(resume=None):
     from claude_agent_sdk import ClaudeAgentOptions
     os.makedirs(WORKDIR, exist_ok=True)
     kw = dict(
@@ -319,6 +319,13 @@ def _options():
     )
     if MODEL:
         kw["model"] = MODEL
+    # The rooms wake mechanism (INTENT 20.6): resume takes the session id a
+    # prior run handed back on ResultMessage, and the session comes back with
+    # its context intact. fork_session is deliberately NOT set - one id per
+    # room worker means the transcript IS the thread, and the id is that
+    # worker's identity across runs.
+    if resume:
+        kw["resume"] = str(resume)
 
     # Authentication. The CLI has two routes and they bill to different places:
     #
@@ -409,8 +416,13 @@ suite" cost him SIX approvals - four of them probing for a Python. So:
 """
 
 
-async def run_task(prompt, on_progress=None, read_only=False):
+async def run_task(prompt, on_progress=None, read_only=False, resume=None):
     """Run one task in a Claude Code session and return FACTS, not only prose.
+
+    `resume` continues an earlier session by id (rooms hands the worker id in);
+    None is a fresh session per task, which stays the right default - the
+    docstring warning about accumulating unrelated context was written for
+    exactly that, and rooms bounds it with the handoff rule instead.
 
     A fresh session per task, deliberately. A long-lived one would accumulate the
     context of every unrelated thing Tyler asked over days, and the Discord side
@@ -461,7 +473,7 @@ async def run_task(prompt, on_progress=None, read_only=False):
     started = datetime.now(timezone.utc).isoformat()
     _task_ctx.update(task=str(prompt), narration=None, asks=0, last_why=None)
     _read_only[0] = bool(read_only)
-    async with ClaudeSDKClient(options=_options()) as session:
+    async with ClaudeSDKClient(options=_options(resume=resume)) as session:
         await session.query(prompt)
         async for msg in session.receive_response():
             if isinstance(msg, AssistantMessage):
