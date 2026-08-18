@@ -613,8 +613,63 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     list; a **self-started** session at the keyboard *infers* its room, because nobody was there to
     tell it. Inference proposes and the session announces the result — never silent.
 
-    **THE HOW IS NOT SETTLED AND MUST BE CONFIRMED BEFORE ANY OF IT IS BUILT** — Tyler's explicit
-    condition on this decision.
+    **THE HOW — confirmed with Tyler 2026-08-17, and this is the spec to build from.**
+
+    1. **Storage: files, no daemon.** `state/rooms/<room>.jsonl` for messages, `state/rooms.json`
+       for the index. Same shape as `conversations.json`, and for the same reason — it has to
+       survive with nothing running, because the entire point is spawning into a room that already
+       has history.
+    2. **Code lives in `benham/core/rooms.py`**, inside benham-bot. This REVERSES item 16's "its own
+       project, not an extension of this one". The reason that call was made — scope creep dragging
+       the ask queue down — expired when the queue shipped, and the spawn half has to live here
+       regardless: it is a capability, it passes `policy.py`, it needs the registry and the confirm
+       path. Splitting would either duplicate the chokepoint or reach across it, which is the trade
+       §4 item 13 warns about.
+    3. **Listing is cheap: names + unread counts only** (~3 lines). That is c12's answer applied —
+       it is what a session gets at startup and what Benham shows Tyler before spawning. Reading a
+       room's actual contents is a separate, deliberate command.
+    4. **`list_rooms`** as a capability, so a room is chosen off a real list rather than typed from
+       memory. **`create_room(name, purpose)`** is explicit and never implicit — a spawn or a post
+       into a name that does not exist FAILS. A typo silently creating a ghost room is the rot this
+       repo keeps finding.
+    5. **`spawn_in_room(room, task)`** takes over `pc_task`'s spawn role. It hands the session the
+       room's unread summary, not the full history.
+    6. **Post-and-exit, plus wake — with the woken session's CONTEXT INTACT** (Tyler, 2026-08-17:
+       *"wake, i prefer it, is there anyway to wake a session that has its context already loaded"*).
+       Nothing is alive between messages, so "is that session still up?" is never a question anyone
+       has to get right — a crashed session and a thinking one are indistinguishable, and this
+       design never has to tell them apart. State lives in the file, exactly as an ask outlives the
+       session that opened it.
+
+       **The mechanism already exists on both sides and neither half needs building:**
+       - `ResultMessage.session_id` is already delivered to `codesession.run_task` — it reads
+         `is_error` and `total_cost_usd` off that same object and **throws the session id away**.
+         Capturing it is one line.
+       - `ClaudeAgentOptions.resume` takes exactly that id: *"Session ID to resume. Loads the
+         conversation history from the specified session."* `_options()` already builds
+         `ClaudeAgentOptions(**kw)`, so passing it is one more.
+       - The waker is `tick_conversations` — the 60-second loop that already makes nudges land with
+         no session running.
+
+       So: record the session id in the room on exit; pass it as `resume=` on wake. Do NOT set
+       `fork_session` — one id per room worker means the transcript IS the thread, and the id is
+       that worker's identity across wakes.
+
+       **The bound, and it is required rather than optional.** `run_task`'s docstring warns that a
+       long-lived session "would accumulate the context of every unrelated thing Tyler asked over
+       days". That reasoning was aimed at ONE session shared by ALL tasks, which is not this — a
+       room's session resumes with that room's context only. But unbounded resuming reaches the
+       same failure through a different door. So a resumed session that grows past a threshold
+       **writes a handoff summary into its room and a fresh session starts from that summary.** The
+       room is the memory; the process never has to be.
+    7. **Every room read taints the turn** (Tyler, 2026-08-17: *"add it, every room counts as
+       taint"*). `taints=True`, same as `read_channel`. Without it a room is a laundering path: a
+       session reads a stranger's message, summarises it into a room, and a second session reads it
+       clean and reaches `pc_task`. The cost is real and is paid in extra "go ahead" messages, not
+       in lost capability — Tyler hit exactly this on 2026-08-17 23:02:37 (`DENIED pc_task
+       [rule=blocked_when_tainted]`) and it cost him one extra message.
+    8. **The ask queue is left alone.** Rooms is built alongside it, shaped so the queue could fold
+       in later. Migrating a thing debugged twice this week is the scope creep item 16 warned of.
 
     Until it is, keep `pc_task` working. Do not let "it is being retired" become a reason to
     leave its live defects unfixed — chiefly that it returns **prose, not facts** (see §7, Bug 2).
