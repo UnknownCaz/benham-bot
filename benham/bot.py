@@ -1448,7 +1448,13 @@ async def on_message(message):
                 # The whole queue, so the model judges among the real candidates
                 # instead of only ever seeing the front one. Suppressed once
                 # something has already bound - that turn is finished deciding.
-                queue=(None if bound_conv else (queue if is_dm else None)))
+                queue=(None if bound_conv else (queue if is_dm else None)),
+                # And what just STOPPED waiting on him. Everything else here is
+                # live, which is why nothing told the model that c11 existed when
+                # he answered it 75 seconds after it banked - and it said it had
+                # locked the answer in, having called nothing at all.
+                recent=(conversations.recently_terminal(message.author.id)
+                        if is_dm and not bound_conv else None))
     except Exception as e:  # noqa: BLE001 — a brain failure must not kill the bot
         log(f"agent failed:\n{traceback.format_exc()}")
         await react(message, "⚠️")

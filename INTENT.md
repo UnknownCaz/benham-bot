@@ -489,6 +489,55 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     every run. Not a comment this time, and not a docstring: **a test that made a confident claim
     with nothing checking it.**
 
+19. **Two facts shared one field, and the quieter one lost** (2026-08-17). Three sessions asked
+    within 300ms. Whichever delivery job ran first stamped its batch message id onto every
+    question the message showed — correct, and load-bearing, because a reply to a numbered list
+    may answer any line of it. But `ask_message_ids` was *also* the "has this ever been delivered"
+    flag, so the other two concluded their question had already gone out and sent a **nudge** one
+    second after it appeared:
+
+    ```
+    c11  07:38:42 opened -> 07:38:43 nudged #1
+    c12  07:38:42 opened -> 07:38:43 delivered   (won the race; the control case)
+    c13  07:38:42 opened -> 07:38:45 nudged #1
+    ```
+
+    `MAX_NUDGES` is 2, so two of the three burned one on a question nobody had had time to read,
+    hit the cap early, and banked ~15 minutes ahead of schedule. Tyler also got *"still after this
+    one when you get a sec:"* about questions he had never been shown.
+
+    Delivery is its own fact now (`delivered_at`), and one batch message delivers **every**
+    question it displays — all marked, all clocks started together. Marking only the winner is the
+    same bug in a hat: an unmarked sibling keeps counting from when it was *opened*, so a bot that
+    was down at ask time would deliver three questions and nudge two of them on the next tick.
+    Second net: **nothing nudges before its deadline**, stated once in `beat_due()`. The tick loop
+    only ever advances what `due()` hands it, but `ask` fires an advance the instant a conversation
+    opens in order to deliver it, and that path trusted the caller completely.
+
+    **The settled decision — a bank is not a door slamming** (Tyler): giving up *waiting* and
+    refusing to *hear* are different things, and only the first was ever meant. `bank()` preserves
+    the question precisely because it is still a real question, so discarding a real answer to it
+    is incoherent. A banked conversation accepts an answer for ten minutes, through every binding
+    route. `ANSWERED` and `CLOSED` stay shut — those already have an answer, and quietly replacing
+    one is the silent misfiling slots exist to prevent.
+
+    **And §3.3 recurred, through a route nothing was watching.** At 08:11:52 Benham said *"Locked
+    c11 in as 'Claude should infer it'"*. It had called nothing: one round, no action in the log,
+    `answer: None` on the record. Five minutes later it summarised "all four queue items landed"
+    and listed c9, closed an hour earlier by a different session. The prompt block described only
+    **live** conversations, so when he answered a question that had banked 75 seconds before —
+    text still on his screen — the model had no true account of the thing he was talking about and
+    produced a plausible one. It is now told what recently stopped waiting on him, and told in as
+    many words never to claim a recording a tool did not return.
+
+    That is a mitigation and is not sold as more than one. What actually shrinks the failure is
+    making the honest path the working one: the answer he gave 75 seconds late would now *land*,
+    so "I recorded that" becomes true rather than merely sayable. c11's real answer was recovered
+    from the source Discord message and is collectable again.
+
+    **The pattern, one more costume.** Not a comment, a docstring, a manual page or a test this
+    time — a **field** making a confident claim, with nothing checking that it was entitled to.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
@@ -525,6 +574,7 @@ All from Tyler, 2026-08-16.
 | 19 | **The conversation is the primitive.** Conversations sit *above* actions and do not replace them — one-shot verbs stay one-shot |
 | 20 | **Code owns timing, the model owns meaning.** The state machine is code so the loop closes with no session running; judgment stays with the model |
 | 21 | **Participants: Doom only.** The other three whitelisted guests can talk to Benham; guest access is not project participation |
+| 22 | **A bank is not a door slamming** (2026-08-17). Giving up *waiting* and refusing to *hear* are different things. A banked question still accepts an answer for ten minutes; past that the refusal is loud, never silent |
 
 ### Baseline — clean as of 2026-08-16
 
@@ -585,3 +635,76 @@ Every answer moved the design in the same direction: **less than was planned.** 
 two, and a backlog view was cancelled. The one person the feature exists for wanted a smaller
 feature than either its owner or its builder had specified — which is an argument for asking the
 participant before the build, not after it.
+
+---
+
+## 7. Known bugs
+
+Open defects observed live, queued for another session to pick up. Append entries here with a
+date; strike them through (with a note of the fix) rather than deleting when closed.
+
+### 2026-08-17 — two bugs from the DOSSIER.md send attempts
+
+**Bug 1 — Benham narrated dm_user confirmations it never issued.** Across one conversation,
+Benham described "preview" confirmations for `dm_user` (sending `DOSSIER.md` and
+`convo-personal-dossier-takeout-talkback.md` to Tyler) multiple times — "here's a preview,
+confirm to send" — but **never actually called the `dm_user` tool**. No tool call occurred in any
+of those turns; the pending confirmation it kept describing did not exist. This is §3.3 again
+("claims things it didn't do") and the same shape as item 19's `answer: None` incident: a
+confident claim with nothing checking it.
+**Expected behavior:** every claim of "here's a preview, confirm to send" must correspond to an
+actual tool invocation in that same turn. Benham must never describe a tool result — including a
+pending-confirmation state — without the tool having been called.
+
+**Status 2026-08-17: ADDRESSED, and deliberately not struck through.** PR #6 lands three layers -
+`agent._verify_confirmation_claims` appends a visible correction when a reply announces a
+confirmation while `confirm.current()` is empty, the prompt now states every turn whether one is
+parked, and a hard rule covers the direction the old one missed. Two exact log timestamps behind
+this entry: 22:21:06 and 23:39:09, neither with a `PROPOSED dm_user` line.
+
+It is not struck through **because the expected behavior above is stronger than what shipped, and
+saying otherwise here would be the exact defect this section is about.** The stated bar is that
+the claim can never be made without the call. What exists is a claim that corrects itself in the
+same message, plus a prompt that removes the reason to make it. A model can still say it. The
+residual hole is a paraphrase the wording match does not recognise - "check your DMs, it's there"
+has no noun to match on and sails through. Closing the entry properly needs either a check that
+does not depend on wording, or a decision that this is good enough; the second is Tyler's and has
+not been asked.
+
+Filed alongside it: §3.3 now carries the generalisation these keep pointing at - anywhere Benham
+can be asked about a store it cannot see, it will answer anyway - and the note that the
+post-turn-checker trick worked here **only** because the harness independently sends the real
+preview, so correcting the sentence could not destroy good information. That asymmetry is a
+precondition, not a licence. Bug 2's surviving half below is the same family and does **not** have
+it, which is why the same instrument will not work there.
+
+**Bug 2 — RESOLVED AS NOT-A-BUG (Tyler, 2026-08-17). One real defect survives inside it.**
+
+The original entry said a `pc_task` "bypassed dm_user and unilaterally sent a file", and that
+file-sending must always route through Benham's confirm path. **Asked directly, Tyler's call was
+that this is correct and expected behaviour:** *"the session 'responding' to the DM should be able
+to DM the asker, or at least get benham to do it."* A session answering a request that arrived
+over DM should be able to answer it over DM. **Do not "fix" this.**
+
+Two things the original entry had wrong on the facts, both checkable in `logs/supervise.log`:
+
+- **An approval WAS shown.** The pc_task PowerShell prompt at 22:22:59 carried the whole command,
+  including the file path and the recipient id, and Tyler approved it. What it did not pass
+  through is Benham's *own* `dm_user` confirmation — `benham.py do dm_user` runs at `LOCAL_CLI`
+  origin, which is untainted, so the `outward_tainted` rule never applies.
+- **The send is not unlogged.** `[2026-08-17 22:23:10Z] action dm_user by code-session` records it
+  with a real Discord message id.
+
+**What IS still a defect — part 2 of the original entry, and it stands.** Benham told Tyler *"I
+can't independently verify it, I'm relying on the session's own self-report."* That was false. The
+send was in **Benham's own action log** as `message_id 1539036895810555964`, and `what_i_did`
+exists precisely to read it (decision #14). It held the evidence and reached for the disclaimer
+instead. The mechanism underneath: **a pc_task returns prose, not facts.** The result arrives as a
+narration string, so nothing structured ever says "this action fired, here is its id" — which
+leaves Benham inferring from a session's say-so when its own record would settle it. That is the
+thing to fix, and it is the same family as §3.3: asked about something it cannot see, it produces
+a plausible account instead of looking.
+
+**Still open, and narrower than the original framing.** Tyler's sentence says "DM *the asker*".
+The mechanism today can DM *anyone*. Whether to scope it to the requesting party is undecided and
+is his call, not a bug to be closed unilaterally.

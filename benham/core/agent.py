@@ -197,7 +197,7 @@ def _system_prompt(where, actor_name):
 
 
 def _system_blocks(where, actor_name, conversation=None, already_bound=False,
-                   queue=None):
+                   queue=None, recent=None):
     """Split the prompt into (static, volatile).
 
     The split exists purely so the static half can be cached. Anything that varies
@@ -305,6 +305,38 @@ it deliberately instead.
                 f"as the answer. If it is unrelated, ignore this section entirely and "
                 f"answer him normally - do not mention the open question, and do not "
                 f"call the tool. If you genuinely cannot tell, ask him which he meant.")
+
+    # WHAT JUST DIED, and why it is in the prompt at all. Everything above
+    # describes LIVE questions, which was the whole account the model got - so on
+    # 2026-08-17, when he answered a question that had banked 75 seconds earlier,
+    # nothing in front of it said that question existed, let alone that it had
+    # expired. Its text was still on his screen in the batch message. Benham said
+    # "Locked c11 in as 'Claude should infer it'" and called NOTHING: no tool, one
+    # round, no action in the log. INTENT.md §3.3 through a new route.
+    #
+    # This does not make that impossible - a model can assert whatever it likes,
+    # and pretending otherwise would be the same mistake one level up. It removes
+    # the REASON: a true account of the thing he is plainly talking about is
+    # available to it now instead of absent.
+    if recent:
+        lines = []
+        for c in recent:
+            what = (f"banked, nobody answered in time"
+                    if c.get("state") == "banked"
+                    else f"closed - {str(c.get('outcome', ''))[:120]}")
+            lines.append(f"- `{c['id']}` ({what}): {str(c.get('question',''))[:200]}")
+        volatile += (
+            "\n\n## Finished recently, and probably still on his screen\n"
+            + "\n".join(lines) + "\n"
+            "These are NOT open, and none of them is waiting on him. If his message "
+            "answers one, still call `answer_conversation` - a question that banked "
+            "in the last few minutes accepts an answer anyway, and the tool tells you "
+            "in plain words if it is too late. If it refuses, say so: tell him it "
+            "expired, that NOTHING was recorded, and offer to ask it again.\n"
+            "NEVER say you locked in, recorded, saved or logged anything unless a "
+            "tool call actually returned that in this turn. Saying it without doing "
+            "it has happened here, cost him a real answer, and is the single failure "
+            "this whole system exists to make impossible.")
     return static, volatile
 
 
@@ -314,7 +346,7 @@ it deliberately instead.
 
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
-                  already_bound=False, queue=None):
+                  already_bound=False, queue=None, recent=None):
     """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
 
     `reply_text` is what Benham should say. The pending confirmation, if any, has
@@ -346,7 +378,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # voice prefix sits under the 4096-token minimum and would never have hit. This
     # one clears it comfortably.
     _static, _volatile = _system_blocks(where, actor_name, conversation, already_bound,
-                                        queue)
+                                        queue, recent)
     system = [
         {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _volatile},   # after the breakpoint, so it stays free to vary

@@ -50,8 +50,19 @@
       <tr><td><strong>Telling is not closing</strong></td><td>Two separate events, so a failed DM
         can never look like a shut loop.</td></tr>
       <tr><td><strong>Banking keeps the question</strong></td><td>Giving up waiting is not
-        deleting. The question stays readable and can be asked again later.</td></tr>
+        deleting, and it is not refusing to hear. The question stays readable, and for ten minutes
+        after the bank it still <em>accepts an answer</em>.</td></tr>
     </table>
+    <p class="note"><strong>A bank is not a door slamming</strong> (Tyler's call, 2026-08-17).
+    <code>c11</code> banked at 08:10:28 and he answered it at 08:11:43 — 75 seconds late. The
+    answer went nowhere, silently, and Benham then told him it had been recorded. Giving up
+    <em>waiting</em> and refusing to <em>hear</em> are different things and only the first was ever
+    meant: banking preserves the question precisely because it is still a real question, so
+    throwing away a real answer to it is strictly worse than any alternative. Past the window the
+    refusal is loud rather than silent — the tool says the conversation banked, when, and that
+    <em>nothing has been recorded</em>. <code>ANSWERED</code> and <code>CLOSED</code> are shut for
+    a different reason and no window reopens them: those already have an answer, and quietly
+    replacing one is the silent misfiling <a href="#slots">slots</a> exist to prevent.</p>
     <p class="note"><strong>This page said "one live ask per person" for a day after that stopped
     being true.</strong> It is recorded here rather than quietly corrected, because the failure is
     the recurring one in this project: a confident claim with nothing checking it. The rule was
@@ -166,7 +177,13 @@ he answers   "2: yeah drop it"  → live slot 2 is READY TO DEPLOY</code></pre>
       <tr><th>beat</th><th>when</th></tr>
       <tr><td><strong>ask</strong></td><td>first delivery. Does <em>not</em> spend a nudge, and
         restarts the countdown from delivery — a conversation opened while the bot is down must
-        not burn its fifteen minutes before anyone sees it.</td></tr>
+        not burn its fifteen minutes before anyone sees it. One batch message delivers
+        <em>every</em> question it displays, so all of them are marked and all of their clocks
+        start together.</td></tr>
+      <tr><td><strong>waiting</strong></td><td>already on their screen, deadline not reached.
+        Nothing is sent. Not every call arrives from the tick loop — <code>ask</code> fires one the
+        instant a conversation is opened, in order to deliver it — so "the next beat" cannot mean
+        "a nudge, whenever you ask".</td></tr>
       <tr><td><strong>nudge</strong></td><td>15 minutes later, twice at most. Quotes the question
         verbatim; a nudge that rephrases reads as a second, different question.</td></tr>
       <tr><td><strong>bank</strong></td><td>budget spent. The owner is told a collaborator went
@@ -176,6 +193,16 @@ he answers   "2: yeah drop it"  → live slot 2 is READY TO DEPLOY</code></pre>
     <p>A background loop in <code>bot.py</code> ticks this every 60 seconds against the
     15-minute policy. It decides nothing: <code>due()</code> reads the clock and the budget and
     says nudge-or-bank; the loop only delivers.</p>
+    <p class="note"><strong>Delivery is a fact about a question, not about a message</strong>, and
+    until 2026-08-17 it was neither — it was inferred from <code>ask_message_ids</code>, which is
+    the <em>binding</em> record. The batch message id lands on every question the message shows,
+    because a reply to it may answer any of them. So when three sessions asked within 300ms,
+    whichever delivery job ran first stamped the other two, their own jobs concluded the question
+    had already gone out, and they sent a <strong>nudge</strong> — one second after the question
+    first appeared. Two of the three burned a nudge on a question nobody had had time to read, hit
+    the two-nudge cap early, and banked about fifteen minutes before they should have. Tyler
+    answered one of them 75 seconds after it banked; the answer had nowhere to go. Two facts were
+    sharing one field and the quieter one lost.</p>
 
     <h2 id="binding">Binding — how a reply attaches to a question</h2>
     <p>Tyler's rule, and the asymmetry is the point:</p>
