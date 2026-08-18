@@ -638,9 +638,15 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
        memory. **`create_room(name, purpose)`** is explicit and never implicit — a spawn or a post
        into a name that does not exist FAILS. A typo silently creating a ghost room is the rot this
        repo keeps finding.
-    5. **`spawn_in_room(room, task)`** takes over `pc_task`'s spawn role. It hands the session the
-       room's unread summary, not the full history.
-    6. **Post-and-exit, plus wake — with the woken session's CONTEXT INTACT** (Tyler, 2026-08-17:
+    5. **`spawn_in_room(room, task)`** takes over `pc_task`'s spawn role. ~~It hands the session the
+       room's unread summary, not the full history.~~ **REVISED by item 22c (2026-08-18): pointer
+       only.** The prompt carries Tyler's task plus room names/counts; the session reads room
+       content itself via the CLI. Text other writers produced must not sit in the instruction
+       seat of a force=True session - the position `pc..`'s own design refuses to give quoted text.
+    6. *(Scope note, 2026-08-18: item 22a defers AUTONOMOUS wake out of v1 entirely - in v1 a
+       worker resumes only when a human explicitly spawns/continues into its room. The mechanism
+       below is unchanged and still the spec; what moves to Phase B is the tick deciding to use
+       it on its own.)* **Post-and-exit, plus wake — with the woken session's CONTEXT INTACT** (Tyler, 2026-08-17:
        *"wake, i prefer it, is there anyway to wake a session that has its context already loaded"*).
        Nothing is alive between messages, so "is that session still up?" is never a question anyone
        has to get right — a crashed session and a thinking one are indistinguishable, and this
@@ -742,6 +748,70 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     inlined: that session has no route to Discord, and `pc_task` is the capability
     `blocked_when_tainted` exists for.
 
+22. **The rooms v1 intent check (2026-08-18).** Tyler asked to go over rooms one more time before
+    build - *"I want this project to be solid"* - so the spec was checked against intent the way
+    the whole document was born: adversarially, with the open questions surfaced and his calls
+    recorded the same hour. First finding: rooms carries THREE jobs, and naming them keeps the
+    seams honest - **pc_task's successor** (the measured job: 35/35 uses were Tyler driving his
+    PC from his phone), **the place sessions meet** (item 16's vision), and **worker memory**
+    (resume + handoff). **Done looks like:** Tyler spawns a worker into the storyizier room from
+    work; that evening a self-started session reads the room and continues the thread; nobody
+    re-explains context.
+
+    **The four calls, all Tyler's:**
+
+    a. **Pull-only in v1.** No autonomous wake at all: the tick does NOTHING for rooms, and a
+       worker resumes only when a human explicitly spawns/continues into its room. This adopts
+       c13's recommendation one day after it banked (its probe found a pushed message can sit
+       25+ minutes against a busy session while the sender sees success, and waking an idle one
+       burns tokens) - the question outlived its bank and got its answer; c13 is closed with it.
+       What this deletes from v1 is exactly its three hairiest subsystems - wake budgets,
+       one-in-flight locks, stuck-room detection - which become **Phase B's spec, deliberately
+       unbuilt rather than half-built**. The cost lever behind it, measured: sparse resumes are
+       cold-cache, so a worker re-bills its whole transcript per wake (~$0.30/wake at 100k
+       tokens). Phase B inherits that arithmetic.
+
+    b. **`pc..` survives, via the scratch room.** A standing default room; the prefix keeps
+       working exactly as today, and every task now lands somewhere - with a record, provenance,
+       and a resumable id. pc_task the capability dissolves into `spawn_in_room(room="scratch")`;
+       the habit does not die. It was used 7 times the day it was sentenced - the fast path IS
+       the product for the one user it has.
+
+    c. **Pointer only in the spawn prompt** - revises 20.5, see the strike there. Room content
+       enters a spawned session as tool output it chose to read, never as top-of-prompt
+       authority. Also spares the nonce fence a fourth load-bearing job.
+
+    d. **Successor scope first.** v1 = `create_room` / `list_rooms` / `read_room` / `post` +
+       `spawn_in_room` + scratch + explicit resume + handoff-past-threshold. Session-to-session
+       choreography earns its own spec after v1 survives a week of real use.
+
+    **Defaults accepted without objection, recorded so the build does not re-decide them:**
+    - Messages carry author + timestamp - provenance per line, same instinct as `bound_by`.
+    - Unread is **per-reader cursors** (Tyler, the worker, and any session each have their own).
+    - **The listing does not taint; content reads do.** This REFINES 20.7's letter ("every room
+      counts as taint") with its own reasoning intact: the laundering path runs through CONTENT,
+      and a listing that tainted would leave every session born tainted at startup - pc_task dead
+      in the crib. So the listing is names + counts ONLY (c12, literally); free-text `purpose`
+      shows only on a content read, which taints per 20.7. Room names are charset-limited
+      (kebab, ≤40 chars) so a name is a poor injection carrier.
+    - **All mutations ride the outbox** - the bot stays the single writer, policy sees every
+      call, and Windows append races never exist. A post while the bot is down is durable in the
+      outbox and lands when it returns.
+    - **Archive, never delete** (decision #17): archived rooms leave the listing, and spawn/post
+      into one fails as loudly as into a ghost.
+    - **The agent's volatile prompt carries the 3-line room listing.** §3.3 predicts a fourth
+      recurrence through whichever store gets built next; this store ships with its true account
+      already in front of the model, which is the only mitigation that has worked.
+    - **Corkboard stays truth** (decision #13): anything Tyler should read next week goes on a
+      board; rooms are working chatter that archives cold.
+    - **Test seams named before build:** pure decision functions for spawn/resume selection,
+      assertive stubs that record what was passed - the queue's delivery bugs taught that a loose
+      stub reads exactly like a passing one.
+    - Handoff threshold starts low (~50k transcript tokens), config not code; the reasoning
+      (cold-cache re-billing) is recorded above and is not config.
+    - The allowlist additions (`benham.py rooms`, `room read` as read-only) are Tyler's to make -
+      permission config sits outside decision #26 on purpose.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
@@ -783,6 +853,7 @@ All from Tyler, 2026-08-16.
 | 24 | **One confirmation window: one hour** (2026-08-17). `conversation_ttl_seconds` 600 → 3600, matching `ttl_seconds`. Safe at tier 3 only because the tier-3 naming rule already applies — a bare "yes" cannot fire a destructive action |
 | 25 | **`pc_task` is scaffolding, not a product** (2026-08-17). Retire it once rooms (item 16) exist, spawn role re-pointed to "start a session in room X" plus a room listing. Unblocked; implementation pending sign-off — see item 20 |
 | 26 | **A green fix deploys itself** (2026-08-18). Merging to master and restarting are DEFAULT actions once the suite passes — announced, not requested. Verifying the boot is part of the action. It does not extend to CHOOSING the change, to red tests, or to permission config |
+| 27 | **Rooms v1** (2026-08-18, the item 22 intent check): pull-only — no autonomous wake, explicit spawn/continue resumes the worker; `pc..` survives via a standing scratch room; spawn prompts carry a pointer, never room content (revises 20.5); successor scope first, session-to-session choreography is Phase B. c13 answered and retired by (a) |
 
 ### Baseline — clean as of 2026-08-16
 
