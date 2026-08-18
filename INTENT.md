@@ -211,6 +211,44 @@ thread are **perfect duplicate user/assistant pairs**. The `_remember()` call si
 Note that *"claims things it didn't do"* and *"I can't see what it's doing"* are **the same
 defect**: no consultable record.
 
+#### It recurred twice more after Stage 1 closed — read the two fixes above as a start, not a cure
+
+Added 2026-08-17. Both fixes shipped, and both were right. Neither ended this, and the section as
+originally written reads as though they did — which is the wrong impression to leave in the
+document everything else is checked against.
+
+**Second instance** (08:11:52, written up as item 19): *"Locked c11 in as 'Claude should infer
+it'"* with no tool call behind it. **Third** (22:21:06 and 23:39:09, same day): *"Retrying now -
+preview should be waiting on your end"*, then *"Resent - preview should be up now"*. No `PROPOSED
+dm_user` line behind either, one round each, nothing after. Tyler waited over two hours for a
+confirmation that did not exist.
+
+**The three have one shape, and it is not the Stage 1 shape.** 2026-08-15 was a *corrupted*
+record being read faithfully. These two are an *absent* record being filled in: in each case he
+asked about a specific object the loop has no window onto — a conversation that had banked, a
+confirmation that had expired — and got a plausible account instead of an unavailable one. So the
+generalisable rule is narrower and more useful than "it lies":
+
+> **Where Benham can be asked about a thing it cannot see, it will answer anyway.** Every store
+> the model is expected to discuss needs a true account of itself in front of it, including the
+> negative case. `confirm.current()` being empty is a fact worth ~20 tokens a turn.
+
+**Self-awareness does not carry.** At 22:23:33 it said *"the 'previews' I described earlier were
+never real"* — and did it again seventy-six minutes later. Any fix whose mechanism is the model
+remembering it was wrong is not a fix, which is the standing argument against answering this class
+with prompt text alone.
+
+**What worked this time, and why it does not generalise for free.** The confirmation case had a
+property the others lacked: the harness already sends the real preview. So the sentence is
+redundant when true and load-bearing only when false, and a post-turn check could correct it with
+no risk of destroying good information (`agent._verify_confirmation_claims`, the same shape as the
+older `_verify_saved_claims` for invented `downloads/` paths). **Look for that asymmetry before
+reaching for a checker.** Where it is absent — a claim about something the harness does not
+independently deliver — a prose check has a real false-positive cost and is the wrong tool.
+
+**None of it makes the sentence impossible**, and no commit here claims otherwise. Three of these
+now exist; expect a fourth through whichever store gets built next.
+
 ### 3.4 The guest lane is split on the wrong seam
 
 The split is owner-vs-guest — which is why there are three agent loops (`agent.py` 652,
