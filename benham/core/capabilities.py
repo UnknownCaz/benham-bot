@@ -884,17 +884,34 @@ async def _answer_conversation(ctx, p):
     conv = conversations.get(str(p["id"]))
     if conv is None:
         raise ActionError(f"no conversation {p['id']!r}")
-    if conv.get("state") not in conversations.LIVE_STATES:
-        raise ActionError(f"{conv['id']} is {conv['state']} - it is not waiting on an answer")
+    if not conversations.answerable(conv):
+        # Say WHICH refusal this is. "It banked twenty minutes ago" and "you
+        # already answered that" are different facts about the world, and a model
+        # told only "no" will reach for a plausible sentence rather than either of
+        # them - which is precisely how "Locked c11 in" got said about a call that
+        # was never made.
+        raise ActionError(
+            f"{conv['id']} is {conv['state']} and can no longer be answered"
+            + (f" - it banked at {conv.get('closed_at')}, more than "
+               f"{int(conversations.BANK_GRACE.total_seconds() // 60)} minutes ago. "
+               "NOTHING has been recorded. Tell him that plainly and offer to ask "
+               "it again; do not say you logged it."
+               if conv.get("state") == conversations.BANKED else
+               f" - it already has an answer: {str(conv.get('answer'))[:200]!r}"))
     if int(conv["counterparty"]) != int(ctx.actor_id or 0):
         # The one open question belongs to whoever was asked. Recording someone
         # else's answer against it would put words in their mouth on the record.
         raise ActionError(f"{conv['id']} is waiting on someone else, not you")
+    late = conv.get("state") == conversations.BANKED
     conversations.answer(conv["id"], str(p["answer"]), bound_by="judged")
     return {"status": "answered", "id": conv["id"], "bound_by": "judged",
-            "question": conv["question"],
+            "question": conv["question"], "after_banking": late,
             "note": "Tell him you took this as the answer - a judged binding that "
-                    "is not announced is the failure mode this exists to avoid."}
+                    "is not announced is the failure mode this exists to avoid."
+                    + (" This one had already given up waiting and was banked; it "
+                       "is un-banked and recorded now. Say so - he waited long "
+                       "enough for it to expire and should know it landed anyway."
+                       if late else "")}
 
 
 @action("triage_conversation", identity.MANAGE,
@@ -1028,10 +1045,11 @@ async def _tell_conversation(ctx, p):
 
 @action("advance_conversation", identity.SPEAK,
         "Move one waiting conversation to its next beat: ASK the question if it has "
-        "never been delivered, send the nudge that is due, or - once its nudge "
-        "budget is spent - bank it and tell the owner it went unanswered. Takes only "
-        "a conversation id; the recipient and the words both come from the stored "
-        "record.",
+        "never been delivered, send the nudge that is DUE, or - once its nudge "
+        "budget is spent - bank it and tell the owner it went unanswered. If the "
+        "question is already on their screen and its deadline has not arrived, this "
+        "does nothing and says so. Takes only a conversation id; the recipient and "
+        "the words both come from the stored record.",
         {"id": {"type": "str", "required": True, "desc": "Conversation id, e.g. c7"}},
         # SYSTEM, because the whole point of stage 3 is that a loop closes with no
         # session running. This is the ONLY outward action an automated caller can
@@ -1060,9 +1078,21 @@ async def _advance_conversation(ctx, p):
     # nobody had been asked with "still after this one", which reads as a reminder
     # about a conversation the other person has no memory of. Delivering is NOT a
     # nudge and must not consume the budget.
-    if not (conv.get("ask_message_ids") or []):
+    #
+    # The test is was_delivered(), not "does it have a message id". Those read the
+    # same until several asks are opened at once, and then they read opposite: the
+    # batch id is stamped on every question the message shows, so whichever job ran
+    # first told the others they had already been asked. See was_delivered().
+    if not conversations.was_delivered(conv):
         queue = conversations.queue_for(who)
         body = conversations.render_queue(who, queue)
+        # Who is genuinely new, worked out BEFORE anything is written, so it does
+        # not depend on the order the two records below are updated in.
+        fresh = [c["id"] for c in queue if not conversations.was_delivered(c)]
+        # conv itself is always delivered by this beat, even in the odd case where
+        # it is not in the queue at all - otherwise beat zero would repeat forever.
+        if conv["id"] not in fresh:
+            fresh.append(conv["id"])
 
         # ONE message for the whole queue, edited in place as it changes, so the
         # numbering a reply refers to is always the numbering on screen.
@@ -1111,13 +1141,26 @@ async def _advance_conversation(ctx, p):
         # reply to any of them, and the slot number picks which.
         for c in queue:
             conversations.record_ask_message(c["id"], sent.id)
-        # Restart the nudge clock from DELIVERY, not from opening. open() assumes
-        # prompt delivery; if the bot was down when the ask was made, the 15 minutes
-        # would otherwise have elapsed before the person ever saw it.
-        conversations.restart_clock(conv["id"])
+        # DELIVERED, and the clock starts from DELIVERY rather than from opening -
+        # for every question this message put on screen, not just the one whose job
+        # ran. open() assumes prompt delivery; if the bot was down when the asks
+        # were made, an unmarked sibling arrives with its fifteen minutes already
+        # spent and nudges on the very next tick, about a question one second old.
+        for cid in fresh:
+            conversations.mark_delivered(cid)
         return {"status": "asked", "id": conv["id"], "counterparty": who,
                 "message_id": sent.id, "queued": len(queue),
+                "delivered": fresh,
                 "slot": conversations.slot_of(conv["id"])}
+
+    # Delivered already, and nothing is owed yet. Not every call gets here from the
+    # tick loop - ask.py fires one the instant a conversation is opened, to deliver
+    # it - so "the next beat" cannot mean "a nudge, whenever you ask". A question
+    # that is already on his screen with fourteen minutes left on its clock has no
+    # next beat to move to.
+    if not conversations.beat_due(conv):
+        return {"status": "waiting", "id": conv["id"], "counterparty": who,
+                "due_at": conv.get("due_at"), "nudges": int(conv.get("nudges", 0))}
 
     if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
         # Quote the question rather than paraphrasing it. A nudge that restates the

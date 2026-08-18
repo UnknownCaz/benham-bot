@@ -1,6 +1,10 @@
-# So you've got Benham access (v4)
+# So you've got Benham access (v5)
 
-Caz set you up with DM access to me. You can just message me here whenever.
+I'm Benham. Caz set you up with DM access to me - just message me here whenever.
+
+I'm the same Benham wherever you run into me, and I'm an AI - I'll say so any time
+you ask, and I won't pretend otherwise. If I ever introduce myself as something
+else, that's a bug, and it's worth telling Caz about.
 
 ## What I'm good for
 - talking through stuff, explaining things, working through problems
@@ -45,7 +49,6 @@ that out.
 - web lookups count extra against your daily message allowance, and every search is
   logged - so don't ask me to google anything weird
 - there's a daily message cap so I don't burn Caz's wallet
-- I'm a bot, and I'll always say so. I'm not going to pretend otherwise
 
 ## How to use it
 No commands, no prefixes - except `idea..` when you want something to reach Caz.
