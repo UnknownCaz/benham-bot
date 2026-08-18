@@ -61,8 +61,31 @@
     number you actually live with; <code>confirm.describe</code> prints the real one. The token
     is bound to the parameters captured at preview time — editing the arguments between the two
     calls invalidates it rather than silently running something else.</p>
+    <p><strong>Benham cannot successfully tell you a preview is waiting when none is.</strong>
+    Added 2026-08-17, after it did exactly that twice in one evening — "preview should be
+    waiting on your end", then "preview should be up now" — with no tool call behind either.
+    Neither has a <code>PROPOSED</code> line in the log, and Tyler spent over two hours watching
+    for a button that had never been made. Three things now stand in the way, weakest last:
+    <code>agent._verify_confirmation_claims</code> appends a visible correction to any reply
+    that announces one while <code>confirm.current()</code> is empty; the prompt states on every
+    turn whether something is parked, with the action and the real time left, so the honest
+    answer is available; and a hard rule says not to announce one at all. <strong>None of them
+    makes the sentence impossible</strong> — a model can assert anything, and a page claiming
+    otherwise would be the same error one level up. What changed is that the false version now
+    corrects itself in the same message instead of costing you an evening.</p>
 
     <h2 id="why">Why we chose this</h2>
+    <p><strong>Why matching on the words is acceptable here and almost nowhere else.</strong>
+    The confirmation prompt is sent by the harness, not written by the model: when a call parks
+    something, <code>bot.py</code> renders <code>confirm.describe(parked)</code> with the
+    Approve/Deny buttons as its own message, immediately after the reply. So a sentence pointing
+    you at a pending confirmation is <em>redundant when it is true</em> and load-bearing only
+    when it is false — there is no case where correcting it costs you information. The
+    existence check runs first and is exact; only the wording match can be wrong, and it can
+    only be wrong about whether a sentence <em>claimed</em> something, never about whether a
+    preview <em>exists</em>. That is the opposite balance to the sibling check on invented
+    <code>downloads/</code> paths, where a false alarm would brand a real save a lie — which is
+    why that one is deliberately forgiving and this one is not.</p>
     <p><strong>The model cannot confirm its own actions — structurally.</strong> A tier-3 tool
     call returns a preview and <em>halts the tool chain</em>. Your "yes" is matched by code in
     <code>on_message</code> before the agent is ever invoked, and fires the parked action
@@ -87,6 +110,13 @@
       <p>Dry-runs and confirmations print in full in the CLI / DM; parked and fired
       confirmations log in the bot log; <code>benham.py usage</code> counts proposed vs confirmed.
       Sample dry-run output: <a href="../outer/cli.html#universal">CLI → do.py</a>.</p>
+      <p><strong>A preview that really happened leaves a <code>PROPOSED</code> line</strong>, so
+      "was there ever a confirmation here?" is answerable from the log rather than from anyone's
+      recollection — that is how the 2026-08-17 pair was established. A reply that announced one
+      without a call behind it logs <code>agent: reply claimed a pending confirmation with
+      nothing parked</code>, with the offending sentence quoted. A run of those means the
+      wording match has drifted or the model is fighting the rule, and either is worth knowing.
+      Checks: <code>tests/test_claims.py</code>.</p>
     </div>
   </main>
 </div>

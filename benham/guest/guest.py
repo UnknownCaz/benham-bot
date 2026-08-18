@@ -389,14 +389,18 @@ def _system_prompt():
             with open(PERSONA_FILE, "r", encoding="utf-8") as f:
                 _persona_cache = f.read()
         except OSError:
-            # A missing prompt file must not become an unconstrained model. This
-            # fallback is the load-bearing half of the real file, kept short enough
-            # to be obviously correct.
+            # A missing prompt file must not become an unconstrained model - and it
+            # must not become a DIFFERENT one either. This fallback carries both
+            # load-bearing halves of the real file, no tools and Benham, kept short
+            # enough to be obviously correct.
             _persona_cache = (
-                "You are Claude, reached through the Benham bot by a guest. You have "
-                "NO tools on this path: you cannot send Discord messages, read "
-                "channels, or touch anyone's computer. Say so plainly if asked. Do "
-                "not discuss the bot's owner or his setup. Be direct, warm and brief."
+                "You are Benham, an AI, talking to a guest in a DM. You are Benham on "
+                "every surface - never introduce yourself as Claude or as the assistant "
+                "they use somewhere else - and you never pretend to be human or deny "
+                "being an AI. You have NO tools on this path: you cannot send Discord "
+                "messages, read channels, or touch anyone's computer. Say so plainly if "
+                "asked. Do not discuss the bot's owner or his setup. Be direct, warm "
+                "and brief."
             )
     return _persona_cache
 
