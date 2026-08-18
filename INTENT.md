@@ -576,7 +576,50 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     **The pattern, one more costume.** Not a comment, a docstring, a manual page or a test this
     time — a **field** making a confident claim, with nothing checking that it was entitled to.
 
-20. **Rich message context on every DM surface (2026-08-18).** Scoped by Tyler when asked
+20. **`pc_task` is scaffolding, not a product** (Tyler, 2026-08-17). Asked whether to keep it, to
+    build item 10 separately, or to retire it once rooms exist, he chose **retire it once rooms
+    exist**. Remote control of the PC is temporary; the rooms project (item 16) is what replaces it.
+
+    The measured position it is being retired *from*: **35 invocations lifetime, every single one
+    by Tyler.** 23 of those fell on 07-28 and 07-29 — the two days it was built, the same signature
+    §2 used to justify cutting guest code runs — but **7 landed on 08-17 alone**, its second-busiest
+    day ever. Roughly 137 PC permission prompts against 35 tasks, about four approvals each. It is
+    not dormant; it is at peak use.
+
+    §3.2 needs rewriting regardless of the phase-out. It judges `pc_task` as a failed reverse
+    channel, and the reverse channel it was measured against **has since been built** — as the ask
+    queue, which item 10 never proposed. `pc_task` has only ever done one thing, and it is a thing
+    §3.2 does not name: Tyler, away from his PC, driving his PC.
+
+    **UNRESOLVED DEPENDENCY — the phase-out is not actionable until this is answered.** Rooms, as
+    specified in item 16, is a channel *between sessions that already exist*. `pc_task`'s actual job
+    is to **start** one. Those are different capabilities and nothing in item 16 covers the second.
+    With only rooms, if no session is running when Tyler is at work with his phone, **there is
+    nobody in the room to ask.** Three ways out, all his call:
+
+    a. Rooms includes a **resident session** — always joined, able to take work.
+    b. The spawn role **survives under another name** — "start a session in room X".
+    c. Remote work simply **requires a session already running**, and that limit is accepted.
+
+    **RESOLVED — (b), 2026-08-17.** Tyler: *"spawn a session in room X, but include a feature that
+    allows reading the rooms available."* So `pc_task`'s spawn role is not deleted, it is
+    **re-pointed**: it stops being "run this task on my PC" and becomes "start a session **in a
+    room**", which then has somewhere to report and someone to talk to. The discovery half is part
+    of the same decision — **you can read what rooms exist before you spawn into one**, so the room
+    is chosen off a real list rather than typed from memory.
+
+    This does not contradict c11 (*"Claude should infer it"*). Two entry paths, two rules: a
+    **spawned** session is *told* its room, because whoever spawned it already picked one off the
+    list; a **self-started** session at the keyboard *infers* its room, because nobody was there to
+    tell it. Inference proposes and the session announces the result — never silent.
+
+    **THE HOW IS NOT SETTLED AND MUST BE CONFIRMED BEFORE ANY OF IT IS BUILT** — Tyler's explicit
+    condition on this decision.
+
+    Until it is, keep `pc_task` working. Do not let "it is being retired" become a reason to
+    leave its live defects unfixed — chiefly that it returns **prose, not facts** (see §7, Bug 2).
+
+21. **Rich message context on every DM surface (2026-08-18).** Scoped by Tyler when asked
     directly: *"On every DM access point (Owner and Guests) should be able to read the citied,
     replies, images, and embeds, a security layer for both owner, guest is expected."* Deferred
     on 2026-08-16 as a future feature; unblocked here.
@@ -631,6 +674,13 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     charging double for the exact gesture this was built for would tax Doom for sending a
     screenshot.
 
+    **On the `pc..` change, given item 20 above.** A file attached to a `pc..` command used to
+    vanish in silence; it is now named in the task with the session told plainly it cannot see
+    it. That is a keep-it-working fix in item 20's sense, not an investment in a capability
+    being retired - it removes a silent drop and costs a dozen lines. It is deliberately NOT
+    inlined: that session has no route to Discord, and `pc_task` is the capability
+    `blocked_when_tainted` exists for.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
@@ -668,6 +718,9 @@ All from Tyler, 2026-08-16.
 | 20 | **Code owns timing, the model owns meaning.** The state machine is code so the loop closes with no session running; judgment stays with the model |
 | 21 | **Participants: Doom only.** The other three whitelisted guests can talk to Benham; guest access is not project participation |
 | 22 | **A bank is not a door slamming** (2026-08-17). Giving up *waiting* and refusing to *hear* are different things. A banked question still accepts an answer for ten minutes; past that the refusal is loud, never silent |
+| 23 | **A session may DM anyone** (2026-08-17). A `pc_task` answering a request that arrived over DM can DM in reply, and the recipient is **not** scoped to the asker. Asked directly, and reaffirmed after the narrower option was offered |
+| 24 | **One confirmation window: one hour** (2026-08-17). `conversation_ttl_seconds` 600 → 3600, matching `ttl_seconds`. Safe at tier 3 only because the tier-3 naming rule already applies — a bare "yes" cannot fire a destructive action |
+| 25 | **`pc_task` is scaffolding, not a product** (2026-08-17). Retire it once rooms (item 16) exist, spawn role re-pointed to "start a session in room X" plus a room listing. Unblocked; implementation pending sign-off — see item 20 |
 
 ### Baseline — clean as of 2026-08-16
 
