@@ -964,9 +964,9 @@ async def _triage_conversation(ctx, p):
           "well-argued best guess beats 'insufficient information'.")
 
     log(f"triage {conv['id']}: read-only session starting")
-    result = await codesession.run_task(prompt, read_only=True)
-    conversations.record_diagnosis(conv["id"], result)
-    return {"status": "triaged", "id": conv["id"], "diagnosis": result,
+    res = await codesession.run_task(prompt, read_only=True)
+    conversations.record_diagnosis(conv["id"], res["text"])
+    return {"status": "triaged", "id": conv["id"], "diagnosis": res["text"],
             "note": "a hypothesis, not an outcome - the conversation stays open "
                     "until a human decides what actually happened"}
 
@@ -1868,13 +1868,56 @@ async def _create_webhook(ctx, p):
             "_sensitive": ["url"]}
 
 
+def _cli_actions_between(started, ended, slop_seconds=10, limit=25):
+    """What ran through Benham's CLI while a PC task was live, from the LOG.
+
+    The other half of the prose problem: a session's answer says what it believes
+    it did, and the action log says what actually fired. `actor` is "code-session"
+    because that is how capabilities.run logs a call with no Discord actor behind
+    it - which is every `benham.py do ...` a session runs. The label is shared by
+    every CLI caller, so a concurrent session's action inside the window would
+    appear too; the field name says "during", not "by", on purpose.
+
+    End slop covers the outbox: do.py enqueues and the ~2s poller executes, so an
+    action fired in a session's last breath can log a beat after the session
+    exits. The caller also sleeps past one poll interval before reading.
+    """
+    from benham.core import selfrecord
+    try:
+        t0 = datetime.fromisoformat(started)
+        t1 = datetime.fromisoformat(ended)
+    except (TypeError, ValueError):
+        return []
+    minutes = max(1, int((datetime.now(timezone.utc) - t0).total_seconds() // 60) + 2)
+    rec = selfrecord.read(limit=200, since_minutes=minutes, actor="code-session",
+                          max_detail=200)
+    out = []
+    for e in reversed(rec.get("entries") or []):     # oldest first, task order
+        if e.get("kind") != "action":
+            continue
+        try:
+            ts = datetime.fromisoformat(e["ts"])
+        except (TypeError, ValueError):
+            continue
+        if (t0 - timedelta(seconds=slop_seconds)) <= ts \
+                <= (t1 + timedelta(seconds=slop_seconds)):
+            out.append({"ts": e["ts"], "action": e.get("action"),
+                        "detail": e.get("detail")})
+    return out[:limit]
+
+
 @action("pc_task", identity.MANAGE,
         "Do something on Tyler's actual PC by running a real Claude Code session "
         "in the Benhams-inbox folder - read/edit files, run commands, use his "
         "skills (exaroton, drive-api, double, desktop-automation). Give it the task "
         "in plain language, as you would type it into a terminal session. Reading "
         "is free; every write or command asks Tyler for approval first, so expect "
-        "this to take a while and do not retry if he says no.",
+        "this to take a while and do not retry if he says no. The result carries "
+        "`session` facts (id, cost, error state, approval count) and "
+        "`cli_actions` - what verifiably ran through the CLI during the task, "
+        "from the action log with real ids. Answer 'did it actually do X?' from "
+        "cli_actions, never from the session's own prose; `what_i_did` reaches "
+        "further back.",
         {"task": {"type": "str", "required": True,
                   "desc": "What to do, in plain language, with enough context to act alone"}},
         taints=True,
@@ -1906,8 +1949,27 @@ async def _pc_task(ctx, p):
         if ctx.on_progress:
             await ctx.on_progress(kind, detail)
 
-    result = await codesession.run_task(str(p["task"]), on_progress=_progress)
-    return {"status": "completed", "task": str(p["task"])[:200], "result": result}
+    res = await codesession.run_task(str(p["task"]), on_progress=_progress)
+
+    # One outbox poll interval, so an action the session fired in its last breath
+    # has been executed and LOGGED before the record is read. Without this the
+    # facts would race the thing they exist to verify.
+    await asyncio.sleep(3)
+    acts = _cli_actions_between(res["started"], res["ended"])
+
+    # The session's words and the record of what fired are SEPARATE FIELDS, on
+    # purpose. INTENT §7 Bug 2: Benham relayed "I can't independently verify it,
+    # I'm relying on the session's own self-report" while the dm_user it was
+    # asked about sat in its own action log with a real message id. Nothing
+    # structured carried that fact to the model; now the result itself does.
+    return {"status": "completed", "task": str(p["task"])[:200],
+            "result": res["text"],
+            "session": {"id": res["session_id"], "cost_usd": res["cost_usd"],
+                        "is_error": res["is_error"], "asks": res["asks"]},
+            "cli_actions": acts,
+            "note": ("cli_actions is from the action log - what ran through the "
+                     "CLI while the task was live, with ids. It is the evidence "
+                     "half; `result` is only the session talking.")}
 
 
 # ==========================================================================
