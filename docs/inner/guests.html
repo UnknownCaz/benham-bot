@@ -20,6 +20,15 @@
     reports with an <code>idea..</code> prefix, which are quarantined and tracked as
     <a href="conversations.html">conversations</a> they are told the outcome of. Admin procedures
     live in <a href="../outer/guest-admin.html">Outer → Guest admin</a>.</p>
+    <p><strong>Since 2026-08-18 they can also be understood.</strong> An image a guest sends
+    arrives as a picture the model actually looks at, and so do a replied-to message, a
+    forwarded message and a link preview's text — see <a href="attachments.html">Attachments</a>.
+    Before that, guest.py built its API call out of plain text, so an attachment did not arrive
+    degraded: it never arrived at all, and the model was not told one existed. It filled the gap
+    the way models do, telling the one project participant to try uploading it again. He did.
+    Twice. A file it cannot open now gets a fixed, free reply rather than silence <em>or</em> a
+    spent message, and images are not charged extra against the daily cap — a web search costs
+    double because it is a second round trip; an image is only a bigger first one.</p>
     <p><strong>A tool loop used to sit beside this</strong> — a file workspace, allowlisted channel
     reads and Anthropic-side code execution, built across seven commits in August 2026. It was
     archived on 2026-08-16 because the usage never came: fifteen code runs, <em>every one on the
@@ -35,6 +44,14 @@
     <code>pc_task</code>, and for anything added next year, without that code knowing what a
     capability is. A gate that has to enumerate what it forbids can be out of date; this one
     can't be.</p>
+    <p><strong>Inlined images do not touch that property, and the reason is worth stating
+    plainly</strong> — it is the one place the absence looks like it might have been bent. The
+    content blocks are finished <em>before</em> the call, assembled in <code>bot.py</code> from
+    the message that was just sent in, by code the model never talks to. No tool definition, no
+    name for a model to emit, no tool-result loop to steer. A guest gains the ability to be
+    <em>looked at</em>; they do not gain the ability to make Benham fetch. The question above —
+    "can a guest reach capability X" — has exactly the answer it had before, for the same
+    reason, and the distinction that matters is whether the model can aim it. It cannot.</p>
     <p><strong>Everything is denied at least twice, independently.</strong>
     <code>rule_guest</code> refuses any capability not named in
     <code>guest.capabilities</code> — and nothing is ever named there — while
