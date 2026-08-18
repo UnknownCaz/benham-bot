@@ -103,7 +103,8 @@ def main():
     ):
         check(f"ask: {str(cmd)[:60]!r}", codesession._classify_bash(cmd), "ask")
 
-    section("wired in: deny never asks, read-only never asks")
+    section("wired in: deny never asks, read-only never asks - on BOTH shell "
+            "tools (the first live test failed on exactly this)")
     calls = []
 
     async def exploding_ask_owner(prompt, rid):
@@ -115,15 +116,26 @@ def main():
     codesession._read_only[0] = False
     codesession._task_ctx["asks"] = 0
     try:
+        # PowerShell first, verbatim from the live failure at 08:28:25Z: a
+        # Windows session shells out through the PowerShell tool, the gate
+        # checked only "Bash", and this exact command reached the ask path
+        # with the description "Send test DM expected to be refused by policy".
         d = asyncio.run(codesession._can_use_tool(
-            "Bash", {"command": 'python benham.py dm 123 "hi"'}, None))
-        check("denied send -> PermissionResultDeny",
+            "PowerShell",
+            {"command": f"python {CLI.replace(chr(92), '/')} dm 000000 "
+                        "policy-test"}, None))
+        check("PowerShell denied send -> PermissionResultDeny (the live regression)",
               type(d).__name__, "PermissionResultDeny")
+        d2 = asyncio.run(codesession._can_use_tool(
+            "Bash", {"command": 'python benham.py dm 123 "hi"'}, None))
+        check("Bash denied send -> PermissionResultDeny",
+              type(d2).__name__, "PermissionResultDeny")
         check("...with the bounded paths named in the message",
-              "outreach" in d.message and "tell_conversation" in d.message, True)
+              "outreach" in d2.message and "tell_conversation" in d2.message,
+              True)
         a = asyncio.run(codesession._can_use_tool(
-            "Bash", {"command": f"python {CLI} room read scratch"}, None))
-        check("read-only CLI -> PermissionResultAllow",
+            "PowerShell", {"command": f"python {CLI} room read scratch"}, None))
+        check("PowerShell read-only CLI -> PermissionResultAllow",
               type(a).__name__, "PermissionResultAllow")
         check("neither touched the owner channel", calls, [])
         check("neither counted as an ask", codesession._task_ctx["asks"], 0)
