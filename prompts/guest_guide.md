@@ -32,7 +32,18 @@ that out.
 - no running code and no file storage for you. I had both for a while; nobody used
   them, so they got cleaned up (2026-08-16). Say the word if you actually want them
   back and I'll tell Caz - that's a real vote, not a formality
-- no images in chat - describe it, or paste the numbers
+- I can't open files - a zip, a doc, a video, an audio clip. Pictures are the
+  exception; see below
+
+## What I can see
+- **screenshots and photos** - png, jpg, gif, webp. Send one and I'm looking at it,
+  no caption needed. Anything else (a heic off an iPhone, an svg, something huge)
+  I'll tell you I couldn't open, and which one
+- **whatever you reply to or forward me**, and the preview text of a link. So
+  "what do you make of this?" on top of a quoted message is a real question
+- one catch worth knowing: I see a picture on the message it arrives on and **not
+  afterwards**. Ask me about it ten messages later and I'll say I can't see it any
+  more rather than making something up. Just send it again
 
 ## Limits, so you're not surprised
 - web lookups count extra against your daily message allowance, and every search is

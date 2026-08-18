@@ -619,6 +619,68 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     Until it is, keep `pc_task` working. Do not let "it is being retired" become a reason to
     leave its live defects unfixed — chiefly that it returns **prose, not facts** (see §7, Bug 2).
 
+21. **Rich message context on every DM surface (2026-08-18).** Scoped by Tyler when asked
+    directly: *"On every DM access point (Owner and Guests) should be able to read the citied,
+    replies, images, and embeds, a security layer for both owner, guest is expected."* Deferred
+    on 2026-08-16 as a future feature; unblocked here.
+
+    **What was actually broken was worse than "degraded".** The guest path built its API call
+    out of plain text, so an attachment did not arrive in a lesser form - it never arrived, and
+    the model was not told one existed. Asked about a screenshot it could not see, it filled the
+    gap: *"try uploading it again and I should be able to see it this time."* Doom did, twice.
+    That is §3.3 in its purest form - **anywhere Benham can be asked about a thing it cannot
+    see, it will answer anyway** - and it is the reason the fix ships with the history line
+    saying the picture is no longer visible, rather than leaving a later turn to infer it from
+    an absence.
+
+    On the owner path a reply and an embed were visible only behind the `pc..` prefix, and an
+    image only by spending a tool round on `read_attachments` - if the model chose to.
+
+    **The security layer, since he asked for it as a deliverable rather than a caveat:**
+
+    - Quoted content reuses the `pc..` fence rather than inventing a second scheme - one
+      nonce-tagged implementation, now in `msgparts.fence`, with `test_pc_reply.py` still
+      proving it for every caller. What the person typed is always the first block.
+    - **Images cannot be fenced.** A fence works because the quote and its terminator are the
+      same kind of thing; an image block has no terminator to escape. So the enforced defence is
+      the taint bit and the marker around them is advisory - stated plainly rather than sold as
+      containment.
+    - Everything third-party taints the turn *before the model chooses anything*. Not new
+      policy: `read_attachments` has carried `taints` since it was written, so this moves the
+      same taint to where the content arrives and closes the window where `pc_task` could run
+      first and the picture be looked at second.
+    - **The cost is the auto-triage wall from item 12, arrived at from the other direction:** a
+      screenshot of a bug cannot also authorise the fix. He looks, then authorises the write
+      from a fresh clean message. `blocked_when_tainted` stays exactly as it is.
+
+    **A latent defect this surfaced, worth its own line.** `CallContext.with_taint` assigned its
+    argument through, and `agent.respond` started its flag at `False`, so a turn that ARRIVED
+    tainted was laundered clean by the first tool call. Unreachable while only guests were born
+    tainted - guests never reach agent.py - and reachable the moment an owner DM could carry an
+    image. Both halves fixed; with_taint is now monotonic, so a cleared taint is unrepresentable.
+
+    **The pattern, in a new costume: a test SECTION HEADING that named the invariant its own
+    checks did not cover.** `test_policy.py` had *"Immutability - a nested call cannot clear its
+    caller's taint"* over two assertions that both pass against the broken version, because they
+    checked that the *original* object was unchanged. After a comment, a docstring, a manual
+    page, a test and a field, the list now includes the label on a group of tests.
+
+    **Cost, measured rather than asserted.** An image is `ceil(w/28) x ceil(h/28)` visual tokens.
+    The guest model (`claude-haiku-4-5`) is standard-resolution, so it downscales past 1568px
+    and caps at 1568 tokens per image - about $0.0016. Worst case across the whole daily cap is
+    ~$0.16 per guest and ~$0.63 globally, so images are **not** charged extra against the cap the
+    way a search is. That is a decision, not a fact, and it is Tyler's to overrule: a search
+    costs double because it is a second round trip, an image is only a bigger first one, and
+    charging double for the exact gesture this was built for would tax Doom for sending a
+    screenshot.
+
+    **On the `pc..` change, given item 20 above.** A file attached to a `pc..` command used to
+    vanish in silence; it is now named in the task with the session told plainly it cannot see
+    it. That is a keep-it-working fix in item 20's sense, not an investment in a capability
+    being retired - it removes a silent drop and costs a dozen lines. It is deliberately NOT
+    inlined: that session has no route to Discord, and `pc_task` is the capability
+    `blocked_when_tainted` exists for.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the

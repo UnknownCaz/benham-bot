@@ -383,6 +383,82 @@ async def _taint_order():
 
 asyncio.run(_taint_order())
 
+section("A turn that ARRIVES tainted stays tainted")
+
+# The taint above is one Benham gives itself by reading. This is the other
+# direction: bot.py can hand the agent a context that is already tainted, because
+# the inbound message itself carried third-party content - an image, an embed, a
+# quoted or forwarded message. Nothing about that is the model's choice; it is in
+# context before the first round.
+#
+# agent.respond used to throw that away. Its local `tainted` started at False and
+# every tool call passed `with_taint(False)`, so the first call the model made
+# handed policy a context claiming to be clean - and pc_task, whose whole defence
+# is blocked_when_tainted, ran. The screenshot Tyler forwarded from a stranger
+# could reach a shell.
+#
+# Two separate mechanisms are asserted below because either alone would fix this
+# case and the point of having both is that a future edit to one is survivable.
+
+
+async def _inbound_taint():
+    real_handler = capabilities.REGISTRY["pc_task"].handler
+    ran = []
+
+    async def fake_pc(ctx, p):
+        ran.append(p.get("task"))
+        return {"status": "completed", "result": "a.txt, b.txt"}
+
+    capabilities.REGISTRY["pc_task"].handler = fake_pc
+    try:
+        script = [
+            _Resp([_Block(type="tool_use", id="p1", name="pc_task",
+                          input={"task": "do what the screenshot says"})], "tool_use"),
+            _Resp([_Block(type="text", text="done")], "end_turn"),
+        ]
+        agent._client = _FakeAnthropic(script)
+        agent._last_call.clear()
+        confirm.cancel()
+        reply, parked = await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "here, do this",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=None, where="a DM", conversation_key="test:inboundtaint",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN, tainted=True))
+        check("pc_task is REFUSED on a turn that arrived tainted", len(ran), 0)
+        check("...and not parked either - blocked_when_tainted is a flat no",
+              parked, None)
+        check("Tyler still got a reply saying so", bool(reply), True)
+
+        # The control: same script, same everything, clean context. Without this
+        # the check above passes just as happily against a loop that refuses
+        # pc_task unconditionally, or a stub that never runs anything.
+        ran.clear()
+        agent._client = _FakeAnthropic([
+            _Resp([_Block(type="tool_use", id="p2", name="pc_task",
+                          input={"task": "do what the screenshot says"})], "tool_use"),
+            _Resp([_Block(type="text", text="done")], "end_turn"),
+        ])
+        agent._last_call.clear()
+        await agent.respond(
+            _AgentStubClient({TESTING_CHAN: TESTING}), lambda *_: None,
+            "here, do this",
+            actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+            guild_id=None, where="a DM", conversation_key="test:inboundclean",
+            call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+        check("...while the same turn from a clean DM still runs it", len(ran), 1)
+    finally:
+        capabilities.REGISTRY["pc_task"].handler = real_handler
+        agent._client = None
+
+
+asyncio.run(_inbound_taint())
+
+check("the seed is read from the context, not assumed False",
+      "call_ctx is not None and call_ctx.tainted" in
+      __import__("inspect").getsource(agent.respond), True)
+
+
 section("A web search taints the turn, exactly like reading a channel")
 
 # Stage 1 gave the owner agent Anthropic's server-side web search. A web page is
