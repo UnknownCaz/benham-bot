@@ -196,6 +196,15 @@ class _Message:
         self.id = 42
         self.attachments = []
         self.reference = reference
+        # Every real Message carries these three, empty or not, and on_message now
+        # reads all of them on the way into the agent. The _Replied stub below has
+        # had embeds and stickers since the pc.. path learned to quote them; this
+        # one had never needed them, which is how a stub falls behind the class it
+        # stands in for - not by being wrong, by being incomplete in the one
+        # direction nobody had exercised.
+        self.embeds = []
+        self.stickers = []
+        self.message_snapshots = []
         self.reactions_added = []
 
     async def add_reaction(self, emoji):
@@ -527,7 +536,15 @@ async def main():
         check("...and still says what it wants",
               "needs something after it" in (sent[-1] if sent else ""), True)
 
-        print("\nGuild pc.. + reply: fast path stays DM-only, resolution untouched")
+        print("\nGuild pc.. + reply: the fast path stays DM-only")
+        # This case used to assert "no resolution attempted" as its proof that the
+        # pc.. fast path had not run, and that proxy was sound for exactly as long
+        # as the fast path was the ONLY thing that read a reply. It is not any
+        # more: the ordinary agent path resolves one too, so Benham can see what a
+        # mention is replying to. The property the case exists for - `pc..` in a
+        # guild starts no session - is unchanged and is asserted directly below;
+        # what changed is a fact about a neighbouring feature, so the assertion
+        # moved rather than being deleted.
         reset()
         ch = _Channel(fetch_raises=RuntimeError("must never be called"))
         await bot.on_message(_Message(TYLER, "pc.. do something",
@@ -535,10 +552,15 @@ async def main():
                                       reference=_Ref(resolved=None, message_id=777),
                                       channel=ch))
         check("no session started", ran, [])
-        check("no resolution attempted", ch.fetched, [])
-        check("no reply-error posted",
+        check("...and no progress header, so the fast path never opened",
+              any("on it" in s for s in sent), False)
+        check("the agent path resolves the reply instead", ch.fetched, [777])
+        # The stub's fetch raises, so this also covers the soft-failure half:
+        # resolve_reply degrades to a reason rather than escaping on_message, and
+        # unlike the pc.. path a failure does not cost Tyler the whole turn.
+        check("a failed resolution does not become a posted error",
               any("Couldn't read" in s for s in sent), False)
-        check("fell through to the agent", len(agent_calls), 1)
+        check("...and does not stop the turn", len(agent_calls), 1)
     finally:
         capabilities.REGISTRY["pc_task"].handler = real
 

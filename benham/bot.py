@@ -841,27 +841,46 @@ def strip_mention(message):
     return text.strip()
 
 
-def attachment_note(message):
-    """Tell the agent what is attached and how to reach it.
+def attachment_note(message, shown=(), can_read=True):
+    """Tell the model what is attached, what it can already see, and how to reach
+    the rest.
 
-    The agent is handed text, not a Message, so without this an attachment is
+    The model is handed text, not a Message, so without this an attachment is
     invisible to it twice over: it cannot tell that a file is there at all, and it
     could not name the message_id `read_attachments` needs even if it guessed. Both
     ids go in the line, so "what's in this?" is answerable in one tool call instead
     of a hunt back through the channel.
 
-    Only the owner path calls this. Filenames are chosen by whoever made the file,
-    so this line names them and claims nothing about them; the contents stay behind
-    read_attachments, whose results the agent already wraps as untrusted data.
+    Filenames are chosen by whoever made the file, so this line names them and
+    claims nothing about them; the contents stay behind read_attachments, whose
+    results the agent already wraps as untrusted data.
+
+    `shown` names the files that have ALREADY been inlined as image blocks on this
+    turn. Without it this line was quietly false the moment images started
+    arriving inline - it said nothing had been downloaded and told the model to
+    call a tool for something already in front of it, which is how a turn gets
+    spent re-fetching a picture it can see. Saying which is also the honest half:
+    a viewable png is looked at, a heic beside it is not, and the difference
+    matters to the answer.
+
+    `can_read` is the owner/guest split. A guest reaches no capability at all, so
+    naming read_attachments to them would advertise a tool that can only refuse -
+    the same reason the guest persona describes what it cannot do rather than
+    listing tools. Their files are still named; only the instruction is dropped.
     """
+    seen = set(shown or ())
     bits = ", ".join(
         f"{a.filename} ({a.size} bytes, {a.content_type or 'unknown type'})"
+        + (" - already visible to me above" if a.filename in seen else "")
         for a in message.attachments)
-    return (f"[Attached to this message: {bits}. "
-            f"Read it with read_attachments channel_id={message.channel.id} "
-            f"message_id={message.id}. Nothing has been downloaded yet - these "
-            f"files do not exist on disk and have no saved path until that call "
-            f"returns, so do not claim they are saved without it.]")
+    note = f"Attached to this message: {bits}."
+    if not can_read:
+        return f"[{note}]"
+    return (f"[{note} "
+            f"Read the rest with read_attachments channel_id={message.channel.id} "
+            f"message_id={message.id}. Nothing has been downloaded to disk - these "
+            f"files have no saved path until that call returns, so do not claim "
+            f"they are saved without it.]")
 
 
 async def resolve_reply(message):
@@ -915,6 +934,24 @@ def _quoted_lines(obj):
     lines += [f"[attached: {a.filename} ({a.size} bytes, "
               f"{a.content_type or 'unknown type'}) {a.url}]"
               for a in obj.attachments]
+    return lines + _embed_lines(obj)
+
+
+def _embed_lines(obj):
+    """Just the embeds and stickers - no author's own words, no attachments.
+
+    Split out of _quoted_lines for the inbound path, which needs exactly this
+    slice of Tyler's OWN message: his typed text is already the top of the turn
+    and his attachments are inventoried separately, but a link preview or a
+    forwarded card is third-party text he did not write and Benham could not
+    previously see at all.
+
+    Embeds matter more than they look. An announcement posted by a webhook or a
+    bot - exactly the sort of thing worth forwarding to Benham - has empty
+    content and all of its words inside the embed, so a reader that skips embeds
+    reports the message as blank.
+    """
+    lines = []
     for em in obj.embeds:
         parts = [p for p in (em.title, em.description) if p]
         parts += [f"{f.name}: {f.value}" for f in em.fields if f.name or f.value]
@@ -1009,6 +1046,120 @@ def pc_label(typed, replied):
         text = f"reply: {sources[0]}" if sources else "reply"
     out = " ".join((text or "").replace("`", "'").split())
     return out[:100] or "pc task"
+
+
+async def inbound_content(message, typed, can_read_attachments=False, log=None):
+    """Everything on one inbound message that the model should see.
+
+    Returns `(content, remembered, tainted)`.
+
+      content     the API content list for the user turn, or None when the
+                  message is plain text and nothing has changed. None rather
+                  than a one-element list on purpose: the overwhelmingly common
+                  turn stays byte-identical to what it was, so this cannot make
+                  ordinary chat more expensive or subtly different.
+      remembered  the TEXT to store in history and to hand the agent as its
+                  `text` argument. Never the images - see below.
+      tainted     whether third-party content reached the model this turn.
+
+    Serves both DM surfaces. `can_read_attachments` is the only difference and
+    it is an owner/guest split: the owner can be told the ids that
+    `read_attachments` needs, and a guest must not be handed the name of a tool
+    that would refuse them anyway.
+
+    LAYOUT, AND WHY IT IS THIS ORDER. What the person TYPED is always the first
+    block. Everything after it is either Benham's own description or fenced
+    third-party data, so a quoted message can never become the top of the prompt.
+    That rule was written for the pc.. path, where the cost of getting it wrong
+    is a shell; it holds here for the same reason at lower stakes.
+
+    ONE NONCE PER TURN. The quote fence and the image markers share a tag, so a
+    message carrying both has a single boundary vocabulary. Safe because the
+    nonce defends against a forgery written before the turn existed.
+
+    IMAGES ARE NOT REMEMBERED, AND THE HISTORY SAYS SO. `remembered` carries a
+    line naming the pictures and stating plainly that they are no longer visible.
+    Two reasons, and the second is the important one. Cost: history_turns is 5
+    for a guest and 20 for Tyler, so a remembered image would be re-sent and
+    re-billed on every following turn of the conversation; this way a picture
+    costs once, on the turn it arrives. Honesty: an image visible one turn and
+    gone the next is exactly the shape INTENT calls out - "anywhere Benham can be
+    asked about a thing it cannot see, it will answer anyway" - so rather than
+    leave the next turn to infer that from an absence, the history states it.
+    """
+    tag = msgparts.new_tag()
+    who = str(message.author)
+    quoted, notes, tainted = [], [], False
+    candidates = list(message.attachments)
+    # Every note is separately bracketed rather than joined into one span, so a
+    # long reason ("that format isn't one I can look at") cannot run into the
+    # next one and read as a single sentence about the wrong file.
+
+    # --- what this message replies to ------------------------------------
+    # Soft failure, unlike the pc.. path. There, Tyler deliberately pointed at a
+    # message and a session run without it would confidently do the wrong work,
+    # so it is a hard stop. Here he is talking, and losing the whole turn because
+    # a quoted message was deleted would be a worse answer than saying so.
+    replied, ref_error = await resolve_reply(message)
+    if ref_error is not None:
+        notes.append(f"[They replied to a message I couldn't read - {ref_error}. "
+                     f"Say so rather than guessing what it said.]")
+    elif replied is not None:
+        block = quoted_block(replied, "replied-to message", tag)
+        if block is None:
+            notes.append("[They replied to a message with no text, files or embeds "
+                         "in it - a poll, or a components-only message.]")
+        else:
+            quoted.append(block)
+            tainted = True
+        candidates += list(replied.attachments)
+
+    # --- forwards and embeds on THIS message ------------------------------
+    # A forward's own content is empty; the text lives in message_snapshots. An
+    # embed is a link preview or a bot card - words a website or a webhook wrote,
+    # which is the same class of thing as a channel read.
+    own = _embed_lines(message)
+    for snap in getattr(message, "message_snapshots", ()):
+        body = _quoted_lines(snap)
+        if body:
+            own.append(f"--- forwarded message [{tag}] (original author unknown) ---")
+            own += body
+    if own:
+        quoted.append(msgparts.fence("quoted in their message", own, tag=tag))
+        tainted = True
+
+    # --- the pictures -----------------------------------------------------
+    images, shown, skipped = await msgparts.image_blocks(candidates)
+    if images:
+        tainted = True
+        if log:
+            log(f"inbound: showing {len(images)} image(s) from {who} - "
+                + ", ".join(shown))
+    if skipped:
+        notes.append("[Sent but not something I could look at: "
+                     + "; ".join(skipped) + ".]")
+    if message.attachments:
+        notes.append(attachment_note(message, shown,
+                                     can_read=can_read_attachments))
+
+    if not (quoted or images or notes):
+        return None, typed, False          # ordinary text: nothing changes
+
+    text_parts = [p for p in ([typed or None] + notes + quoted) if p]
+    content = [{"type": "text", "text": "\n\n".join(text_parts)}]
+    if images:
+        content.append({"type": "text",
+                        "text": msgparts.image_open(tag, who, shown)})
+        content += images
+        content.append({"type": "text", "text": msgparts.image_close(tag)})
+
+    remembered = "\n\n".join(text_parts)
+    if shown:
+        remembered += ("\n\n[I was shown " + ", ".join(shown) + " on this message "
+                       "and looked at them then. They are NOT in this history and "
+                       "I cannot see them now - if I need to look again I have to "
+                       "ask them to re-send, not describe them from memory.]")
+    return content, remembered, tainted
 
 
 async def handle_guest_dm(message):
@@ -1175,7 +1326,15 @@ async def on_message(message):
     # A file with no caption is still a message. This used to return, so dropping a
     # screenshot into the DM and waiting produced silence - the exact gesture most
     # likely to be someone's first test of "can you see my attachment?".
-    if not text and not message.attachments:
+    #
+    # And so are the other four, which were still silent until rich context landed.
+    # A FORWARD is the sharp one: a forwarded message's own `content` is empty by
+    # construction - the text lives in message_snapshots - so forwarding something
+    # to Benham without typing a caption hit this line and returned. That is the
+    # single most natural way to say "look at this", and it did nothing at all.
+    # An embed-only message (a bare link, a webhook card) had the same shape.
+    if not (text or message.attachments or message.embeds or message.stickers
+            or message.message_snapshots or message.reference):
         return
 
     # A blocked PC permission request outranks everything: a Claude Code session is
@@ -1350,13 +1509,6 @@ async def on_message(message):
         # that is specifically not on the list, which is the thing being limited.
         return
 
-    # Describe the attachments only now, on the way into the agent. Deliberately
-    # below the confirmation and PC-permission checks above: those match a narrow
-    # affirmative against the whole message, so appending a line up there would mean
-    # a "yes" sent with a file attached no longer reads as a yes.
-    if message.attachments:
-        text = (text + "\n\n" + attachment_note(message)).strip()
-
     # --- binding, the certain half (stage 3 item 10) -------------------------
     # Tyler's rule: "both, reply binds and the model judges and tells me." This is
     # the reply half, and it runs BEFORE the model sees anything - a real Discord
@@ -1442,13 +1594,35 @@ async def on_message(message):
                         f"({len(queue)} still live) - leaving it to the model to "
                         f"say which one it means")
 
+    # Build the rich turn only now, on the way into the agent, and deliberately
+    # BELOW everything that matches a narrow affirmative against the whole
+    # message: the confirmation and PC-permission checks above, and the slot
+    # binding just above this. All three read `text` expecting Tyler's words and
+    # nothing else, so a "yes" or a "2: sqlite" sent with a screenshot attached
+    # has to still read as one. The old attachment_note line sat above the
+    # binding and would have handed `conversations.answer` the note as part of
+    # his answer; nothing had noticed because nobody had answered a queued
+    # question with a file attached yet.
+    #
+    # The context this adds is third-party by definition - a picture, a quoted
+    # message, a link preview's text - so the turn is tainted from here, before
+    # the model has chosen anything. That is the same taint read_attachments has
+    # always applied; inlining only moves it to where the content arrives.
+    # Consequences are real and intended: outward actions need his approval and
+    # pc_task is refused outright, which is INTENT's auto-triage wall working as
+    # designed - he looks, then authorises the write from a fresh, clean message.
+    content, text, tainted = await inbound_content(
+        message, text, can_read_attachments=True, log=log)
+    if tainted:
+        call_ctx = call_ctx.with_taint(True)
+
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
     await react(message, "👀")
     try:
         async with message.channel.typing():
             reply, parked = await agent.respond(
-                client, log, text,
+                client, log, text, content=content,
                 actor_id=message.author.id, actor_name=str(message.author),
                 channel_id=message.channel.id,
                 guild_id=message.guild.id if message.guild else None,
