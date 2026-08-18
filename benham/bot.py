@@ -53,6 +53,7 @@ from benham.core import jsonio
 from benham.core import msgparts
 from benham.core import notify
 from benham.core import policy
+from benham.core import rooms
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -513,6 +514,16 @@ async def on_ready():
             log(f"presence setup failed:\n{traceback.format_exc()}")
 
     dump_channels()
+    # The one deliberate exception to "rooms are never created implicitly":
+    # SCRATCH exists so pc.. tasks always have somewhere to land (item 22b).
+    # Created here, once, logged - a known moment in code, not a typo at runtime.
+    try:
+        entry = rooms.ensure(rooms.SCRATCH,
+                             "default room - pc.. tasks land and resume here",
+                             "system")
+        log(f"room '{rooms.SCRATCH}' ready (seq {entry.get('seq', 0)})")
+    except Exception:  # noqa: BLE001 — a broken index must not block startup
+        log(f"scratch room setup failed:\n{traceback.format_exc()}")
     if not poll_outbox.is_running():
         poll_outbox.start()
     if not tick_conversations.is_running():
