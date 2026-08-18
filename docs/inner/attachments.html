@@ -22,7 +22,13 @@
     the model thinks to reach for a tool — which on the guest path it could never do anyway.
     <code>benham/core/msgparts.py</code> encodes; <code>bot.inbound_content</code> assembles.
     Four formats (png, jpg, gif, webp), 4 per message, 4MB each; anything outside that is
-    <em>named with its reason</em> rather than dropped. It <a href="taint.html">taints the
+    <em>named with its reason</em> rather than dropped. <strong>Which format it is comes
+    from the bytes, not from the label Discord attached</strong> — on 2026-08-18 a file named
+    <code>.png</code> and typed <code>image/webp</code> was sent under that label, and the API
+    rejected the mismatch with <code>BadRequestError</code> twice while every JPEG in the same
+    conversation worked. The declared type now only decides whether to bother downloading;
+    <code>msgparts.sniff</code> re-derives the real one from the magic bytes, and bytes that
+    are not a picture at all are named rather than guessed at. It <a href="taint.html">taints the
     turn</a> — that is the security half, and the reason it is not simply free.</p>
     <p><strong>Reading:</strong> <code>read_attachments channel_id= message_id=</code>
     downloads what one named message carries into <code>downloads/&lt;message_id&gt;/</code>

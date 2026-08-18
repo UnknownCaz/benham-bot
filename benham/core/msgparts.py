@@ -92,7 +92,10 @@ def media_type(content_type, filename):
     Discord usually reports one, but not always - and a png that arrives typed as
     application/octet-stream is still a png. Guessing from the extension is safe
     because the only decision it feeds is whether to try showing the file; a
-    wrong guess produces a rejected image, never a wrong action.
+    wrong guess only costs a download. It is NOT what gets sent: sniff()
+    re-derives the type from the bytes, because this was wrong in the field and
+    "a rejected image" turned out to mean a real person watching Benham fail
+    twice, with no reason given and a suggestion to try again.
     """
     media = (content_type or "").split(";")[0].strip().lower()
     if media and media != "application/octet-stream":
@@ -105,6 +108,41 @@ def media_type(content_type, filename):
 def is_viewable(content_type, filename):
     """True if this attachment is one the model can actually be shown."""
     return media_type(content_type, filename) in VIEWABLE_MEDIA
+
+
+# The first bytes of each viewable format. Written as hex rather than escapes
+# so nothing between here and the file can mangle them.
+_MAGIC = ((bytes.fromhex("ffd8ff"), "image/jpeg"),          # JPEG, all variants
+          (bytes.fromhex("89504e470d0a1a0a"), "image/png"),
+          (b"GIF87a", "image/gif"),
+          (b"GIF89a", "image/gif"))
+_WEBP_HEAD, _WEBP_TAG = b"RIFF", b"WEBP"
+
+
+def sniff(raw):
+    """The media type the BYTES say this is, or None if it is not one we can view.
+
+    THE BYTES ARE THE FACT. image_blocks already believed that about SIZE - it
+    re-checks the length after downloading, because "the metadata is supplied by
+    whoever uploaded the file" - and did not believe it about TYPE. That gap is
+    the whole of the 2026-08-18 webp bug: Discord reported `image/webp` for a
+    file named `.png`, the string went into the block verbatim, and the API was
+    handed an image whose declared type did not match its content. It answered
+    BadRequestError - twice, to someone who had just been told to try again.
+
+    None for anything unrecognised, deliberately: a file that does not begin
+    like an image we can send is one we must not claim to be sending, and the
+    caller turns that into a named reason rather than a silent drop.
+    """
+    if not raw:
+        return None
+    for magic, media in _MAGIC:
+        if raw.startswith(magic):
+            return media
+    # webp is RIFF, then a four-byte length, then WEBP.
+    if len(raw) >= 12 and raw[:4] == _WEBP_HEAD and raw[8:12] == _WEBP_TAG:
+        return "image/webp"
+    return None
 
 
 def new_tag():
@@ -213,6 +251,13 @@ async def image_blocks(attachments, budget=MAX_IMAGES, max_bytes=MAX_IMAGE_BYTES
             skipped.append(f"{name}: turned out to be over my "
                            f"{max_bytes // 1048576}MB limit once downloaded")
             continue
-        blocks.append(block(media, raw))
+        # Declared type was only ever good enough to decide whether to bother
+        # DOWNLOADING. Now the bytes are here, they win - see sniff().
+        real = sniff(raw)
+        if real is None:
+            skipped.append(f"{name}: the bytes are not a picture I can open, "
+                           f"whatever it is named or typed as")
+            continue
+        blocks.append(block(real, raw))
         names.append(name)
     return blocks, names, skipped

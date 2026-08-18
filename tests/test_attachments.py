@@ -19,6 +19,7 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import asyncio
+import io
 import os
 import shutil
 import sys
@@ -26,6 +27,7 @@ import tempfile
 
 import discord
 
+from benham import paths
 from benham.core import capabilities
 from benham.core import policy
 
@@ -491,6 +493,70 @@ try:
     check("it takes no url parameter, by design", "url" in ra.params, False)
     check("send_file still posts (allowlist applies)", capabilities.REGISTRY["send_file"].posts, True)
     check("dm_user is still outward", capabilities.REGISTRY["dm_user"].outward, True)
+
+    section("The BYTES decide the media type, not Discord's label")
+    # THE 2026-08-18 WEBP BUG. Discord reported image/webp for a file named .png;
+    # that label went into the block verbatim and the API rejected the mismatch
+    # with BadRequestError - twice, to Doom, who had just been told to try again.
+    # Every JPEG in the same conversation worked, which is exactly what made it
+    # look like a format problem rather than a labelling one.
+    from benham.core import msgparts
+
+    PNG = bytes.fromhex("89504e470d0a1a0a") + b"x" * 40
+    WEBP = b"RIFF" + bytes(4) + b"WEBP" + b"x" * 40
+    JPEG = bytes.fromhex("ffd8ffe0") + b"x" * 40
+
+    class _Att:
+        def __init__(self, filename, content_type, raw):
+            self.filename, self.content_type, self._raw = filename, content_type, raw
+            self.size = len(raw)
+
+        async def read(self):
+            return self._raw
+
+    def shown(*atts):
+        return asyncio.run(msgparts.image_blocks(list(atts)))
+
+    # The exact file that failed: named .png, labelled webp, actually a PNG.
+    blocks, names, skipped = shown(_Att("Alex_s_legion.png", "image/webp", PNG))
+    check("a mislabelled picture is still sent", len(blocks), 1)
+    check("...declared as what it ACTUALLY is - the mismatch the API rejected",
+          blocks[0]["source"]["media_type"], "image/png")
+    check("...and nothing is skipped for it", skipped, [])
+
+    # The fix must not become "webp is banned". A real webp still goes.
+    blocks, _n, _s = shown(_Att("meme.png", "image/png", WEBP))
+    check("a real webp is sent as webp however it is named",
+          blocks[0]["source"]["media_type"], "image/webp")
+
+    # Bytes that are not a picture are NAMED, never silently dropped and never
+    # sent as a guess. A silent drop is what had Benham telling someone to upload
+    # again for a file that was never going to arrive.
+    blocks, names, skipped = shown(_Att("trap.png", "image/png", b"not an image"))
+    check("bytes that are not a picture are not sent", blocks, [])
+    check("...and the file is named in the reason", 
+          bool(skipped) and "trap.png" in skipped[0], True)
+
+    # The honest case is untouched.
+    blocks, names, _s = shown(_Att("shot.jpg", "image/jpeg", JPEG))
+    check("a correctly labelled jpeg still works",
+          [blocks[0]["source"]["media_type"], names], ["image/jpeg", ["shot.jpg"]])
+
+    section("The guest prompt no longer contains the three false claims")
+    # All three were said to Doom in one thread on 2026-08-18. A prompt is not a
+    # comment - it steers every reply on the surface it governs - so the rules
+    # are asserted here rather than trusted.
+    persona = io.open(os.path.join(paths.PROMPTS_DIR, "guest_persona.md"),
+                      encoding="utf-8").read().lower()
+    check("it forbids widening one failure into a format claim",
+          "one file failing is one file failing" in persona, True)
+    check("...naming the sentence that was actually said",
+          "can't see pngs" in persona, True)
+    check("it states the memory truth rather than leaving it to be guessed",
+          "the last few turns, not last week" in persona, True)
+    check("...and marks the denial as false", 
+          "start fresh every time" in persona and "false" in persona, True)
+
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

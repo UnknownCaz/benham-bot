@@ -1329,8 +1329,17 @@ async def handle_guest_dm(message):
         guest.refund(message.author.id)
         log(f"guest chat failed for {message.author.id} (message refunded):\n"
             f"{traceback.format_exc()}")
+        # "Try again?" was advice, not information, and it was wrong: the error a
+        # guest actually hit was a deterministic rejection of the file he sent, so
+        # every retry failed identically. Say what is known - including that the
+        # message was refunded, which just happened two lines up - and only point
+        # at the attachment when there was one.
+        blame = (" It looks like the file you attached rather than anything you did, "
+                 "so re-sending the same one will probably land the same way."
+                 if message.attachments else "")
         await reply_in(message.channel,
-                       f"Something broke on my end there - {type(e).__name__}. Try again?")
+                       f"That one failed on my end - {type(e).__name__}. It is logged, "
+                       f"and it has not cost you a message.{blame}")
 
 
 @client.event
