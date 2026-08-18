@@ -264,6 +264,30 @@ async def main():
               confirm.get(p.token) is not None, True)
         confirm.cancel()
 
+        section("The standing rule, in the cached half so it renders every turn")
+        # The weakest of the three layers and deliberately last. It is here because
+        # the existing rule covered the false "it's done" and said nothing about the
+        # false "it's waiting" - and because it was scoped to DESTRUCTIVE tools,
+        # while the confirmation he was waiting for came from dm_user, which is
+        # tier 1 and got a preview only because the turn was tainted.
+        static, _vol = agent._system_blocks("a DM", "caz6666")
+        check("the rule is in the STATIC block, not a conditional one",
+              "do not tell him a preview or confirmation is WAITING" in static, True)
+        # Two shorter fragments rather than one sentence: the prompt is hard-wrapped,
+        # so a phrase spanning a line break contains a newline and never matches.
+        # The first draft of this check asserted the whole sentence and failed for
+        # that reason alone, which is worth leaving a note about - a check can be
+        # green or red for reasons that have nothing to do with what it is about.
+        check("it says what actually creates one",
+              "Exactly two things put one there" in static
+              and "came back as a preview" in static, True)
+        check("it covers the taint path, not only destructive tools",
+              "Destructive tools are not the only source" in static, True)
+        check("and it names the harness as the sender",
+              "sent by the harness, not by you" in static, True)
+        check("the old rule about the opposite lie is untouched",
+              "Never claim a destructive" in static, True)
+
         section("Shape")
         check("an empty reply is returned as-is", V(""), "")
         check("None survives", V(None), None)
