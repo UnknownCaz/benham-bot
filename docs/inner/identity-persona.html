@@ -59,10 +59,26 @@
     your machine — all wrong for a guest, the last one dangerously so: a model told wrong
     things about its tools promises wrong things. <code>_system_prompt()</code> in
     <code>guest.py</code> reads <code>guest_persona.md</code> and nothing else, and its fallback
-    when the file is missing is a short paragraph whose load-bearing half is the sentence
-    "you have NO tools on this path" — a missing prompt file must not quietly become an
-    unconstrained model.</p>
-    <p class="note"><strong>Corrected 2026-08-17.</strong> This page claimed the guest prompt
+    when the file is missing is a short paragraph carrying two load-bearing sentences: "you have
+    NO tools on this path", and that it is Benham. A missing prompt file must not quietly become
+    an unconstrained model — nor a differently-named one.</p>
+    <p class="note"><strong>Corrected 2026-08-17 (identity).</strong> The headline above
+    — "Benham is Benham — never you" — was true of this page and false of the
+    prompts, on every surface, the whole time it has been written here. The guest prompt opened
+    "You are Claude, reaching this person through the Benham bot. Same Claude, different body."
+    <code>agent.py</code>'s fallback persona said "the same Claude he works with in Claude Code".
+    <code>persona.md</code> called collaborators "scenery you're polite to". None of the three was
+    wrong when it was written: they date to 2026-07-26, 07-28 and 07-29, and the decision that
+    makes them wrong — INTENT decision #4, always Benham, one character on every surface
+    — was settled 2026-08-16. The decision never reached the prompt files, and one of the
+    three was recorded in the drift map (section 3.1) without being fixed.
+    <strong>It was not theoretical.</strong> On 2026-08-17 23:39:29 the only project participant
+    asked what Benham could do after the refactor and was told "I'm the same Claude you'd use
+    elsewhere" — the prompt working exactly as written. All four sites are fixed, and
+    <code>tests/test_identity_frame.py</code> now asserts the frame on every surface including
+    both fallbacks, so reading is no longer the only thing standing between a settled decision
+    and a live prompt.</p>
+    <p class="note"><strong>Corrected 2026-08-17 (grants).</strong> This page claimed the guest prompt
     appends a grants-generated correction paragraph. It does not — there is no grants lookup in
     <code>guest.py</code> at all. The property it was reaching for is real but comes from
     somewhere else entirely: no capability in the registry declares <code>guest=True</code>, so
