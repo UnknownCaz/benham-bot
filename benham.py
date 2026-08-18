@@ -38,6 +38,7 @@ COMMANDS = {
     "catchup":      ("benham.cli.catchup",      "invisible, read-only catch-up on one channel"),
     "read_history": ("benham.cli.read_history", "invisible, read-only reader across guilds"),
     "ask":          ("benham.cli.ask",          "ask Tyler something and wait for his answer"),
+    "outreach":     ("benham.cli.outreach",     "ask a whitelisted COLLABORATOR something (never Tyler)"),
     "conv":         ("benham.cli.conv",         "read, close or bank conversations"),
     "status":       ("benham.cli.status",       "quick, read-only health check"),
     "usage":        ("benham.cli.usage",        "token and cost accounting from the logs"),
