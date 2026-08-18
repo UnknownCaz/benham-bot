@@ -810,7 +810,26 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     - Handoff threshold starts low (~50k transcript tokens), config not code; the reasoning
       (cold-cache re-billing) is recorded above and is not config.
     - The allowlist additions (`benham.py rooms`, `room read` as read-only) are Tyler's to make -
-      permission config sits outside decision #26 on purpose.
+      permission config sits outside decision #26 on purpose. **Made by him 2026-08-18**, in the
+      same conversation that green-lit the build.
+
+    **SHIPPED 2026-08-18, commits `6be6dbf..0c4c3b5` + `bfca9ea`, live-verified end to end.**
+    Boot 08:06:30Z: 61 capabilities (18/9/27/7), scratch created at boot. First spawn: a real
+    session ($0.45, zero approval asks) quoted its room instructions back accurately and its
+    report auto-posted as scratch#1 under `worker (10d56db5)`. Then **the resume mechanism ran
+    against the real SDK for the first time**: `continue=true` came back `resumed: true` on the
+    SAME session id, quoted its earlier sentence verbatim (*"an exact quote, not a
+    reconstruction"*), and cost **$0.05 against the fresh run's $0.45** - the cold-cache
+    arithmetic recorded under 22a, now measured in production rather than predicted. `pc..`
+    lands in scratch and `pc.. continue:` resumes the thread; `pc_task` stays registered until
+    the week 22d prescribes has passed.
+
+    One process note, kept because it is the pattern in a new costume: mid-build, a merge
+    briefly reached master with two test files red, because the suite's exit code was read
+    through a pipe (`run_tests.py | tail` - the chain saw tail's zero). A green-looking pipeline
+    over a failing run is a confident claim with nothing checking it, in shell syntax. Fixed
+    forward within minutes, recorded in `bfca9ea`; the live bot never ran the red tree because
+    no restart fell inside the window. The suite is checked bare, exit code first, since.
 
 ### What "done" looks like
 

@@ -19,6 +19,17 @@
     your own settings and skills loaded — "restart Isle of Berk" works because <em>your</em>
     exaroton skill is there, not because this repo knows what exaroton is. Reached via the
     <code>pc..</code> DM prefix or the <code>pc_task</code> capability.</p>
+    <p><strong>Rooms (2026-08-18, INTENT item 22).</strong> The <code>pc..</code> prefix now
+    routes through <code>spawn_in_room</code>: behaviour is unchanged, but every task lands in
+    the standing <em>scratch</em> room with author, timestamp, and the session id — which is the
+    <code>resume</code> handle. <code>pc.. continue: &lt;task&gt;</code> resumes the scratch
+    worker with its context intact; a <em>named</em> room's worker resumes by default (a room is
+    a thread), and past the handoff bound a continue rolls over to a fresh session that is told
+    the room holds the thread. A spawned session gets a <em>pointer</em> to its room, never room
+    content — it reads the room itself via the CLI, so other writers' text never sits in the
+    instruction seat. Sessions post nothing anywhere by themselves: v1 rooms are pull-only, and
+    the only automatic write is the session's own final message, posted into its room as the
+    report. <code>pc_task</code> remains registered during the transition.</p>
     <table>
       <tr><th>tool class</th><th>behaviour</th></tr>
       <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code>, <code>WebFetch</code>, <code>WebSearch</code>, <code>TodoWrite</code>, …</td><td>runs immediately</td></tr>
