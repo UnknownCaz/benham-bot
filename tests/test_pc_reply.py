@@ -536,6 +536,38 @@ async def main():
         check("...and still says what it wants",
               "needs something after it" in (sent[-1] if sent else ""), True)
 
+        print("\nAttachments on a pc.. message are named, never silently dropped")
+        # "pc.. fix what this screenshot shows" is an obvious thing to type, and it
+        # used to start a session with nothing anywhere saying a picture existed.
+        # They are named rather than passed: this path is a relay to a session on
+        # the real machine with no route to Discord, and pc_task is the one
+        # capability blocked_when_tainted exists for - so inlining here is exactly
+        # what must not happen. Being told what it is missing lets it ask.
+        reset()
+        m = _Message(TYLER, "pc.. fix what this shows")
+        m.attachments = [_Attachment("shot.png", 1234, "image/png")]
+        await bot.on_message(m)
+        check("the task still ran", len(ran), 1)
+        task = ran[0] if ran else ""
+        check("the file is named in the task", "shot.png" in task, True)
+        check("...with its type, so the session can judge relevance",
+              "image/png" in task, True)
+        check("...told plainly it cannot see it", "You CANNOT see them" in task, True)
+        check("...and to ask rather than guess", "do not guess" in task, True)
+        check("the filename is fenced, not loose in the prompt",
+              "--- files attached to Tyler's message [" in task, True)
+        check("...and closed", "--- end of files attached to Tyler's message [" in task,
+              True)
+        # Tyler's own words still open the prompt. A filename is attacker-chosen
+        # text and this string becomes a shell session's prompt.
+        check("his instruction is still the top of the prompt",
+              task.startswith("fix what this shows"), True)
+
+        reset()
+        await bot.on_message(_Message(TYLER, "pc.. list my downloads"))
+        check("CONTROL: a pc.. with no files gains no note",
+              "CANNOT see them" in (ran[0] if ran else ""), False)
+
         print("\nGuild pc.. + reply: the fast path stays DM-only")
         # This case used to assert "no resolution attempted" as its proof that the
         # pc.. fast path had not run, and that proxy was sound for exactly as long
