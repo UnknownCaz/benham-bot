@@ -316,7 +316,10 @@ for name in sorted(capabilities.REGISTRY):
 # - a guild message that talked the model into calling it would be putting words in
 # his mouth on a record other decisions are then made from. SYSTEM is excluded for
 # the sharper version of the same thing: a timer must never answer on his behalf.
-EXPECTED_RESTRICTED = {"pc_task", "answer_conversation"}
+# spawn_in_room joined 2026-08-18: pc_task's successor (INTENT item 22), and it
+# wears pc_task's exact profile for pc_task's exact reasons - a DM is the only
+# human origin trusted with the machine, and never a tainted one.
+EXPECTED_RESTRICTED = {"pc_task", "answer_conversation", "spawn_in_room"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
