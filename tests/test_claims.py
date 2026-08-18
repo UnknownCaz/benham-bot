@@ -1,0 +1,245 @@
+"""
+test_claims.py - a reply may not announce a confirmation that was never parked.
+
+THE EVENING THIS EXISTS FOR. 2026-08-17, twice. Benham told Tyler "Retrying now -
+preview should be waiting on your end" at 22:21:06 and "Resent - preview should be
+up now" at 23:39:09. Neither turn called a tool. Every real preview leaves a
+`PROPOSED dm_user ... [rule=outward_tainted]` line in supervise.log and there are
+six of them that night; neither of those two has one behind it. The 23:39 one is
+provable from token accounting alone - `agent usage [round 1] in=3745 out=56` and
+then nothing, where every turn that calls a tool has a round 2 and an action line
+between them. He waited over two hours for a button that did not exist.
+
+It had already caught itself once, at 22:23:33 - "the 'previews' I described
+earlier were never real" - and did it again seventy-six minutes later. So the thing
+being tested here is deliberately NOT the model's care. A turn cannot inherit the
+last turn's contrition, and any fix resting on that is not a fix.
+
+INTENT.md §3.3, third recurrence. What is new this time is that the harness sends
+the real preview itself: bot.py renders confirm.describe(parked) with buttons right
+after the reply whenever something is parked. So the sentence is redundant when
+true and load-bearing only when false, which is what makes correcting it free.
+
+The split below follows that asymmetry. `confirm.current()` is the certain half and
+gets the end-to-end checks; the wording match is the fuzzy half and gets a matrix,
+because the way this becomes a nuisance is firing on true sentences until the
+correction reads as wallpaper.
+
+The sibling check `_verify_saved_claims` (invented downloads/ paths, same defect
+class) is tested in test_attachments.py, where the disk fixtures already live.
+
+Fully offline - the Anthropic client is a scripted fake, no API calls, no cost.
+
+    python test_claims.py
+"""
+
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package lives.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+import asyncio
+import sys
+
+from benham.core import agent
+from benham.core import confirm
+from benham.core import policy
+
+TYLER = 273967061619965952
+TESTING_CHAN = 753732380921167902
+
+_fails = []
+
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}")
+    if not ok:
+        print(f"        got {got!r}, want {want!r}")
+        _fails.append(label)
+
+
+def section(title):
+    print(f"\n{title}")
+
+
+# --------------------------------------------------------------------------- stubs
+
+class _Block:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def model_dump(self):
+        return dict(self.__dict__)
+
+
+class _Resp:
+    def __init__(self, content, stop_reason):
+        self.content = content
+        self.stop_reason = stop_reason
+        self.usage = _Block(input_tokens=0, output_tokens=0)
+
+
+class _Messages:
+    def __init__(self, script):
+        self.script = script
+        self.calls = 0
+
+    def create(self, **kw):
+        r = self.script[min(self.calls, len(self.script) - 1)]
+        self.calls += 1
+        return r
+
+
+class _FakeAnthropic:
+    def __init__(self, script):
+        self.messages = _Messages(script)
+
+
+class _StubClient:
+    user = _Block(id=752313060970201218)
+
+    def get_channel(self, cid):
+        return None
+
+    def get_guild(self, gid):
+        return None
+
+
+# --------------------------------------------------------------------------- harness
+
+async def _turn(key, said, said_back, logged):
+    """One agent turn whose model output is exactly `said_back` and calls nothing.
+
+    The shape of both real incidents: a single round, text only, no tool_use. The
+    fake never parks anything, so confirm stays empty exactly as it did that night.
+    """
+    agent._client = _FakeAnthropic([_Resp([_Block(type="text", text=said_back)],
+                                          "end_turn")])
+    agent._last_call.clear()
+    agent.forget(key)
+    reply, pending = await agent.respond(
+        _StubClient(), logged.append, said,
+        actor_id=TYLER, actor_name="caz6666", channel_id=TESTING_CHAN,
+        guild_id=None, where="a DM", conversation_key=key,
+        call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
+    return reply, pending
+
+
+def _park():
+    """A confirmation exactly as capabilities.run/agent.respond would leave one."""
+    return confirm.park("dm_user", {"user_id": TYLER}, {"summary": "DM Tyler a file"},
+                        TYLER, "dm")
+
+
+async def main():
+    if not agent.ENABLED:
+        print("agent disabled (no ANTHROPIC_API_KEY) - the end-to-end checks need "
+              "the module live, but make no API calls. Set any non-empty key.")
+        return 1
+
+    V = agent._verify_confirmation_claims
+    keys = ["test:claims_22_21", "test:claims_23_39", "test:claims_real"]
+    try:
+        section("The two sentences that cost him two hours")
+        # 22:21:06, verbatim. Nothing was parked, nothing was called, and the reply
+        # sent him to look for a button. This is the check that fails when the fix
+        # is backed out.
+        confirm.cancel()
+        logged = []
+        reply, pending = await _turn(
+            "test:claims_22_21",
+            "sorry wasnt looking for the prompt again can you send it again?",
+            "Retrying now - preview should be waiting on your end.", logged)
+        check("nothing was actually parked", pending, None)
+        check("22:21 - the phantom preview is corrected, not relayed",
+              "Correction (automatic check)" in reply, True)
+        check("and the correction says nothing is parked",
+              "nothing is actually parked" in reply, True)
+        check("the original sentence is kept, not silently deleted",
+              "preview should be waiting on your end" in reply, True)
+        check("and it is logged",
+              any("claimed a pending confirmation" in m for m in logged), True)
+
+        # 23:39:09, verbatim.
+        confirm.cancel()
+        reply, _ = await _turn(
+            "test:claims_23_39",
+            "can you resend the prompt inmossed the window",
+            "Resent - preview should be up now.", [])
+        check("23:39 - same again, seventy-six minutes later",
+              "Correction (automatic check)" in reply, True)
+
+        section("A preview that DOES exist is left alone")
+        # The whole point of checking confirm.current() rather than the words: when
+        # the claim is true it must pass untouched, because bot.py is about to send
+        # the real thing right underneath it.
+        confirm.cancel()
+        _park()
+        reply, _ = await _turn(
+            "test:claims_real", "dm me the dossier",
+            "Queued it - the preview is waiting on your end.", [])
+        check("a real parked confirmation passes untouched",
+              "Correction" in reply, False)
+        check("and confirm still holds it", confirm.current() is not None, True)
+
+        # A confirmation parked on an EARLIER turn is still a true claim now: the
+        # window is ten minutes, so "yes it's still up" is answerable and honest.
+        check("a still-live preview from an earlier turn also passes",
+              "Correction" in V("The preview is still up on your end."), False)
+        confirm.cancel()
+
+        section("What counts as claiming one is waiting")
+        # Both incident sentences, at the unit level.
+        check("'preview should be waiting on your end'",
+              "Correction" in V("Retrying now - preview should be waiting on your end."), True)
+        check("'preview should be up now'",
+              "Correction" in V("Resent - preview should be up now."), True)
+        check("a confirmation said to be pending",
+              "Correction" in V("There's a confirmation pending for you."), True)
+        check("an approval prompt said to have been sent",
+              "Correction" in V("I just sent the approval prompt."), True)
+        check("in your DMs",
+              "Correction" in V("The preview is in your DMs."), True)
+
+        section("What does not - the sentences that must never be nagged")
+        check("a bare reply with no confirmation talk", V("all good"), "all good")
+        check("saying it EXPIRED is the honest answer, not a claim",
+              "Correction" in V("That preview expired - want me to make a new one?"), False)
+        check("a question is not a claim",
+              "Correction" in V("Should the preview be waiting on your end?"), False)
+        check("a hypothetical is not a claim",
+              "Correction" in V("Sending that would need your confirmation first."), False)
+        check("an explicit denial is not a claim",
+              "Correction" in V("There's no preview waiting - I never sent one."), False)
+        check("describing the mechanism is not a claim",
+              "Correction" in V("Destructive tools return a preview instead of running."), False)
+        # The sentence-scoped split earns its keep here: every word of a false claim
+        # is present, spread across two sentences that are individually true.
+        check("a true denial followed by an offer stays quiet",
+              "Correction" in V("The preview expired. Want me to send it again?"), False)
+
+        section("Shape")
+        check("an empty reply is returned as-is", V(""), "")
+        check("None survives", V(None), None)
+        check("the check runs after the download check, so both can fire",
+              agent._verify_saved_claims.__name__ in
+              __import__("inspect").getsource(agent.respond)
+              and "_verify_confirmation_claims" in
+              __import__("inspect").getsource(agent.respond), True)
+    finally:
+        confirm.cancel()
+        agent._client = None
+        for k in keys:
+            agent.forget(k)
+
+    print()
+    if _fails:
+        print(f"{len(_fails)} FAILED: " + ", ".join(_fails))
+        return 1
+    print("ALL PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
