@@ -256,6 +256,39 @@ it deliberately instead.
     volatile = (f"## Right now\nYou are talking to {actor_name}, who is your owner "
                 f"Tyler (caz6666). Location: {where}. Current time: {now}.")
 
+    # WHETHER A CONFIRMATION IS PARKED, which nothing ever told the model. On
+    # 2026-08-17 Tyler asked twice about a preview - "can you send it again?" and
+    # "can you resend the prompt inmossed the window" - and both times he was asking
+    # about an object this loop cannot see. It answered anyway, and both answers
+    # were invented. Same shape as the conversation block's own history: told only
+    # what was live, it filled the rest in.
+    #
+    # Read from confirm directly rather than passed in, which is the opposite of
+    # how `conversation` and `queue` arrive. The rule there - the agent is TOLD
+    # things, it does not reach into a store - holds because conversations are
+    # bot.py's domain end to end. Confirmations are not: respond() parks them
+    # itself, forty lines down. And a parameter defaulting to None could not tell
+    # "nothing is parked" from "nobody passed it", which is exactly the kind of
+    # quietly-wrong fact this section exists to stop asserting.
+    _parked = confirm.current()
+    if _parked is not None:
+        volatile += (
+            f"\n\n## A confirmation is parked\n"
+            f"`{_parked.action}` is waiting on him and expires in "
+            f"{_parked.seconds_left // 60}m. The prompt with the Approve/Deny "
+            f"buttons is a real message that went into this DM when the preview was "
+            f"created - the harness sends it, not you. Calling the tool again "
+            f"replaces this one with a fresh prompt.")
+    else:
+        volatile += (
+            "\n\n## Nothing is awaiting his confirmation\n"
+            "No preview is parked and there is no button in front of him. If he is "
+            "asking about one it expired (ten minutes, on this path) or was never "
+            "made - say so and call the tool again to make a real one. NEVER tell "
+            "him a preview is waiting: the only thing that puts one there is a tool "
+            "call returning one, so you would know. Background, not a topic - do "
+            "not bring it up unless he does.")
+
     # An open question goes in the VOLATILE block, after the cache breakpoint, for
     # the same reason the clock does: it changes between turns, and putting it above
     # the breakpoint would bust a ~7.4k-token cached prefix every time a
