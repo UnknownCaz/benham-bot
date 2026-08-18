@@ -84,8 +84,10 @@ class _Messages:
     def __init__(self, script):
         self.script = script
         self.calls = 0
+        self.sent = []          # every kwargs dict, so the SYSTEM PROMPT is checkable
 
     def create(self, **kw):
+        self.sent.append(kw)
         r = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         return r
@@ -126,6 +128,17 @@ async def _turn(key, said, said_back, logged):
     return reply, pending
 
 
+def _system_sent():
+    """Everything the last turn actually put in the system parameter, joined.
+
+    Asserted on this rather than on _system_blocks' return value: a block that is
+    built and never rendered is indistinguishable from a working one, which is the
+    trap this repo has already stepped in once (see the recently_terminal commit on
+    claude/delivery-flag-race). Going through respond() proves it reaches the API.
+    """
+    return "\n\n".join(b["text"] for b in agent._client.messages.sent[-1]["system"])
+
+
 def _park():
     """A confirmation exactly as capabilities.run/agent.respond would leave one."""
     return confirm.park("dm_user", {"user_id": TYLER}, {"summary": "DM Tyler a file"},
@@ -139,7 +152,8 @@ async def main():
         return 1
 
     V = agent._verify_confirmation_claims
-    keys = ["test:claims_22_21", "test:claims_23_39", "test:claims_real"]
+    keys = ["test:claims_22_21", "test:claims_23_39", "test:claims_real",
+            "test:claims_told_empty", "test:claims_told_live"]
     try:
         section("The two sentences that cost him two hours")
         # 22:21:06, verbatim. Nothing was parked, nothing was called, and the reply
@@ -218,6 +232,37 @@ async def main():
         # is present, spread across two sentences that are individually true.
         check("a true denial followed by an offer stays quiet",
               "Correction" in V("The preview expired. Want me to send it again?"), False)
+
+        section("It is TOLD whether one is parked - both times he asked, it could not see")
+        # He asked twice that night about an object this loop has no window onto:
+        # "can you send it again?" and "can you resend the prompt inmossed the
+        # window". It answered anyway. Same shape as the conversation block being
+        # told only what was live - absent a true account, it produced a plausible
+        # one. This does not make the fabrication impossible; it removes the reason.
+        confirm.cancel()
+        await _turn("test:claims_told_empty", "can you send it again?", "Sure.", [])
+        empty = _system_sent()
+        check("with nothing parked, the prompt says so",
+              "Nothing is awaiting his confirmation" in empty, True)
+        check("and names the ten-minute expiry, which is what he actually hit",
+              "ten minutes" in empty, True)
+        check("and tells it to make a real one rather than announce one",
+              "call the tool again to make a real one" in empty, True)
+        check("and keeps it background, so it is not a standing topic",
+              "do not bring it up unless he does" in empty, True)
+
+        confirm.cancel()
+        p = _park()
+        await _turn("test:claims_told_live", "did that go through?", "Yep.", [])
+        live = _system_sent()
+        check("with one parked, the prompt names the action", "`dm_user`" in live, True)
+        check("and that it is the harness that sent the buttons",
+              "the harness sends it, not you" in live, True)
+        check("and the false half is NOT also rendered",
+              "Nothing is awaiting his confirmation" in live, False)
+        check("the parked one is untouched by being described",
+              confirm.get(p.token) is not None, True)
+        confirm.cancel()
 
         section("Shape")
         check("an empty reply is returned as-is", V(""), "")
