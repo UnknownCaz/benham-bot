@@ -89,19 +89,53 @@ _last_call = {}          # user_id -> monotonic timestamp of last accepted messa
 # (discord-outreach), the autonomous brain does not talk over it - two Claudes
 # answering in one DM confuses the human and bills two API calls per turn.
 #
-# Deliberately IN-MEMORY with a deadline, not a config flag: control.json is
-# read once at import (see identity.guest_enabled) and quiet is a
-# per-conversation state, not an identity question. The TTL is the safety
-# property - a session that crashes mid-outreach cannot leave someone
-# permanently unable to talk to Benham, because the mute expires on its own.
-# A bot restart clears it for the same reason, and that is fine.
+# PERSISTED with a deadline, not a config flag: control.json is read once at
+# import (see identity.guest_enabled) and quiet is per-conversation state, not
+# an identity question. The TTL is the safety property, and it is the DEADLINE
+# that carries it, not the process: a session that crashes mid-outreach cannot
+# leave someone permanently unable to talk to Benham, because the stored
+# deadline expires on its own no matter what restarts underneath it.
+#
+# This used to be in-memory, on the stated theory that "a bot restart clears it
+# for the same reason, and that is fine". 2026-08-20 proved it is not: the
+# supervisor restarted the bot twice INSIDE one outreach conversation (routine
+# restarts, picking up an allowlist change), the mute died with the process
+# both times, and the brain talked over a live outreach thread with the person
+# it had been quieted for. Restarts are ordinary events here, not rare manual
+# ones - so the deadline lives in state/guest_quiet.json and survives them.
 # --------------------------------------------------------------------------
 
 QUIET_DEFAULT_MINUTES = 60
 QUIET_MAX_MINUTES = 240
+QUIET_FILE = os.path.join(paths.STATE_DIR, "guest_quiet.json")
 
-_quiet = {}              # user_id -> time.time() deadline
+_quiet = None            # user_id -> time.time() deadline; None until first touch
 _quiet_lock = threading.Lock()
+
+
+def _quiet_map():
+    """The live deadline map, loaded from QUIET_FILE on first touch.
+
+    Lazy rather than at import so a test can repoint QUIET_FILE before anything
+    is read. Caller must hold _quiet_lock. JSON keys are strings, so ids are
+    normalised back to int on load - the same int() every accessor applies -
+    and a damaged entry is dropped rather than wedging every quiet call."""
+    global _quiet
+    if _quiet is None:
+        raw = jsonio.read_json(QUIET_FILE, default={})
+        _quiet = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                try:
+                    _quiet[int(k)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+    return _quiet
+
+
+def _save_quiet(q):
+    """Persist the map atomically. Caller must hold _quiet_lock."""
+    jsonio.write_json(QUIET_FILE, {str(k): v for k, v in q.items()})
 
 
 def quiet(user_id, minutes=QUIET_DEFAULT_MINUTES):
@@ -109,14 +143,20 @@ def quiet(user_id, minutes=QUIET_DEFAULT_MINUTES):
     minutes = max(1, min(int(minutes), QUIET_MAX_MINUTES))
     until = time.time() + minutes * 60
     with _quiet_lock:
-        _quiet[int(user_id)] = until
+        q = _quiet_map()
+        q[int(user_id)] = until
+        _save_quiet(q)
     return until
 
 
 def wake(user_id):
     """Lift a quiet early. Returns True if one was actually in effect."""
     with _quiet_lock:
-        return _quiet.pop(int(user_id), None) is not None
+        q = _quiet_map()
+        was = q.pop(int(user_id), None) is not None
+        if was:
+            _save_quiet(q)
+        return was
 
 
 def quiet_until(user_id):
@@ -124,11 +164,13 @@ def quiet_until(user_id):
     expired entry can never linger and shadow a later is-quiet question."""
     now = time.time()
     with _quiet_lock:
-        until = _quiet.get(int(user_id))
+        q = _quiet_map()
+        until = q.get(int(user_id))
         if until is None:
             return None
         if until <= now:
-            del _quiet[int(user_id)]
+            del q[int(user_id)]
+            _save_quiet(q)
             return None
         return until
 

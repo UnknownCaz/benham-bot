@@ -941,6 +941,37 @@ participant before the build, not after it.
 Open defects observed live, queued for another session to pick up. Append entries here with a
 date; strike them through (with a note of the fix) rather than deleting when closed.
 
+### 2026-08-20 — guest_quiet did not survive the bot restarting under it
+
+~~`guest_quiet` returned `{"status": "quieted"}` at 03:51:55Z and the AUTO_REPLY brain answered
+that same user (Draco, 1269372470553743422) at 03:59-04:01, well inside the window.~~ **FIXED the
+same day: the quiet deadline now persists to `state/guest_quiet.json`** and a restart changes
+nothing; regression section in `test_guest.py` simulates the restart by discarding the module map
+and requiring it back from disk.
+
+The diagnosis matters more than the fix, because the report arrived pre-filtered wrong: "the bot
+process was up continuously since 03:38Z (pid 11768), so this is NOT the known
+restart-clears-the-mute case." The pid that was up since 03:38 was the **supervisor**; the log
+shows `benham.bot` itself exited and was restarted at 03:58:42 and again at 04:03:17 — deliberate
+restarts, picking up the FoxieFire allowlist change (the guest roster grows 4 → 5 between the two
+boots). The mute was honoured at 03:57:44 ("brain sitting out dracoslayer..."), died with the
+child process at 03:58:32, and the brain answered from 03:59:21 on. So it WAS the known case,
+wearing the supervisor as a disguise.
+
+The in-memory choice was considered, not an accident — the old comment said "a bot restart clears
+it for the same reason, and that is fine" — but its premise was that restarts are rare and manual.
+They are not: the supervisor makes restarting routine (config reloads, crash recovery), and two
+fell inside one twelve-minute outreach conversation. The TTL safety property survives the fix
+intact, because it was always the DEADLINE that carried it, not the process: a stored deadline
+expires on its own no matter what restarts underneath it, so a crashed session still cannot mute
+anyone permanently. Not routed through policy.py on purpose — the quiet gate guards the guest
+brain's reply, which is not a capability call; what was broken was the state's lifetime, not the
+check's placement.
+
+The pattern, one more costume: **a comment asserting a property ("that is fine") that nothing
+re-checked when the environment changed underneath it.** The supervisor was added after that
+sentence was written, and made it false without touching the file it lives in.
+
 ### 2026-08-18 — what Doom's image test actually found
 
 **The feature works, and was tested hard.** Benham described a victory screen and then read the

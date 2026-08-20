@@ -75,6 +75,7 @@ from benham.guest import guest  # noqa: E402
 _tmp = tempfile.mkdtemp(prefix="benham-guest-test-")
 guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
 guest.USAGE_FILE = os.path.join(_tmp, "guest_usage.json")
+guest.QUIET_FILE = os.path.join(_tmp, "guest_quiet.json")
 
 
 # --------------------------------------------------------------------------
@@ -157,6 +158,53 @@ check("guest chat is not reachable from a guild mention",
 check("a stranger on the guest origin is refused by the allowlist",
       policy.may_chat_as_guest(CallContext.guest_dm(STRANGER)).rule,
       "guest_allowlist")
+
+
+# --------------------------------------------------------------------------
+section("Outreach quiet — the mute survives what actually happens to the bot")
+
+# The regression this section exists for (2026-08-20): guest_quiet returned
+# "quieted", the supervisor restarted the bot mid-conversation - a ROUTINE
+# restart, picking up an allowlist change - and the in-memory mute died with
+# the process. The brain then talked over a live outreach thread well inside
+# the quiet window. A restart is simulated the same way it kills state: the
+# module-level map is discarded and must come back from disk.
+
+_deadline = guest.quiet(DOOM, minutes=90)
+check("quiet() returns a deadline in the future", _deadline > guest.time.time(), True)
+check("quiet_until sees the mute", guest.quiet_until(DOOM), _deadline)
+
+guest._quiet = None                       # the restart: process memory is gone
+check("the mute SURVIVES a restart", guest.quiet_until(DOOM), _deadline)
+
+# JSON keys are strings; every accessor takes ints. The load path must fold the
+# two back together or a persisted mute would be invisible after every restart.
+check("...including when asked with a str id (the int/str seam)",
+      guest.quiet_until(str(DOOM)), _deadline)
+
+check("wake() lifts it", guest.wake(DOOM), True)
+guest._quiet = None
+check("...and the lift also survives a restart", guest.quiet_until(DOOM), None)
+check("waking the already-awake reports so", guest.wake(DOOM), False)
+
+# The TTL stays the safety property: an expired deadline is pruned on read and
+# the prune is persisted, so a restart cannot resurrect a dead mute either.
+guest.quiet(DOOM, minutes=1)
+with guest._quiet_lock:
+    guest._quiet[DOOM] = guest.time.time() - 5     # forcibly expire it
+    guest._save_quiet(guest._quiet)
+check("an expired mute reads as no mute", guest.quiet_until(DOOM), None)
+guest._quiet = None
+check("...and stays gone after a restart", guest.quiet_until(DOOM), None)
+
+# A damaged file must cost the mute, never the guest lane: garbage entries are
+# dropped on load rather than raising into every quiet call.
+guest._quiet = None
+import json as _json  # noqa: E402
+with open(guest.QUIET_FILE, "w", encoding="utf-8") as _f:
+    _json.dump({"not-an-id": "not-a-deadline", str(DOOM): "also-bad"}, _f)
+check("a damaged quiet file reads as no mutes", guest.quiet_until(DOOM), None)
+guest._quiet = None
 
 
 # --------------------------------------------------------------------------
