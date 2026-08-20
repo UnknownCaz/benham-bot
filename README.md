@@ -71,7 +71,7 @@ Every capability declares one, and `capabilities.run()` enforces it.
 | tier | examples | gate |
 |---|---|---|
 | **read** (18) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
-| **speak** (9) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
+| **speak** (10) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
 | **manage** (28) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 <!-- /GENERATED:tier-table -->
@@ -168,7 +168,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 <!-- GENERATED:count -->
-`do` covers all 62 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+`do` covers all 63 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
 <!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)

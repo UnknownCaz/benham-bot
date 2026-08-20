@@ -203,6 +203,22 @@
     "taints": false,
     "tier": 3
   },
+  "deliver_unprompted": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [
+      "local_cli",
+      "system"
+    ],
+    "outward": true,
+    "posts": false,
+    "taints": false,
+    "tier": 1
+  },
   "dm_user": {
     "always_confirm": false,
     "blocked_when_tainted": false,

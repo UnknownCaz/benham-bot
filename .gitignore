@@ -90,3 +90,10 @@ conversations.json
 # independently, which is the tell: the file does not exist until someone is
 # actually asked something, so an untouched state/ hides it from every check.
 ask_batches.json
+
+# The initiative lane: Claude's own open loops about Tyler, the questions it
+# chose to ask him, and the reasoning behind every run that decided not to.
+# Private in the same way agent_memory.json is - and the markdown log is the
+# audit trail he reads, which is a local artifact by design.
+initiative.json
+initiative-log.md

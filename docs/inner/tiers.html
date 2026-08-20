@@ -18,11 +18,11 @@
     <table>
       <tr><th>tier</th><th>examples</th><th>gate</th></tr>
 <!-- GENERATED:tier-table -->      <tr><td><strong>read</strong> (18)</td><td><code>read_channel</code>, <code>search_messages</code>, <code>find_user</code>, <code>what_i_did</code></td><td>none</td></tr>
-      <tr><td><strong>speak</strong> (9)</td><td><code>send_message</code>, <code>dm_user</code>, <code>notify_owner</code>, <code>tell_conversation</code></td><td>owner only — except <code>advance_conversation</code>, <code>notify_owner</code>, <code>tell_conversation</code>, which also admit <code>Origin.SYSTEM</code> and run on the timer</td></tr>
+      <tr><td><strong>speak</strong> (10)</td><td><code>send_message</code>, <code>dm_user</code>, <code>notify_owner</code>, <code>tell_conversation</code></td><td>owner only — except <code>advance_conversation</code>, <code>deliver_unprompted</code>, <code>notify_owner</code>, <code>tell_conversation</code>, which also admit <code>Origin.SYSTEM</code> and run on the timer</td></tr>
       <tr><td><strong>manage</strong> (28)</td><td><code>pin_message</code>, <code>add_role</code>, <code>pc_task</code>, <code>triage_conversation</code></td><td>owner only — except <code>set_presence</code>, <code>triage_conversation</code>, which also admit <code>Origin.SYSTEM</code> and run on the timer</td></tr>
       <tr><td><strong>destructive</strong> (7)</td><td><code>delete_message</code>, <code>purge_messages</code>, <code>kick_member</code>, <code>ban_member</code></td><td>guild allowlist + dry-run + explicit confirm</td></tr><!-- /GENERATED:tier-table -->
     </table>
-    <p><!-- GENERATED:count -->62<!-- /GENERATED:count --> capabilities right now — this number and the
+    <p><!-- GENERATED:count -->63<!-- /GENERATED:count --> capabilities right now — this number and the
     table above are generated from the live registry by <code>scripts/gen_manual.py</code>,
     and <code>--check</code> fails the suite if they drift. <code>python benham.py do list</code>
     is still the live truth if you want it from the horse's mouth. A capability's tier travels

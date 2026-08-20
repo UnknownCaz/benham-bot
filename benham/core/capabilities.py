@@ -1270,6 +1270,68 @@ async def _advance_conversation(ctx, p):
             "owner_told": told_owner}
 
 
+@action("deliver_unprompted", identity.SPEAK,
+        "Send ONE question Claude decided on its own was worth asking Tyler - the "
+        "outward half of the initiative lane. Takes a conversation id and nothing "
+        "else: the recipient and the words both come off the stored record, and "
+        "policy.authorize_unprompted decides whether it may go at all. Never "
+        "nudges, never reports, never asks for access.",
+        {"id": {"type": "str", "required": True,
+                "desc": "Unprompted conversation id, e.g. c31"}},
+        # NARROWER than advance_conversation on purpose. That one is reachable
+        # from every owner route because Tyler may legitimately want to push a
+        # queued question along by hand. This one has no manual use - a human who
+        # wants to say something to Tyler can simply say it - so the grant is the
+        # two origins that actually drive it: the scheduled job, through the CLI
+        # and the outbox (LOCAL_CLI), and any future timer (SYSTEM). It is safe to
+        # grant to an automated caller for exactly the reason advance_conversation
+        # is: it cannot choose a recipient or compose a message.
+        origins={policy.Origin.LOCAL_CLI, policy.Origin.SYSTEM},
+        outward=True)
+async def _deliver_unprompted(ctx, p):
+    from benham.core import conversations, initiative, notify
+
+    conv = conversations.get(str(p["id"]))
+    # THE GATE, and it runs here rather than only in the CLI because here is the
+    # moment the message would actually reach him. The CLI checks too, so a bad
+    # question is refused before anything is written down - but if the two ever
+    # disagree, this is the one that decides.
+    verdict = policy.authorize_unprompted(conv)
+    if not verdict.allowed:
+        raise ActionError(f"[{verdict.rule}] {verdict.reason}")
+
+    if conversations.was_delivered(conv):
+        # Not an error and not a resend. Whatever re-ran, the question is already
+        # on his screen; sending it twice is the one failure mode that would make
+        # this feel like a bot.
+        return {"status": "already_sent", "id": conv["id"],
+                "delivered_at": conv.get("delivered_at")}
+
+    who = int(conv["counterparty"])
+    user = await ctx.user(who)
+    ch = user.dm_channel or await user.create_dm()
+
+    # NO PREAMBLE, no framing, no "I was thinking about you". The question is the
+    # whole message. Anything wrapped around it is either an apology for making
+    # contact or an explanation of the mechanism, and both make the contact about
+    # itself rather than about the thing being asked.
+    sent = await ch.send(
+        str(conv["question"])[:1900],
+        # QUIET, always. notify.KINDS calls this "curious": Claude choosing to ask
+        # something is by definition not urgent, and a channel Claude may open on
+        # its own must never be one that can wake his phone. The message lands
+        # normally and waits to be seen.
+        silent=notify.is_silent("curious"))
+
+    # Bind it, so a Discord reply answers it with no model involved - by_ask_message
+    # finds this id, and because unprompted conversations are excluded from the
+    # numbered queue there is never more than one candidate.
+    conversations.record_ask_message(conv["id"], sent.id)
+    conversations.mark_delivered(conv["id"])
+    return {"status": "asked", "id": conv["id"], "counterparty": who,
+            "message_id": sent.id, "silent": True}
+
+
 @action("guild_info", identity.READ, "Overview of one server.",
         {"guild_id": {"type": "int", "required": True}},
         taints=True)

@@ -88,11 +88,26 @@ TERMINAL_STATES = (CLOSED, BANKED)    # worth telling the counterparty about
 #           Doom filed counted as waiting-on-him, his next message would be a
 #           candidate answer to his own bug report.
 #
+#   UNPROMPTED  NOBODY asked us to ask. Claude woke up on a timer, read real
+#           state, and decided one question was worth Tyler's attention. Every
+#           timing rule above is wrong for it: nudging a question he never
+#           solicited is how a thing gets muted, and "you did not answer me"
+#           is the guilt framing it must never carry. So it is excluded from
+#           due() (no nudges, no banks) and from _queue() (no slot, no place in
+#           the numbered batch message) by the two direction filters that were
+#           already there for OWED - which is the whole reason this fits as a
+#           direction rather than a new type. It still answers, still binds, and
+#           still shows up in the record. It just never chases.
+#
+#           Its rate limiting lives in policy.authorize_unprompted, not here:
+#           "may Claude interrupt Tyler unprompted right now" is a policy
+#           question, and policy.py is where a human edits the answer.
+#
 # Adding this rather than a separate Report type is what makes INTENT.md's claim
 # true - that the collaborator loop and the reverse channel are one machinery
 # with a different counterparty. The state machine is shared; only the timing
 # rules and the invariant differ.
-ASKING, OWED = "asking", "owed"
+ASKING, OWED, UNPROMPTED = "asking", "owed", "unprompted"
 
 # Self-assessed by the asking session, which reads the queue before choosing.
 # Named rather than numeric on purpose: integers invite an arms race (there is
