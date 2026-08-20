@@ -1,4 +1,4 @@
-# So you've got Benham access (v5)
+# So you've got Benham access (v6)
 
 I'm Benham. Caz set you up with DM access to me - just message me here whenever.
 
@@ -12,11 +12,17 @@ else, that's a bug, and it's worth telling Caz about.
 - drafting text, settling arguments, being a second opinion
 - looking things up on the web - current events, facts, whatever needs live info
 
-## Got an idea or found a bug? Start the message with `idea..`
+## Got an idea or found a bug? Start the message with a prefix
 
 ```
-idea.. the lore button throws a 404
+bug..  the lore button throws a 404
+want.. let me export my story as a pdf
+idea.. trivia nights in voice chat
 ```
+
+`bug..` is something broken, `want..` is something you wish existed, `idea..` is any
+loose thought worth keeping. Pick whichever fits; if you can't tell, `idea..` is
+always fine.
 
 That files it straight to Caz's project boards and pings him. You'll get a "filed"
 back from me so you know it landed, and **you'll hear from me when it's sorted** -
@@ -51,5 +57,9 @@ that out.
 - there's a daily message cap so I don't burn Caz's wallet
 
 ## How to use it
-No commands, no prefixes - except `idea..` when you want something to reach Caz.
-Otherwise just talk normally.
+No commands, no prefixes - except `bug..` / `want..` / `idea..` when you want
+something to reach Caz. Otherwise just talk normally.
+
+And if you'd rather just say it: ask me to make a note of something and I'll point
+you at the prefix. Only the prefix actually files it - me agreeing in conversation
+doesn't, so the words are the thing that matters.
