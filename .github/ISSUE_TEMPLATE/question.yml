@@ -1,0 +1,18 @@
+name: "❓ Question / help"
+description: "Confused about how something works, or need help using Benham"
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What's your question?
+      placeholder: "How do I get Benham to remember something between conversations?"
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you already tried? (optional)
+    validations:
+      required: false
