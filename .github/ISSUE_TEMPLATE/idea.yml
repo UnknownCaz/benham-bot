@@ -1,0 +1,22 @@
+name: "💡 Idea"
+description: "A loose idea or brainstorm - doesn't need to be fully thought out"
+title: "[Idea] "
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Half-formed thoughts welcome. This is the "what if Benham could..." bucket - no pressure to justify it.
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      placeholder: "What if Benham could run trivia nights in voice chat?"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What made you think of it? (optional)
+    validations:
+      required: false

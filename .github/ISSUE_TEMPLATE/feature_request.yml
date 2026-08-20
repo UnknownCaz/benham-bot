@@ -1,0 +1,37 @@
+name: "✨ Feature request"
+description: "Something specific you want Benham to be able to do"
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should Benham be able to do?
+      placeholder: "Benham should be able to set channel slowmode when asked"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why do you want it? What problem does it solve?
+      description: The situation where you wished this existed.
+      placeholder: "During busy nights the chat moves too fast and I have to open Discord settings myself"
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How do you picture it working? (optional)
+      description: Rough sketch is fine - "I DM Benham X and it does Y".
+    validations:
+      required: false
+  - type: dropdown
+    id: importance
+    attributes:
+      label: How much do you want this?
+      options:
+        - Would be nice someday
+        - Would use it regularly
+        - Really need this
+    validations:
+      required: false

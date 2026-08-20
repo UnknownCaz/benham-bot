@@ -1,0 +1,63 @@
+name: "🐛 Bug report"
+description: "Benham did something wrong, broke, or didn't respond"
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Fill in what you can - partial reports are fine, "it broke and I don't know why" is a valid bug report.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did Benham do (or not do)?
+      placeholder: "I sent Benham a screenshot in DM and it never replied"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+      placeholder: "It should have described the image"
+    validations:
+      required: false
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did it happen?
+      options:
+        - DM with Benham
+        - A server channel
+        - Voice channel
+        - Slash command (/server etc.)
+        - pc.. command
+        - Not sure / other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we make it happen again?
+      description: Steps to reproduce, if you know them. Skip if it just happened once.
+      placeholder: |
+        1. DM Benham a .webp image
+        2. Ask "what is this"
+        3. It errors
+    validations:
+      required: false
+  - type: input
+    id: when
+    attributes:
+      label: Roughly when did it happen?
+      description: A date/time (with timezone if you know it) helps us find it in the logs.
+      placeholder: "Aug 20, around 11pm EST"
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or anything else
+      description: Drag and drop screenshots here if you have them.
+    validations:
+      required: false
