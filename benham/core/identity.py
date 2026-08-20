@@ -137,6 +137,18 @@ def is_owner(user_id):
 GUEST = CONTROL.get("guest") or {}
 GUEST_IDS = set(int(u) for u in (GUEST.get("ids") or []))
 
+# The GitHub intake funnel (core/issues.py). A separate block rather than a key
+# under `guest` because the owner files through it too - being an issuer is a
+# per-person grant layered ON TOP of being a guest, not a property of guests.
+ISSUES = CONTROL.get("issues") or {}
+
+
+def issues_config():
+    """The raw issues block, for the knobs core/issues.py owns (repo, issuers,
+    caps). Same import-once semantics as everything else here: editing it takes
+    effect on the next restart, and the restart is the kill switch."""
+    return dict(ISSUES)
+
 # Modes this build knows how to run. An unrecognised mode disables guest chat
 # rather than falling back to one, because the failure being guarded against is a
 # config written for a newer build than the code - where guessing which mode was

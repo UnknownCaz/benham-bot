@@ -49,6 +49,7 @@ from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.core import ideas
 from benham.core import identity
+from benham.core import issues
 from benham.core import jsonio
 from benham.core import msgparts
 from benham.core import notify
@@ -1181,6 +1182,86 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
     return content, remembered, tainted, bool(quoted or images)
 
 
+_REPORT_EMOJI = {"bug": "🐛", "want": "✨", "idea": "💡", "question": "❓"}
+
+
+async def file_guest_report(message, category, rtext, log_tag,
+                            title=None, project=None):
+    """One guest report into the intake funnel: file, track, ping, reply.
+
+    The `idea..` branch's plumbing, shared by the `bug..`/`want..` prefixes and
+    the offer-confirm path (INTENT item 23). For an issuer the report becomes a
+    GitHub issue; if GitHub refuses (outage, cap) it falls back to the ideas
+    jsonl so a report is NEVER lost - the never-lost property is the one thing
+    every path through here must keep. Deterministic and free: no model turn,
+    no guest quota spent.
+    """
+    emoji = _REPORT_EMOJI.get(category, "💡")
+    url = None
+    if issues.enabled() and issues.is_issuer(message.author.id):
+        ok, res = await asyncio.to_thread(
+            issues.file_issue, category, title or rtext, rtext,
+            guest_id=message.author.id, guest_name=message.author.name,
+            project=project)
+        if ok:
+            url = res
+            reply = f"filed for caz {emoji} - it's tracked and itll reach him"
+        elif "cap" in res:
+            # The daily cap is the guest's own news, worded for them already.
+            log(f"guest {category} from {message.author} ({message.author.id}) "
+                f"refused: {res}")
+            await reply_in(message.channel, res)
+            return
+        else:
+            # GitHub unreachable - the ideas jsonl is the durable fallback.
+            log(f"guest {category}: issue filing failed ({res}) - falling back "
+                "to guest_ideas.jsonl")
+            ok, reply = ideas.file_idea(message.author.id, message.author.name,
+                                        f"[{category}] {rtext}")
+            if not ok:
+                await reply_in(message.channel, reply)
+                return
+    else:
+        # Not an issuer (or the funnel is off): the report still lands, through
+        # the pipeline that predates the funnel. The category travels as a tag
+        # in the text so the sweep can still sort it.
+        ok, reply = ideas.file_idea(message.author.id, message.author.name,
+                                    f"[{category}] {rtext}" if category != "idea"
+                                    else rtext)
+        if not ok:
+            await reply_in(message.channel, reply)
+            return
+    log(f"guest {category} from {message.author} ({message.author.id}) "
+        f"FILED{' as ' + url if url else ''} via {log_tag}: {rtext[:150]!r}")
+    await reply_in(message.channel, reply)
+
+    # Same two rails the idea.. branch has always had: an OWED conversation so
+    # the report must reach a terminal state, and a QUIET ping so Tyler learns
+    # of it when he looks rather than when his phone buzzes.
+    conv = None
+    try:
+        conv = conversations.open_conversation(
+            message.author.id,
+            purpose=f"report from {message.author.name}",
+            question=rtext,
+            origin=f"{log_tag} in DM {message.channel.id}",
+            direction=conversations.OWED)
+        log(f"guest {category} tracked as {conv['id']} (owed to "
+            f"{message.author.id})")
+    except Exception as e:  # noqa: BLE001 - filing already succeeded
+        log(f"guest {category}: could not open a conversation ({e}) - the "
+            "report is safe on disk")
+    try:
+        await ask_owner_dm(
+            f"{emoji} {category} from {message.author.name}"
+            + (f" [{conv['id']}]" if conv else "") + f": {rtext}"
+            + (f"\n{url}" if url else ""),
+            kind="answered")
+    except Exception as e:  # noqa: BLE001 - the filing already succeeded
+        log(f"guest {category}: owner DM ping failed ({e}) - report is safe "
+            "on disk, sweep will surface it")
+
+
 async def handle_guest_dm(message):
     """One guest turn: text in, text out, and the reply target cannot vary.
 
@@ -1205,48 +1286,53 @@ async def handle_guest_dm(message):
     # filed mid-conversation should still bank (Claude sees it live through the
     # inbox watch; the DM ping reaches Tyler either way). Never routed through
     # the brain: filing is deterministic, free, and doesn't spend guest quota.
+    # The Stage 3 item 9 rails (OWED conversation, QUIET ping) and the item 23
+    # funnel both live in file_guest_report now - one plumbing, three entrances.
     _idea = ideas.extract(message.content)
     if _idea is not None:
-        ok, reply = ideas.file_idea(message.author.id, message.author.name, _idea)
-        log(f"guest idea from {message.author} ({message.author.id}) "
-            f"{'FILED' if ok else 'refused'}: {_idea[:150]!r}")
-        await reply_in(message.channel, reply)
-        if ok:
-            # Stage 3 item 9: the filing becomes a tracked OWED conversation, so
-            # the report is a thing that must reach a terminal state rather than a
-            # line in a jsonl someone has to remember to sweep. Doom filed three in
-            # two days and heard back on one, because closing the loop depended on
-            # a human recalling it. Now the record itself is unfinished until he is
-            # told - which is the only version of "silence must never be the
-            # message" that survives a tired night.
-            #
-            # OWED, so it never nudges him and never blocks his next report.
-            try:
-                conv = conversations.open_conversation(
-                    message.author.id,
-                    purpose=f"report from {message.author.name}",
-                    question=_idea,
-                    origin=f"idea.. in DM {message.channel.id}",
-                    direction=conversations.OWED)
-                log(f"guest idea tracked as {conv['id']} (owed to "
-                    f"{message.author.id})")
-            except Exception as e:  # noqa: BLE001 - filing already succeeded
-                conv = None
-                log(f"guest idea: could not open a conversation ({e}) - the idea is "
-                    "safe in guest_ideas.jsonl")
-            try:
-                # QUIET. Doom filed two of these at 23:44 and 23:51 and both
-                # buzzed Tyler's phone; a friend reporting a bug is news that can
-                # wait until he looks, which is the entire distinction item 11
-                # exists to draw.
-                await ask_owner_dm(
-                    f"💡 idea from {message.author.name}"
-                    + (f" [{conv['id']}]" if conv else "") + f": {_idea}",
-                    kind="answered")
-            except Exception as e:  # noqa: BLE001 - the filing already succeeded
-                log(f"guest idea: owner DM ping failed ({e}) - idea is safe in "
-                    "guest_ideas.jsonl, sweep will surface it")
+        if not _idea:
+            await reply_in(message.channel,
+                           "idea.. what? give me the idea after the prefix")
+            return
+        await file_guest_report(message, "idea", _idea, "idea..")
         return
+
+    # `bug..` / `want..` filing (INTENT item 23) - the typed-category siblings
+    # of `idea..`, same recipe and same placement: deterministic, free, checked
+    # before the outreach quiet, never routed through the brain.
+    _report = issues.extract(message.content)
+    if _report is not None:
+        _cat, _rtext = _report
+        if not _rtext:
+            await reply_in(message.channel,
+                           f"{_cat}.. what? give me the report after the prefix")
+            return
+        await file_guest_report(message, _cat, _rtext, f"{_cat}..")
+        return
+
+    # A parked issue offer waits for exactly ONE message: a narrow affirmative
+    # (confirm.read_reply's whitelist - the same matcher Tyler's confirmations
+    # use) files it, an explicit no drops it with an ack, and anything else
+    # drops it silently and is handled as ordinary conversation. One shot, so a
+    # stray "yes" three topics later can never file something stale; ten-minute
+    # TTL inside pending_offer covers the walked-away case.
+    _offer = issues.pending_offer(message.author.id)
+    if _offer is not None:
+        issues.clear_offer(message.author.id)
+        _verdict, _ = confirm.read_reply(strip_mention(message)
+                                         or (message.content or ""), None)
+        if _verdict == "yes":
+            await file_guest_report(message, _offer["category"],
+                                    _offer["quote"], "offer",
+                                    title=_offer.get("title"),
+                                    project=_offer.get("project"))
+            return
+        if _verdict == "no":
+            await reply_in(message.channel,
+                           "dropped it - `bug..` or `idea..` any time if you "
+                           "change your mind")
+            return
+        # Neither: the offer dies here and the message continues as chat.
 
     # Outreach quiet: while Claude is talking to this person through the dm
     # pipeline, the brain stays out of the conversation entirely. Silence, not

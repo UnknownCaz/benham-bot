@@ -65,5 +65,13 @@
     "activity_type": "listening",
     "activity_name": "Tyler"
   },
-  "_presence": "Applied on login. activity_type: playing | listening | watching | competing | none."
+  "_presence": "Applied on login. activity_type: playing | listening | watching | competing | none.",
+  "issues": {
+    "enabled": false,
+    "repo": "OWNER/issues",
+    "issuers": [],
+    "daily_cap": 10,
+    "projects": []
+  },
+  "_issues": "The GitHub intake funnel (core/issues.py, INTENT item 23). repo is the PRIVATE tracker filings land in via the gh CLI (the bot process must have gh authenticated). issuers: Discord user ids of guests who may file - being an issuer is a grant ON TOP of being a guest, per person, and nobody else's prefixes or offers do anything. daily_cap is real FILINGS per issuer per day (failed tries don't count). projects: names a filing may be tagged project:<name> with - the label must exist in the repo, and a name outside this list is dropped rather than sent. Guest text lands in the body nonce-fenced as DATA under a needs-triage label; a Claude session acts only on issues Tyler has promoted to approved. RESTART REQUIRED: read once at import, like everything else in this file."
 }

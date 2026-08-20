@@ -54,6 +54,7 @@ from dotenv import load_dotenv
 
 from benham.core import directives
 from benham.core import identity
+from benham.core import issues
 from benham.core import jsonio
 from benham.core import policy
 from benham.core import shared_tools
@@ -532,6 +533,19 @@ def respond(user_id, text, log=None, content=None):
     )
     raw = "".join(b.text for b in resp.content if b.type == "text").strip()
 
+    # The issue-offer tag (INTENT item 23), parsed from the RAW reply before the
+    # strip below removes it. This does NOT add a tool and does not weaken the
+    # module docstring's property: nothing executes on model output - parsing
+    # only PARKS a proposal, the filing runs on the guest's own next-message
+    # affirmative in bot.py, and what gets filed is `text` as captured HERE by
+    # code, never the model's retelling. issues.py's docstring carries the full
+    # argument. Non-issuers fall through silently (returns None, tag stripped).
+    offer_line = None
+    try:
+        offer_line = issues.offer_from_reply(user_id, raw, text)
+    except Exception as e:  # noqa: BLE001 - an offer must never eat a reply
+        _log(f"guest issue offer failed to park ({e}) - reply unaffected")
+
     queries = shared_tools.search_queries(resp)
     if queries:
         _log_searches(user_id, queries)
@@ -543,6 +557,12 @@ def respond(user_id, text, log=None, content=None):
     reply = directives.strip_directive(raw)
     if not reply:
         reply = "...I've got nothing for that one, sorry."
+    if offer_line:
+        # Appended by CODE, so the ask the guest reads is always the same
+        # standard sentence - the persona tells the model the tag IS the ask
+        # and not to word its own, which keeps a forgotten or doubled ask
+        # unrepresentable.
+        reply = f"{reply}\n\n{offer_line}"
 
     _remember(key, text, reply)
     mine, everyone = spent_today(user_id)   # already charged by check()
