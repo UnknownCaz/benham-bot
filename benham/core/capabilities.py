@@ -1511,22 +1511,50 @@ async def _unreact(ctx, p):
     return {"status": "unreacted", "message_id": m.id, "emoji": str(p["emoji"])}
 
 
-@action("create_thread", identity.MANAGE, "Start a thread, optionally on a message.",
+# posts=True since `content` landed. A forum thread cannot exist without a starter
+# message - Discord has no empty forum post - so creating one in a forum IS posting,
+# and it must answer to rule_posting_scope like send_message does. Marking it is the
+# whole point of the fingerprint: this flag is fingerprinted, so the change had to be
+# reviewed rather than slipping in behind a param addition.
+@action("create_thread", identity.MANAGE,
+        "Start a thread, optionally on a message. In a forum, content is required.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True},
+         "content": {"type": "str", "desc": "Starter message. Required in a forum."},
          "message_id": {"type": "int", "desc": "Anchor the thread to this message"},
-         "auto_archive_minutes": {"type": "int", "desc": "60 | 1440 | 4320 | 10080"}})
+         "auto_archive_minutes": {"type": "int", "desc": "60 | 1440 | 4320 | 10080"}},
+        posts=True)
 async def _create_thread(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     kw = {"name": str(p["name"])}
     if p.get("auto_archive_minutes"):
         kw["auto_archive_duration"] = int(p["auto_archive_minutes"])
+    is_forum = isinstance(ch, discord.ForumChannel)
+    content = p.get("content")
+    if is_forum and not content:
+        raise ValueError("a forum thread needs content= - Discord has no empty forum post")
     if p.get("message_id"):
+        if content:
+            raise ValueError("content= cannot be used with message_id= - a thread anchored "
+                             "to a message starts from that message")
         m = await ctx.message(p["channel_id"], p["message_id"])
         t = await m.create_thread(**kw)
+    elif is_forum:
+        t = await ch.create_thread(content=content, **kw)
     else:
         t = await ch.create_thread(**kw)
-    return {"status": "created", "thread_id": t.id, "name": t.name}
+    # ForumChannel.create_thread returns a (thread, message) pair, not a Thread.
+    thread = getattr(t, "thread", t)
+    # TextChannel.create_thread takes no content= (checked against discord.py 2.7.1), so a
+    # starter message on a normal thread is a second call. Deliberately after the fact: a
+    # thread that exists without its opening line is recoverable, a lost thread is not.
+    posted = True
+    if content and not is_forum:
+        await thread.send(content)
+    elif not content:
+        posted = False
+    return {"status": "created", "thread_id": thread.id, "name": thread.name,
+            "starter_message": posted}
 
 
 @action("archive_thread", identity.MANAGE, "Archive (or unarchive) a thread.",
@@ -1639,22 +1667,51 @@ async def _timeout_member(ctx, p):
             "until": until.isoformat() if until else None}
 
 
-@action("create_channel", identity.MANAGE, "Create a text or voice channel.",
+# Forum and category live here rather than in capabilities of their own on purpose.
+# Params are not fingerprinted, so widening this one costs no registry churn and no new
+# tier-2 surface to reason about - a new create_* action would need both. `tags` is
+# forum-only because available_tags is; Discord rejects it on every other channel type,
+# and silently ignoring a tags= on a text channel would let a caller believe the tags
+# exist. Capped at Discord's own limit of 20 rather than left to fail at the API.
+_MAX_FORUM_TAGS = 20
+
+
+@action("create_channel", identity.MANAGE,
+        "Create a text, voice, forum or category channel.",
         {"guild_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True},
-         "kind": {"type": "str", "desc": "text (default) | voice"},
+         "kind": {"type": "str", "desc": "text (default) | voice | forum | category"},
          "category_id": {"type": "int"}, "topic": {"type": "str"},
+         "tags": {"type": "str", "desc": "forum only: comma-separated tag names"},
          "nsfw": {"type": "bool"}}, needs_guild=True)
 async def _create_channel(ctx, p):
     g = ctx.guild(p["guild_id"])
     cat = g.get_channel(int(p["category_id"])) if p.get("category_id") else None
-    if (p.get("kind") or "text").lower() == "voice":
+    kind = (p.get("kind") or "text").lower()
+    if kind not in ("text", "voice", "forum", "category"):
+        raise ValueError(f"kind must be text, voice, forum or category - got {kind!r}")
+    raw_tags = [t.strip() for t in (p.get("tags") or "").split(",") if t.strip()]
+    if raw_tags and kind != "forum":
+        raise ValueError("tags= is forum-only; a text or voice channel cannot carry them")
+    if len(raw_tags) > _MAX_FORUM_TAGS:
+        raise ValueError(f"Discord allows at most {_MAX_FORUM_TAGS} forum tags, got {len(raw_tags)}")
+
+    if kind == "voice":
         c = await g.create_voice_channel(str(p["name"]), category=cat, reason="via Benham")
+    elif kind == "category":
+        c = await g.create_category(str(p["name"]), reason="via Benham")
+    elif kind == "forum":
+        c = await g.create_forum(str(p["name"]), category=cat, topic=p.get("topic"),
+                                 available_tags=[discord.ForumTag(name=t) for t in raw_tags],
+                                 reason="via Benham")
     else:
         c = await g.create_text_channel(str(p["name"]), category=cat,
                                         topic=p.get("topic"), nsfw=bool(p.get("nsfw")),
                                         reason="via Benham")
-    return {"status": "created", "channel_id": c.id, "name": c.name, "type": c.type.name}
+    out = {"status": "created", "channel_id": c.id, "name": c.name, "type": c.type.name}
+    if kind == "forum":
+        out["tags"] = [t.name for t in c.available_tags]
+    return out
 
 
 @action("edit_channel", identity.MANAGE,
