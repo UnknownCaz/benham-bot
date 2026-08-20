@@ -134,7 +134,7 @@
     "needs_guild": false,
     "origins": [],
     "outward": false,
-    "posts": false,
+    "posts": true,
     "taints": false,
     "tier": 2
   },
