@@ -229,6 +229,36 @@ d = policy.authorize(act, policy.CallContext.guest_dm(DOOM))
 check("policy denies a guest call", d.allowed, False)
 
 
+section("the guest prompt knows filing exists, and won't deny it in plain English")
+# 2026-08-20, DM 1531359829682028634: a guest asked twice for "a note for
+# claude" and got "I can't send messages or post anywhere" then "I can't make
+# notes or save anything". Both are false of this system - the prefix path is
+# right there - and the report was lost until a session read raw inbox history
+# days later. The prompt is the only thing steering that reply, so assert it.
+import io as _io  # noqa: E402
+import os as _os  # noqa: E402
+from benham import paths as _paths  # noqa: E402
+_persona = _io.open(_os.path.join(_paths.PROMPTS_DIR, "guest_persona.md"),
+                   encoding="utf-8").read().lower()
+check("it names every filing prefix",
+      all(pfx in _persona for pfx in ("idea..", "bug..", "want..")), True)
+check("it reads a note/remember/pass-along request as a filing request",
+      "is a filing request, and the answer is yes" in _persona, True)
+check("...and forbids the flat inability that was actually said",
+      "never answer that with a flat inability" in _persona, True)
+check("...quoting the sentence, so a reword can't drift back into it",
+      "make notes or save anything" in _persona, True)
+check("the no-tools list no longer swallows it",
+      "about acting in the world, never about" in _persona, True)
+check("'ask him yourself' is carved out for this case",
+      "written down and reach him" in _persona, True)
+
+_guide = _io.open(_os.path.join(_paths.PROMPTS_DIR, "guest_guide.md"),
+                 encoding="utf-8").read().lower()
+check("the handout documents all three prefixes, not just idea..",
+      all(pfx in _guide for pfx in ("idea..", "bug..", "want..")), True)
+
+
 print()
 if _fails:
     print(f"FAIL - {len(_fails)} check(s): {', '.join(_fails)}")
