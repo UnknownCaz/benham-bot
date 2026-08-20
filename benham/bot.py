@@ -48,6 +48,7 @@ from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.core import ideas
+from benham.core import initiative
 from benham.core import identity
 from benham.core import issues
 from benham.core import jsonio
@@ -1853,8 +1854,15 @@ async def on_message(message):
                 # waiting on him. Looked up here rather than inside agent.py so the
                 # agent stays a model loop that is TOLD things, not one that reaches
                 # into the conversation store on its own.
+                # ...falling back to an UNPROMPTED question if the queue is
+                # empty. Without this the initiative lane could only ever be
+                # answered by a Discord *reply*: live_for() reads the ASKING
+                # queue, so a question Claude asked on its own was invisible to
+                # the model, and the ordinary way anyone answers a DM - just
+                # typing back - would have left it open until it lapsed.
                 conversation=(bound_conv if bound_conv
-                              else (conversations.live_for(message.author.id)
+                              else ((conversations.live_for(message.author.id)
+                                     or initiative.live_unprompted_for(message.author.id))
                                     if is_dm else None)),
                 already_bound=bool(bound_conv),
                 # The whole queue, so the model judges among the real candidates

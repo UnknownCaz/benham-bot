@@ -319,7 +319,16 @@ for name in sorted(capabilities.REGISTRY):
 # spawn_in_room joined 2026-08-18: pc_task's successor (INTENT item 22), and it
 # wears pc_task's exact profile for pc_task's exact reasons - a DM is the only
 # human origin trusted with the machine, and never a tainted one.
-EXPECTED_RESTRICTED = {"pc_task", "answer_conversation", "spawn_in_room"}
+# deliver_unprompted joined 2026-08-20 with the initiative lane, and it is
+# restricted the OTHER way round from the three above: {LOCAL_CLI, SYSTEM}, with
+# every human origin excluded. Not a hardening of something Tyler might want to
+# do by hand - there is nothing to do by hand. It sends a question Claude decided
+# to ask him, so a human who wants to say something to Tyler simply says it. The
+# grant is the two routes that actually drive it: the daily job through the CLI,
+# and any future timer. Every name added to that set is a new way for a message
+# he did not ask for to reach him.
+EXPECTED_RESTRICTED = {"pc_task", "answer_conversation", "spawn_in_room",
+                       "deliver_unprompted"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
@@ -361,9 +370,22 @@ check("exactly the expected capabilities are origin-restricted",
 #                          SYSTEM would have been the lazy version and would have
 #                          handed a loop the ability to message anyone anything.
 #
-# A third name appearing here without a deliberate decision is what this asserts on.
+#   deliver_unprompted   - added 2026-08-20, the initiative lane. The THIRD outward
+#                          action SYSTEM can reach, and it wears the same bounded
+#                          shape as the other two for the same reason: a
+#                          conversation id in, recipient and words off the record,
+#                          nothing chosen at the call site. What is different is
+#                          that the record it reads was written by a timer rather
+#                          than by a human, so the rate limiting that
+#                          advance_conversation gets for free from the nudge cap
+#                          is done explicitly instead - policy.authorize_unprompted
+#                          allows one unanswered question at a time, a 48-hour
+#                          floor, and dormancy after two go unanswered. It is also
+#                          the only one of the three a human origin CANNOT reach.
+#
+# A further name appearing here without a deliberate decision is what this asserts on.
 EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
-                   "notify_owner", "triage_conversation"}
+                   "notify_owner", "triage_conversation", "deliver_unprompted"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)

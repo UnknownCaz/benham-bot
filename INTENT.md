@@ -889,9 +889,73 @@ finished.
 
 ---
 
+### Stage 6 — The initiative lane (2026-08-20)
+
+**Claude can start a conversation.** Everything before this stage assumed a session already
+existed and needed something. The one direction the machinery had no shape for was the one where
+nobody asked: a follow-up Claude offered, or Claude being curious about him on its own.
+
+Tyler commissioned it directly:
+
+> Build Tyler a mechanism that lets Claude INITIATE contact with him, instead of only ever
+> responding. […] notifications are not the goal.
+>
+> — Tyler, 2026-08-20
+
+**Why it is a real gap and not a nicety.** Every Claude session is reactive; nothing runs unless
+he types. So *"I'll check tomorrow whether that worked"* has never been a promise Claude could
+keep — there is no tomorrow, only the next time he opens a session, and by then the thing has
+gone quiet. Every such offer has been, honestly, a lie. And everything Claude has ever learned
+about Tyler, it learned because he raised it first.
+
+**Shape.** A scheduled job (`claude-initiates-daily`, 18:23 local) wakes, reads real state, and
+almost always decides there is nothing worth asking. When there is, one question goes out as a
+silent DM. It reuses the whole conversation primitive rather than inventing a channel:
+
+| Piece | What it is |
+|---|---|
+| `conversations.UNPROMPTED` | A third direction beside ASKING and OWED. Excluded from `due()` and `_queue()` by the two direction filters that already existed for OWED — so it **never nudges** and **never takes a slot** in his numbered batch message |
+| `initiative.py` | Threads (open loops any session can write down) and runs (what every wake-up decided, and why) |
+| `policy.authorize_unprompted` | The gate. Eight rules, and the numbers that ARE the interruption budget |
+| `deliver_unprompted` | The only outward action in the lane. A conversation id in; recipient and words off the record — the same bounded shape as `advance_conversation`, but reachable from **no human origin at all** |
+| `notify` kind `curious` | QUIET, always. Something nobody asked for has no business waking his phone |
+
+**Decision 29 is the load-bearing one: silence is the product.** A job that must produce a
+question will manufacture one, and he mutes it inside a week. So the rules are written to make
+"nothing today" the easy path, and the run log exists so he can audit that the quiet is working
+rather than that the job broke in March.
+
+**Why the limits are in `policy.py` and not in the job's prompt.** The job is a model, and the
+failure mode of a model told *"only speak when it matters"* is that, run daily for a year, it
+eventually finds something. Everything in `policy.authorize_unprompted` is the half of the design
+that does not depend on the model being in a good mood: one unanswered question at a time, a
+48-hour floor between deliveries, dormancy after two go unanswered, a length-and-question-mark
+screen against report drift, and pattern screens against escalation and guilt framing.
+
+**The refusal that is a decision, not a gap.** `rule_unprompted_no_escalation` denies any
+unprompted request for access or capability — the webcam, the mic, OBS, his files, a new
+permission. Claude's own call, and it is written as a DENY with a test so a future session cannot
+helpfully add it back without deleting both. The reasoning: that ask belongs in live conversation,
+where "no" costs him one word and it is over. Arriving unbidden on his phone, the same words are
+an open item he has to carry. **A channel Claude may open at will, which can also be used to
+request more reach, is a channel that grows itself.** This one does not.
+
+**Verified end to end 2026-08-20**, and the live path found a bug the suite could not: the handler
+called `notify.is_silent` without the local import every other handler in `capabilities.py`
+carries, so the first real send failed loudly in the outbox and the bot fast-exited. Fixed,
+restarted, re-delivered. The silent path, both dry-run verdicts, the real DM (message
+`1539953472072327260`, silent), and the one-at-a-time refusal were all exercised against the
+running bot.
+
+**Open, deliberately:** whether a daily wake is the right cadence. Every-other-day was on offer;
+daily won because a daily *read* is a daily chance to notice something real, and the 48-hour floor
+in policy is what keeps that from becoming a daily *message*. Revisit after a month of the log.
+
+---
+
 ## 5. Decisions — settled, do not re-litigate
 
-All from Tyler, 2026-08-16.
+All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 29 and 30 are the exception in a second sense: 30 is a decision Claude made about what Claude may do, and Tyler ratified it by asking for it in writing.
 
 | # | Decision |
 |---|---|
@@ -923,6 +987,8 @@ All from Tyler, 2026-08-16.
 | 26 | **A green fix deploys itself** (2026-08-18). Merging to master and restarting are DEFAULT actions once the suite passes — announced, not requested. Verifying the boot is part of the action. It does not extend to CHOOSING the change, to red tests, or to permission config |
 | 27 | **Rooms v1** (2026-08-18, the item 22 intent check): pull-only — no autonomous wake, explicit spawn/continue resumes the worker; `pc..` survives via a standing scratch room; spawn prompts carry a pointer, never room content (revises 20.5); successor scope first, session-to-session choreography is Phase B. c13 answered and retired by (a) |
 | 28 | **The GitHub intake funnel** (2026-08-20, item 23): one private repo for all projects; per-guest `issuer` grant; extension of `idea..` with jsonl as the never-lost fallback; offers fire only on real failures, never the guest's own ideas; guest filings are fenced, `needs-triage`, and acted on only after Tyler's `approved`. Close-notifications deferred until the funnel proves itself |
+| 29 | **Silence is the product** (2026-08-20, the initiative lane). A job that MUST produce a question will manufacture one, and the channel dies. "Nothing worth asking today" is the common correct output: it is logged, never sent. The rate limits live in `policy.py` rather than in the job's prompt, because the model is the half of the design that can drift |
+| 30 | **Unprompted contact never asks for access or capability** (2026-08-20). Claude's own decision, not Tyler's constraint on it. That ask belongs in live conversation where a "no" costs one word; unbidden on his phone it is an open item he has to carry. Written as a DENY in `policy.py` with a test, so re-adding it means deleting a rule and a test on purpose |
 
 ### Baseline — clean as of 2026-08-16
 

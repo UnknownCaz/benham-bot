@@ -656,3 +656,307 @@ def authorize_target(action, ctx):
         if verdict is not None:
             return verdict
     return _ALLOW
+
+
+# ==========================================================================
+# The unprompted lane - may Claude start a conversation Tyler did not ask for?
+# ==========================================================================
+#
+# Added 2026-08-20, for the mechanism that lets Claude INITIATE contact instead
+# of only ever answering. A scheduled job wakes, reads real state (Corkboard
+# boards, memory, the open loops in initiative.py), and decides whether there is
+# ONE genuine question worth Tyler's attention. Almost always there is not.
+#
+# WHY THE RULES LIVE HERE AND NOT IN THE JOB'S PROMPT. The job is a model, and
+# the failure mode of a model told "only speak when it matters" is that, run
+# daily for a year, it eventually finds something. That is not hypothetical: a
+# job which MUST produce a question will manufacture one, Tyler mutes it inside
+# a week, and the channel is dead. Everything below is the half of the design
+# that does not depend on the model being in a good mood.
+#
+# THE SHAPE OF THE GRANT. `deliver_unprompted` is the only outward action in
+# this lane and it takes a conversation id and nothing else - the recipient and
+# the words both come off a stored record, exactly as advance_conversation does.
+# So these rules can be a single-argument walk over that record rather than the
+# (action, ctx) walk above: what needs deciding is not where the call came from
+# (that is already settled by the action's declared origins) but whether this
+# particular question, at this particular moment, may be sent unbidden.
+#
+# WHAT IS DELIBERATELY ABSENT: any rule permitting an unprompted request for
+# access or capability. See rule_unprompted_no_escalation - it is a design
+# decision, not a gap, and it is written as a DENY so that a future session
+# cannot helpfully add the feature without first deleting a rule and a test.
+
+import re
+from datetime import datetime, timedelta, timezone
+
+# --- the numbers. This block IS the interruption budget; edit it here. ------
+
+# No two unprompted questions closer together than this, whatever the job
+# thinks. The scheduled task runs daily so it has a fresh chance to notice
+# something real; this is what stops "a daily chance" becoming "a daily
+# message". Tyler's brief: "once a day at most; every other day is fine."
+UNPROMPTED_MIN_GAP = timedelta(hours=48)
+
+# One unanswered question at a time, and it stops counting after this long.
+# Waiting forever would be safe and useless - the lane would die the first time
+# he was busy for a week. Lapsing is SILENT: nothing is sent when a question
+# times out, because "you never answered me" is the exact guilt framing this
+# lane is forbidden to carry.
+UNPROMPTED_LAPSE_AFTER = timedelta(days=3)
+
+# Two lapses in a row and the lane goes dormant until he engages with one, or
+# until a human runs `initiate reset`. Ignoring two questions days apart is an
+# answer; asking past it is what gets a channel muted.
+UNPROMPTED_MAX_LAPSES = 2
+
+# It ASKS, it does not report. Length and question-marks are a crude proxy for
+# that, and they are here anyway, because the drift they catch is not subtle: a
+# status digest is long and has no question in it, and every version of this
+# idea slides toward a digest if nothing physically stops it.
+UNPROMPTED_MAX_CHARS = 500
+UNPROMPTED_MAX_QUESTION_MARKS = 2
+
+# Requests for access or capability. NEVER from this lane - an ask like "can I
+# use the webcam" belongs in live conversation, where Tyler can decline in one
+# word and the matter is closed. Arriving unbidden on his phone, the same words
+# are an open item he has to carry, which is a cost this lane has no right to
+# impose. These patterns guard against Claude's own drift over months of runs,
+# not against an adversary; a false positive costs one rephrase, and the run
+# doing the rephrasing is a Claude that can.
+ESCALATION_PATTERNS = (
+    r"\b(can|could|may|might|would)\s+i\s+(please\s+)?"
+    r"(use|access|open|read|look|see|watch|listen|view|peek|check|run|turn|"
+    r"enable|start|borrow|grab|take|get)\b",
+    r"\b(let|allow)\s+me\s+(to\s+)?\w+",
+    r"\bpermission\s+to\b",
+    r"\bgive\s+me\s+(access|permission|the\s+ability)\b",
+    r"\b(mind|okay|ok)\s+if\s+i\b",
+    r"\bwould\s+you\s+(mind|be\s+(ok|okay|alright)\s+with)\b",
+    r"\bcould\s+you\s+(grant|allow|enable|approve|whitelist|give)\b",
+    r"\bam\s+i\s+allowed\b",
+)
+
+# Guilt framing and wellness-check tone. Tyler's constraint 6, verbatim: "No
+# guilt framing, no wellness-check tone, no 'just thinking of you.' A real
+# question or nothing." What gets a channel muted is not rudeness, it is being
+# made to feel managed - and both of those phrasings make the contact about the
+# contact rather than about anything real.
+GUILT_PATTERNS = (
+    r"\bjust\s+(thinking|checking|wondering)\s+(of|about|in\s+on)\s+you\b",
+    r"\bhow\s+are\s+you\s+(holding\s+up|doing\s+really|feeling)\b",
+    r"\bhope\s+you('?re|\s+are)\s+(ok|okay|alright|well|doing)\b",
+    r"\bchecking\s+in\s+on\s+you\b",
+    r"\byou\s+(still\s+)?(haven'?t|never)\s+(answered|replied|got\s+back|told\s+me)\b",
+    r"\bi'?ve\s+been\s+waiting\b",
+    r"\bdid\s+you\s+(see|forget\s+about)\s+my\s+(last\s+)?(question|message)\b",
+    r"\bno\s+pressure,?\s+but\b",
+)
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+# --- the rules. Each takes (conv, now) and returns a Decision or None. ------
+# Shape first, then content, then rate. That order is for the DRY RUN more than
+# for the live path: a job that has written a bad question learns what is wrong
+# with the question before it learns it is also too soon, and can fix both.
+
+def rule_unprompted_direction(conv, now):
+    """This path delivers unprompted questions and nothing else.
+
+    Without it, `deliver_unprompted` would be a second - unnudged, unqueued -
+    way to push any conversation in the store at anybody, which is precisely the
+    "hand a timer the ability to message anyone anything" that the whole
+    advance_conversation design exists to avoid.
+    """
+    from benham.core import conversations
+    if conv is None:
+        return _deny("unprompted_direction",
+                     "there is no such conversation to deliver.")
+    if conv.get("direction") != conversations.UNPROMPTED:
+        return _deny("unprompted_direction",
+                     f"{conv.get('id')} is a {conv.get('direction')!r} conversation. "
+                     "This path only delivers questions Claude chose to ask on its "
+                     "own; a normal ask goes through the queue and its nudges.")
+    return None
+
+
+def rule_unprompted_owner_only(conv, now):
+    """Unbidden contact reaches Tyler, and reaches nobody else, ever.
+
+    A collaborator did not sign up to be thought about by a timer. Reaching one
+    stays a thing a human starts, through `outreach`, which has its own refusals
+    (see test_outreach). Stated as its own rule rather than left implicit in how
+    the CLI happens to fill the field.
+    """
+    if int(conv.get("counterparty", 0)) not in identity.OWNER_IDS:
+        return _deny("unprompted_owner_only",
+                     f"unprompted contact may only go to the owner, and "
+                     f"{conv.get('counterparty')} is not one. Reaching a collaborator "
+                     "unbidden is not something this lane does.")
+    return None
+
+
+def rule_unprompted_is_a_question(conv, now):
+    """It ASKS, it does not report. Tyler's constraint 2.
+
+    Arithmetic, not judgement, and knowingly crude - a determined digest can end
+    in "?" and squeak under the cap. It is here because the drift it catches is
+    the ordinary kind: months of runs, each a sentence longer than the last,
+    until the thing arriving on his phone is a summary with a question stapled
+    to the end. One question, in Benham's voice, under the cap.
+    """
+    text = (conv.get("question") or "").strip()
+    if not text:
+        return _deny("unprompted_is_a_question", "there is no question to send.")
+    if len(text) > UNPROMPTED_MAX_CHARS:
+        return _deny("unprompted_is_a_question",
+                     f"that is {len(text)} characters and the cap is "
+                     f"{UNPROMPTED_MAX_CHARS}. Past that it stops being a question and "
+                     "starts being a report, which is not what this lane is for.")
+    marks = text.count("?")
+    if marks == 0:
+        return _deny("unprompted_is_a_question",
+                     "there is no question mark in it. This lane sends one genuine "
+                     "question - if the thing worth saying is not a question, the "
+                     "right output is silence.")
+    if marks > UNPROMPTED_MAX_QUESTION_MARKS:
+        return _deny("unprompted_is_a_question",
+                     f"{marks} questions in one message is a survey, not a question. "
+                     "Pick the one that is actually worth his attention.")
+    return None
+
+
+def rule_unprompted_no_escalation(conv, now):
+    """NEVER ask for access or capability from here. A decision, not an oversight.
+
+    Claude's own call, and the reasoning is kept attached to the rule so a later
+    session reads it before deleting it: an ask for the webcam, the mic, OBS, his
+    files - anything that widens what Claude can reach - belongs in a live
+    conversation, where a "no" costs him one word and ends there. The same ask
+    landing unbidden on his phone is an open item he has to carry. A channel
+    Claude may open at will, which can also be used to request more reach, is a
+    channel that grows itself. This one does not.
+    """
+    text = (conv.get("question") or "").lower()
+    for pat in ESCALATION_PATTERNS:
+        if re.search(pat, text):
+            return _deny("unprompted_no_escalation",
+                         "that reads as a request for access or capability, and this "
+                         "lane never makes one - that ask belongs in live conversation, "
+                         "where Tyler can say no in one word. If the match is a false "
+                         "positive, rephrase it as a question about him or about the "
+                         f"work. (matched: {pat})")
+    return None
+
+
+def rule_unprompted_no_guilt(conv, now):
+    """No guilt framing, no wellness-check tone. Tyler's constraint 6."""
+    text = (conv.get("question") or "").lower()
+    for pat in GUILT_PATTERNS:
+        if re.search(pat, text):
+            return _deny("unprompted_no_guilt",
+                         "that carries guilt framing or a wellness-check tone, which "
+                         "this lane is not allowed to have. A real question about a "
+                         f"real thing, or nothing at all. (matched: {pat})")
+    return None
+
+
+def rule_unprompted_lane_quiet(conv, now):
+    """Two lapses in a row and the lane stops until he engages.
+
+    Silence from Tyler is information. One unanswered question is a busy week;
+    two in a row, days apart, is the channel not landing - and the right response
+    to that is to stop, not to try harder. Recoverable: answering any unprompted
+    question clears it, and `initiate reset` clears it by hand. The log says so
+    loudly when this fires, so it is never a silent death.
+    """
+    from benham.core import initiative
+    lapses = initiative.consecutive_lapses()
+    if lapses >= UNPROMPTED_MAX_LAPSES:
+        return _deny("unprompted_lane_quiet",
+                     f"{lapses} unprompted questions in a row went unanswered, so this "
+                     "lane is dormant. That is the designed response to not landing, "
+                     "not a fault. It clears when Tyler answers one, or when a human "
+                     "runs `python benham.py initiate reset`.")
+    return None
+
+
+def rule_unprompted_one_at_a_time(conv, now):
+    """One unanswered unprompted question in the world at a time. Never stack.
+
+    PARAMETER-FREE BY CONSTRUCTION, and that is what makes it safe: the check is
+    "is there any DELIVERED unprompted question still waiting", and the one being
+    considered right now has by definition not been delivered yet. There is no id
+    to compare against, so there is no comparison to get wrong.
+    """
+    from benham.core import initiative
+    outstanding = initiative.outstanding(now=now)
+    if outstanding:
+        first = outstanding[0]
+        return _deny("unprompted_one_at_a_time",
+                     f"{first['id']} is still unanswered (asked "
+                     f"{str(first.get('delivered_at'))[:16]}Z). One unanswered question "
+                     "at a time - stacking a second on top of it is how this stops "
+                     "being a conversation and starts being a feed.")
+    return None
+
+
+def rule_unprompted_cadence(conv, now):
+    """A hard floor between deliveries, independent of what the job believes.
+
+    The scheduled job runs daily on purpose - a daily read is a daily chance to
+    notice something genuinely worth asking. This is what keeps a daily CHANCE
+    from becoming a daily MESSAGE in the worst case, where every run in a row
+    talks itself into having found something.
+    """
+    from benham.core import initiative
+    last = initiative.last_delivered_at()
+    if last is None:
+        return None
+    now = now or _utcnow()
+    waited = now - last
+    if waited < UNPROMPTED_MIN_GAP:
+        left = UNPROMPTED_MIN_GAP - waited
+        return _deny("unprompted_cadence",
+                     f"the last unprompted question went out "
+                     f"{int(waited.total_seconds() // 3600)}h ago and the floor is "
+                     f"{int(UNPROMPTED_MIN_GAP.total_seconds() // 3600)}h. Wait another "
+                     f"{int(left.total_seconds() // 3600) + 1}h. Whatever this is, it keeps.")
+    return None
+
+
+# Order is load-bearing; see the note above rule_unprompted_direction.
+UNPROMPTED_RULES = (
+    rule_unprompted_direction,
+    rule_unprompted_owner_only,
+    rule_unprompted_is_a_question,
+    rule_unprompted_no_escalation,
+    rule_unprompted_no_guilt,
+    rule_unprompted_lane_quiet,
+    rule_unprompted_one_at_a_time,
+    rule_unprompted_cadence,
+)
+
+
+def authorize_unprompted(conv, now=None):
+    """May this unprompted question be sent, right now? The lane's chokepoint.
+
+    `deliver_unprompted` is the only thing that puts an unprompted question in
+    front of Tyler, and it calls this first and refuses on anything but ALLOW.
+    The CLI calls it too, before opening a conversation at all, so a bad question
+    is caught while it is still cheap and the job is told why - but the CLI's
+    call is a courtesy and this one is the gate. If they ever disagree the gate
+    wins, because it runs at the moment the message would actually reach him.
+
+    `now` is injectable for the same reason it is everywhere in conversations.py:
+    a cadence rule tested by waiting 48 real hours is a rule nobody runs.
+    """
+    now = now or _utcnow()
+    for rule in UNPROMPTED_RULES:
+        verdict = rule(conv, now)
+        if verdict is not None:
+            return verdict
+    return _ALLOW

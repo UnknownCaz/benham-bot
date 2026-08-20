@@ -40,6 +40,12 @@ KINDS = {
     # --- there when he looks ----------------------------------------------
     "finished": (QUIET, "a long task he asked for is done"),
     "answered": (QUIET, "a collaborator replied, filed an idea, or reported a bug"),
+    # Added 2026-08-20 with the initiative lane. QUIET is not a tuning choice
+    # here, it is the definition: this is the one kind of message Claude sends
+    # WITHOUT being asked, and something nobody requested has no business
+    # vibrating his phone. It waits in the channel until he looks, which is
+    # exactly the standing a question Claude chose to ask should have.
+    "curious": (QUIET, "Claude chose to ask Tyler something, unprompted"),
 }
 
 
