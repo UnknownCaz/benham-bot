@@ -831,6 +831,55 @@ so it needs no wall; the write phase is authorized by Tyler from an untainted DM
     forward within minutes, recorded in `bfca9ea`; the live bot never ran the red tree because
     no restart fell inside the window. The suite is checked bare, exit code first, since.
 
+23. **The GitHub intake funnel - `idea..` v2 (2026-08-20).** Designed with Tyler in one
+    sitting (his "New Benham feature YEAH!" session), built the same day. §2's own evidence
+    argued for it: `idea..` was the cheapest feature ever built and the only guest feature
+    doing the stated job, so this is that conduit invested in - typed filings, a real
+    tracker, and Benham offering to file (decision #18 applied to guests). Reports land as
+    GitHub issues in a **private intake repo** (control.json `issues.repo`, all projects,
+    `project:<name>` labels - decision #11's inference gets a place to write its answer).
+    Doom needs no GitHub account; Benham is his whole interface.
+
+    **The settled calls, all Tyler's (2026-08-20):**
+    - One private repo for ALL projects, not per-repo routing. Guests' text stays off the
+      public web; the issues list is the backlog Doom pictured in §6 without being visible.
+    - Filed under Tyler's gh identity with a machine-written provenance header; per-guest
+      `issuer` grant in control.json (Doom now; Andrew is one config line later).
+    - Extension of `idea..`, not a replacement: guest_issues.jsonl is the durable local
+      record with the URL; ideas.jsonl remains the fallback when GitHub is unreachable and
+      the pipeline for non-issuers - **a report is never lost**.
+    - Close-the-loop notifications (issue closed -> Benham DMs "fixed"/"declined", §6's two
+      terminal beats) DEFERRED until the funnel has proven itself. The OWED conversation
+      rail already tracks every filing, so the loop has a place to close into.
+    - Ambient offers fire only on a real failure or gap - "I expected this to work",
+      "why can't you X" - never on the guest's own ideas (those keep `idea..`).
+
+    **The quarantine, restated for the new store** (ideas.py's property, moved to GitHub,
+    because issues are read by future Claude sessions as work items - exactly where
+    laundering matters): the guest's verbatim text goes in the body inside a msgparts
+    nonce fence under a machine-written header; every guest filing carries `needs-triage`;
+    a session may READ needs-triage and acts only on `approved` - the label swap is
+    Tyler's. Guest text proposes, Tyler disposes (decision #21 kept intact).
+
+    **Why the offer tag does not break guest.py's no-client-tools property** (the file
+    says "read this paragraph again" - it was read): the `<<issue: category | title |
+    project>>` tag is not a tool. Nothing executes on model output - parsing PARKS a
+    proposal (10-min TTL, one per guest, superseding), the filing runs on the guest's own
+    next-message narrow affirmative (confirm.read_reply's whitelist, the same matcher
+    Tyler's confirmations use), one shot - anything else drops the offer. What gets filed
+    is the guest's message captured by CODE; the model writes only the title (capped,
+    squeezed) and a project name (validated against a known set, dropped otherwise). A
+    guest who prompt-injects the tag gains exactly what `bug..` already hands them free.
+    The tag sits inside the `<<...>>` family ON PURPOSE: strip_directive is the net if
+    the parser misses, and directives.py still applies nothing.
+
+    **Three doors, one funnel** (`bot.file_guest_report` - the idea.. branch's OWED
+    conversation + quiet ping rails, shared): explicit prefixes `bug..`/`want..`
+    (+`feature..` alias) deterministic and free like `idea..`; the brain's offer; and the
+    owner/CLI capability `file_issue` (tier 2, default origins, registry 62 - the
+    fingerprint diff was read as the review). Caps: 10 real filings per issuer per day,
+    counted from the jsonl - a GitHub outage cannot eat the allowance in failed tries.
+
 ### What "done" looks like
 
 The `discord-outreach` skill becomes largely redundant — not deleted, but demoted from *the
@@ -873,6 +922,7 @@ All from Tyler, 2026-08-16.
 | 25 | **`pc_task` is scaffolding, not a product** (2026-08-17). Retire it once rooms (item 16) exist, spawn role re-pointed to "start a session in room X" plus a room listing. Unblocked; implementation pending sign-off — see item 20 |
 | 26 | **A green fix deploys itself** (2026-08-18). Merging to master and restarting are DEFAULT actions once the suite passes — announced, not requested. Verifying the boot is part of the action. It does not extend to CHOOSING the change, to red tests, or to permission config |
 | 27 | **Rooms v1** (2026-08-18, the item 22 intent check): pull-only — no autonomous wake, explicit spawn/continue resumes the worker; `pc..` survives via a standing scratch room; spawn prompts carry a pointer, never room content (revises 20.5); successor scope first, session-to-session choreography is Phase B. c13 answered and retired by (a) |
+| 28 | **The GitHub intake funnel** (2026-08-20, item 23): one private repo for all projects; per-guest `issuer` grant; extension of `idea..` with jsonl as the never-lost fallback; offers fire only on real failures, never the guest's own ideas; guest filings are fenced, `needs-triage`, and acted on only after Tyler's `approved`. Close-notifications deferred until the funnel proves itself |
 
 ### Baseline — clean as of 2026-08-16
 

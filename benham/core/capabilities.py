@@ -1997,6 +1997,35 @@ async def _create_webhook(ctx, p):
             "_sensitive": ["url"]}
 
 
+@action("file_issue", identity.MANAGE,
+        "File an issue in the private intake tracker (control.json issues.repo) "
+        "- bug | want | idea | question. This is the owner/CLI door into the "
+        "same funnel guest reports use (INTENT item 23): the guest door is the "
+        "bug../want../idea.. prefixes and the brain's offer, never this "
+        "capability. Not a Discord action: nothing is posted anywhere a guest "
+        "can see, and the repo is private.",
+        {"category": {"type": "str", "required": True,
+                      "desc": "bug | want | idea | question"},
+         "title": {"type": "str", "required": True, "desc": "Short title, <=80 chars"},
+         "body": {"type": "str", "required": True,
+                  "desc": "The report text. Filed verbatim, fenced as data."},
+         "project": {"type": "str",
+                     "desc": "Optional project tag; must be in issues.projects "
+                             "or it is dropped"}})
+async def _file_issue(ctx, p):
+    # Imported lazily for the same reason guest_quiet imports guest lazily:
+    # keep this module's import graph from growing edges it doesn't need.
+    from benham.core import issues as issues_mod
+    if not issues_mod.enabled():
+        raise ActionError("issue filing is switched off (control.json issues block)")
+    ok, res = await asyncio.to_thread(
+        issues_mod.file_issue, str(p["category"]).lower(), str(p["title"]),
+        str(p["body"]), filed_by="Caz (owner/CLI)", project=p.get("project"))
+    if not ok:
+        raise ActionError(res)
+    return {"status": "filed", "url": res}
+
+
 def _cli_actions_between(started, ended, slop_seconds=10, limit=25):
     """What ran through Benham's CLI while a PC task was live, from the LOG.
 
