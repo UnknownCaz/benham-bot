@@ -989,6 +989,8 @@ All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 
 | 28 | **The GitHub intake funnel** (2026-08-20, item 23): one private repo for all projects; per-guest `issuer` grant; extension of `idea..` with jsonl as the never-lost fallback; offers fire only on real failures, never the guest's own ideas; guest filings are fenced, `needs-triage`, and acted on only after Tyler's `approved`. Close-notifications deferred until the funnel proves itself |
 | 29 | **Silence is the product** (2026-08-20, the initiative lane). A job that MUST produce a question will manufacture one, and the channel dies. "Nothing worth asking today" is the common correct output: it is logged, never sent. The rate limits live in `policy.py` rather than in the job's prompt, because the model is the half of the design that can drift |
 | 30 | **Unprompted contact never asks for access or capability** (2026-08-20). Claude's own decision, not Tyler's constraint on it. That ask belongs in live conversation where a "no" costs one word; unbidden on his phone it is an open item he has to carry. Written as a DENY in `policy.py` with a test, so re-adding it means deleting a rule and a test on purpose |
+| 31 | **The funnel's mouth is code, not judgment** (2026-08-21). The `<<issue:>>` tag asks a model to notice "this is a report" mid-conversation, and it missed twice in two days under two different prompts. A third prompt patch was the same bet at a higher stake, so a deterministic detector reads the guest's own message and parks the same proposal. The tag stays — it is better at *phrasing* — but it is no longer the only thing standing between a report and the floor. **Precision, not recall, is the constraint**: these guests discuss broken video games constantly, so a complaint phrase alone never fires; the message must also name Benham, a project, or a UI surface |
+| 32 | **Guest model: Sonnet 5, window 15** (2026-08-21, Tyler's call). Haiku was cheap and it confabulated under pressure — on 08-20 it told Doom that a message Benham itself had written was fabricated, then backed down when pushed. The five-exchange window is what put the message out of reach in the first place. Paid for in large part by caching the persona, which had never been cached on this path |
 
 ### Baseline — clean as of 2026-08-16
 
@@ -1053,6 +1055,60 @@ participant before the build, not after it.
 ---
 
 ## 7. Known bugs
+
+### 2026-08-21 — the guest brain called a real message a fabrication, and the "no tools" absolute struck twice more
+
+Two findings from reading all 315 historical guest DMs in one pass. Both are the
+same shape as the filing blind spot patched on 08-20, which is the point: that
+was not a one-off, it is a pattern in how this prompt is built.
+
+**1. Confabulation under pushback (the worse one).** At 15:09Z on 08-20 Benham
+correctly told Doom a message had "scrolled out of what I keep" — exactly the
+sentence the persona scripts. Doom quoted the message back. Benham then said:
+*"that's not something I said in our conversation. I can see our actual message
+history from earlier today... and this naming exchange isn't in it."* It
+accused a real person of inventing a message Benham itself wrote, and only
+backed down when he replied "its literally right here?". Two causes, both now
+addressed: `history_turns` was **5**, so the message genuinely was gone; and
+Haiku, asked to account for a gap, asserted positive knowledge of what the
+history contained rather than admitting the edge of it. Window is 15 and the
+model is Sonnet 5. **Unverified hypothesis worth testing:** Doom's quote arrived
+inside the taint fence, and the model may have read its own words as hostile
+third-party content and defended against them. If true, the laundering wall has
+a benign-path cost nobody has measured.
+
+**2. "You have no tools on this path" is false, and has been all along.** Web
+search is a tool on this path — described positively two sections earlier in the
+same file. The absolute won anyway: on 07-28 a guest asking whether Benham could
+look things up got *"no internet access... knowledge cutoff in early 2024"*, and
+on 08-20 *"I can't open links or load content from outside"* was given as a
+blanket answer when only fetching that one URL was actually impossible. Carved
+out on 08-21 with both sentences quoted in the prompt. **The general lesson, now
+three for three:** a loud absolute in "What you cannot do here" beats any
+capability described above it, every time. Adding a capability to this prompt is
+not done until the cannot-list has been re-read against it.
+
+### 2026-08-21 — the never-lost property was not true
+
+`file_guest_report` falls back to `ideas.file_idea` when GitHub is unreachable,
+but ideas' limits are NARROWER than the funnel's: `MAX_LEN` 1000 against
+`MAX_QUOTE` 1500, and a daily cap counted separately. So a report that passed
+every check the guest was subject to could still be dropped — and the guest
+would be told *"thats an essay, not an idea"* for a bug report. Closed with
+`issues.record_unsent` / `retry_unsent`. Outage-only, so it never fired in
+practice; it was still false advertising in the one property the design rests on.
+
+### 2026-08-21 — Doom's reports were real and had nowhere to land
+
+He said he had submitted an issue. He had: five `idea..` filings between 08-15
+and 08-20, all correct, all sitting in `state/guest_ideas.jsonl` because the
+funnel did not exist yet. Backfilled to the tracker as #2–#6 with provenance
+(#5, the image bug, filed and immediately closed — fixed on 08-18). **He also
+asked for close-the-loop notifications on 2026-08-16** — *"1. knowing that its
+getting tracked 2. ild like the secod thing where youll tell me if its a
+wont-fix or not a bug"* — which decision #28 defers. The only person using the
+feature asked for that, in those words, five days before it was deferred.
+
 
 Open defects observed live, queued for another session to pick up. Append entries here with a
 date; strike them through (with a note of the fix) rather than deleting when closed.
