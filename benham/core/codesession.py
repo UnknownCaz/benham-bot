@@ -66,7 +66,8 @@ READ_ONLY_TOOLS = {
 # to "should these sessions be able to message Doom?": may, VISIBLY, through
 # bounded shapes. Three classes, decided by _classify_bash:
 #
-#   denied     the raw send commands (dm / send / do dm_user / do send_message).
+#   denied     the raw send commands (dm / send / webhook / do dm_user /
+#              do send_message).
 #              Tyler denied these in his workspace settings on 2026-08-18, but a
 #              spawned session runs in Benhams-inbox - a different project root
 #              that never loads that file - so the wall has to live HERE, where
@@ -99,8 +100,16 @@ READ_ONLY_TOOLS = {
 # something hits it for real.
 _SHELL_TOOLS = ("Bash", "PowerShell")
 
+# `webhook` joined the list on 2026-08-20 (Tyler's call). It was flagged during
+# the 08-18 audit as reaching Discord while sitting on neither list, and the
+# audit deliberately did not widen the deny on its own. It is denied WHOLE,
+# `--list` included: the entries in webhooks.json are URLs that are themselves
+# the credential - anyone holding one can post as that identity - and
+# `_SECRET_RE` below already treats that file as credential-shaped. A listing
+# is therefore key material, not metadata, so there is no read half to spare.
 _DENIED_SENDS = re.compile(
-    r"benham\.py\s+(?:dm|send)\b|benham\.py\s+do\s+(?:dm_user|send_message)\b")
+    r"benham\.py\s+(?:dm|send|webhook)\b|"
+    r"benham\.py\s+do\s+(?:dm_user|send_message)\b")
 
 # Any of these anywhere in a command disqualifies the read-only fast path:
 # chaining, pipes, redirects, substitution, newlines. The command must BE the
@@ -131,9 +140,11 @@ def _classify_bash(command):
 
 
 _DENY_SEND_MESSAGE = (
-    "That command sends a Discord message with an unbounded recipient and "
-    "unbounded words, and sessions never get it - Tyler denied the raw send "
-    "paths on 2026-08-18. Do not look for another route to the same effect. "
+    "That command reaches Discord with an unbounded recipient and unbounded "
+    "words, and sessions never get it - Tyler denied the raw send paths on "
+    "2026-08-18 and `webhook` on 2026-08-20 (a webhook is worse, not better: "
+    "the URL is the credential and the sender name is free text, so it can "
+    "post as anyone). Do not look for another route to the same effect. "
     "The bounded paths exist and are the right tool: "
     "`benham.py outreach <collaborator> \"question\"` opens a tracked ask "
     "(Tyler approves it, delivery and nudges are handled for you), and "
