@@ -18,6 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import _testconfig                 # noqa: F401,E402 - must precede every benham import
+
 from benham.cli import dm          # noqa: E402
 from benham.core import identity   # noqa: E402
 
@@ -36,9 +38,19 @@ def section(name):
     print(f"\n{name}")
 
 
-DRACO = 1269372470553743422
-DOOM = 1097631170788851815
-TYLER = 273967061619965952
+# The two collaborators in the story below are Draco and Doom. Their REAL Discord
+# ids used to be written here, and that is why this file passed on exactly one
+# machine: identity.py resolves control.json at import, control.json is gitignored,
+# and off Tyler's box `is_guest(<a real id>)` is False - so the three rows that
+# matter silently stopped testing anything and one of them crashed on a None.
+#
+# What the test actually needs is not a real person, it is an id that is on
+# whatever allowlist it runs against. _testconfig owns that allowlist and hands
+# out two invented ids, which is also what keeps the "not about one person" row
+# honest - two distinct guests, neither of them anybody.
+GUEST_A = _testconfig.GUEST_ID      # stands in for Draco, who got asked twice
+GUEST_B = _testconfig.GUEST_ID_2    # stands in for Doom - the rule is general
+TYLER = 273967061619965952          # a real id, but a committed one: control.json.example
 STRANGER = 999000999000999000
 
 
@@ -68,21 +80,21 @@ check("empty is not", dm.asks_something(""), False)
 check("None does not crash", dm.asks_something(None), False)
 
 section("who it applies to")
-check("a guest being asked something is refused", blocked(DRACO, REAL), True)
+check("a guest being asked something is refused", blocked(GUEST_A, REAL), True)
 check("...Doom too - this is not about one person",
-      blocked(DOOM, "can you test the zoom and tell me if it works?"), True)
+      blocked(GUEST_B, "can you test the zoom and tell me if it works?"), True)
 check("a guest being TOLD something goes through",
-      blocked(DRACO, "granted you the roles, you should be all set now."),
+      blocked(GUEST_A, "granted you the roles, you should be all set now."),
       False)
 check("Tyler is exempt - he has the ask queue, not the outreach rail",
       blocked(TYLER, "did the deploy finish?"), False)
 check("a stranger is exempt - we do not put questions to them at all",
       blocked(STRANGER, "are you around?"), False)
 check("identity.is_guest is what draws the line, not a list in this file",
-      identity.is_guest(DRACO) and not identity.is_guest(TYLER), True)
+      identity.is_guest(GUEST_A) and not identity.is_guest(TYLER), True)
 
 section("the refusal earns its keep")
-_msg = dm._refuse_untracked_question(DRACO, REAL)
+_msg = dm._refuse_untracked_question(GUEST_A, REAL)
 check("it names the command that should have been used",
       "benham.py outreach" in _msg, True)
 check("it says WHY, so the next session does not just retry harder",
@@ -93,7 +105,7 @@ check("it names its own escape hatch", "--untracked" in _msg, True)
 
 section("the escape hatch is real - a guard nobody can pass is routed around")
 check("a quoted question mark is a known false positive, and it IS blocked",
-      blocked(DOOM, 'the sentence is "Buffalo buffalo?" - a grammar joke'),
+      blocked(GUEST_B, 'the sentence is "Buffalo buffalo?" - a grammar joke'),
       True)
 # --untracked is parsed in main(), so the guard is simply not consulted. What is
 # asserted here is that the refusal advertises the way out; main()'s flag
