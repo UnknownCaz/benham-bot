@@ -40,19 +40,13 @@
   "guest": {
     "enabled": false,
     "ids": [],
-    "model": "claude-haiku-4-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 500,
-    "history_turns": 10,
+    "history_turns": 15,
     "cooldown_seconds": 3,
     "daily_message_cap": 100,
     "global_daily_cap": 400,
-    "web_search": true,
-    "tool_rounds": 4,
-    "workspace": {
-      "per_guest_mb": 20,
-      "max_files": 100,
-      "per_file_mb": 5
-    }
+    "web_search": true
   },
   "_guest": "Lets whitelisted NON-owners hold a plain conversation with Claude by DM. CONVERSATION ONLY apart from web_search: the guest path passes no CLIENT tools to the API - the single entry is Anthropic's SERVER-SIDE web search (runs on their servers; nothing is fetched from this machine or network). A turn that searched counts DOUBLE against the daily cap, and every query is appended to guest_searches.jsonl for hand moderation. So no Discord action, no channel read and no PC access is reachable from it - a guest id buys a reply instead of a refusal, and nothing else. ids: Discord user ids; an owner id here is ignored. Guests are DM-only and cannot be reached by mention. Caps are per calendar day and reset on the first message after midnight; every message bills Tyler, which is what the caps are for. Separate memory FILE (guest_memory.json) - a guest never sees, and is never seen by, Tyler's own conversation. Guests may also file ideas/bug reports with an `idea..` prefix, which are quarantined and tracked as conversations they get told the outcome of. ARCHIVED 2026-08-16: the guest tool loop (mode 'workspace', capabilities, read_channels, code_execution) is gone - see archive/guest-tools/. Those keys are ignored if present, and 'mode' is now only 'chat'; anything else DISABLES guest chat rather than guessing. RESTART REQUIRED, both ways: this file is read once at import, so enabling guests, disabling them, or striking someone from ids all take effect on the next start and not before. To cut a guest off immediately, bounce the bot - 'enabled: false' on its own does nothing to a running process.",
   "confirm": {
