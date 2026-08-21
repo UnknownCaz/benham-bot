@@ -29,6 +29,13 @@ Fully offline - the Anthropic client is a scripted fake, no API calls, no cost.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
+# These checks assert on what reached DISK, which is the whole point of the file -
+# so it matters a great deal which disk. Without this the store resolved to the
+# live state/ of whatever checkout ran the suite, and in the main repo that is the
+# directory the running bot has open. The keys were cleaned up on the way out; the
+# read-modify-write against the bot's own memory file was not.
+import _testconfig  # noqa: F401,E402 - must precede every benham import
+
 import asyncio
 import sys
 

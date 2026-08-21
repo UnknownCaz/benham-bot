@@ -29,6 +29,12 @@ fires nothing at all, so one case proves the wiring is live.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
+# This file drives the real bot.on_message, so importing bot.py resolves and
+# creates the outbox path - in the live state/ until this line existed. The guest
+# allowlist is still overridden explicitly below; the redirect governs where state
+# is WRITTEN, not what this file asserts about who may talk.
+import _testconfig  # noqa: F401,E402 - must precede every benham import
+
 import asyncio
 import os
 import sys
