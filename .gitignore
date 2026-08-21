@@ -97,3 +97,23 @@ ask_batches.json
 # audit trail he reads, which is a local artifact by design.
 initiative.json
 initiative-log.md
+
+# Rooms state (item 22). rooms.json and the per-caller read cursors are written
+# by the bot at runtime - seq counters, worker session ids, "how far has cli read".
+# They were committed during the rooms build and every session has shown them
+# dirty since. Nothing depends on the committed copies: rooms._index() defaults
+# to {"rooms": {}}, SCRATCH is ensure()d at boot, and the cursor dir is makedirs'd
+# on write. The room CONTENT (state/rooms/*.jsonl) was already ignored by *.jsonl,
+# so tracking its index was incoherent as well as noisy.
+state/rooms.json
+state/rooms/cursors/
+
+# Guest outreach quiet timers: user id -> when they may be spoken to again.
+# Bot-written, and it names which collaborator is muted and until when - same
+# privacy class as conversations.json/ask_batches.json above.
+state/guest_quiet.json
+
+# One-off JSON dumps from a server build run (`--json` redirected to the repo
+# root). Real category/channel ids for a real guild, and nothing reads the file -
+# same class as the diag*.txt scratch output above.
+build_out.json
