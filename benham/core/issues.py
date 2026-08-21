@@ -81,7 +81,8 @@ DAILY_CAP_DEFAULT = 10  # per guest, same instinct as ideas.DAILY_CAP
 _CFG = identity.issues_config()
 ENABLED = bool(_CFG.get("enabled"))
 REPO = str(_CFG.get("repo") or "")
-ISSUER_IDS = set(int(u) for u in (_CFG.get("issuers") or []))
+ISSUER_PEOPLE = identity.people_map(_CFG.get("issuers"))
+ISSUER_IDS = set(ISSUER_PEOPLE.values())
 DAILY_CAP = int(_CFG.get("daily_cap", DAILY_CAP_DEFAULT))
 # Project names a filing may be tagged with (label `project:<name>` must exist
 # in the repo). A name outside this set is dropped rather than sent, so a

@@ -353,5 +353,33 @@ check("no action name collides with a legacy outbox name",
                                     "edit", "delete", "history", "purge"},
       set())
 
+section("People-lists parse from BOTH shapes - the old one is not a courtesy")
+# control.json is a live control plane on a running bot. The readable name->id
+# shape is what every people-list should be written as from here on, but a bot
+# whose config still holds a bare array must keep booting - a format change that
+# refuses the file already on disk takes the bot down at the next restart, which
+# is a worse failure than the unreadability it fixes. So the old shape is asserted
+# as its own case, deliberately, rather than left to be inferred from the new one
+# passing.
+_DOOM, _DRACO = 1097631170788851815, 1269372470553743422
+
+check("the readable shape parses to the right ids",
+      identity.people_map({"doom": _DOOM, "draco": _DRACO}),
+      {"doom": _DOOM, "draco": _DRACO})
+check("a BARE ARRAY still parses - an unmigrated control.json must still boot",
+      identity.people_map([_DOOM, _DRACO]),
+      {str(_DOOM): _DOOM, str(_DRACO): _DRACO})
+check("...and both shapes agree on the id set, which is what every gate reads",
+      set(identity.people_map({"doom": _DOOM}).values())
+      == set(identity.people_map([_DOOM]).values()),
+      True)
+check("string ids in the readable shape are coerced, as JSON often carries them",
+      identity.people_map({"doom": str(_DOOM)}), {"doom": _DOOM})
+check("absent is empty, not an error - the fail-closed direction",
+      [identity.people_map(None), identity.people_map([]), identity.people_map({})],
+      [{}, {}, {}])
+check("whitespace in a hand-typed name is stripped",
+      identity.people_map({"  doom  ": _DOOM}), {"doom": _DOOM})
+
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
 sys.exit(1 if _fails else 0)
