@@ -2,6 +2,27 @@
 Written 2026-08-21 ~23:45Z by the scoping worker, immediately before a `/clear`.
 **Read this first, then `PLAN-second-face.md`.**
 
+> ## DELETE THIS FILE WHEN IT IS DONE. It has an expiry and this is it.
+>
+> **Delete when commit 13 is verified** - both faces live, Codex proven able to work in its own
+> guild - **or the moment the second face is abandoned.** Either way this file goes.
+>
+> `git rm docs/plans/HANDOFF-second-face.md`
+>
+> **Before deleting, move anything still true into `INTENT.md`** - a decision, a gotcha, a bug
+> that outlived the build. This file is scaffolding for a handover, not a record; INTENT.md is
+> the record. Nothing here is worth keeping *as a handoff* once the handover is over.
+>
+> **Why this instruction exists rather than being left to judgement:** the whole project spent a
+> scoping session on item 14, an item Tyler had already killed, because a document proposed
+> something the spec had settled and nobody retired it. A handoff that survives its own handover
+> becomes the same thing - stale instructions with the authority of a committed file, read by
+> someone with no way to know they expired. **The expiry is written down so it does not depend
+> on anyone remembering.**
+>
+> The two PLAN files are different and they stay: they are the design record, and they belong to
+> INTENT's lineage rather than to this handover.
+
 ---
 
 ## Where things actually stand
