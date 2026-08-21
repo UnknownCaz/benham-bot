@@ -63,10 +63,22 @@ def main():
         "python benham.py do send_message channel_id=1 text=x",
         'echo innocent && python benham.py dm 123 "smuggled"',
         f'cd somewhere; python {CLI} do dm_user user_id=1 text=x',
+        # webhook, added 2026-08-20. Flagged by the 08-18 audit as reaching
+        # Discord while on neither list; Tyler's call was to deny it.
+        'python benham.py webhook "hello"',
+        f'python {CLI} webhook --target general "hi"',
+        'python benham.py webhook --url https://discord.com/api/webhooks/x "hi"',
+        'python benham.py webhook --username Caz "impersonation"',
+        'echo ok && python benham.py webhook "smuggled"',
+        # Denied WHOLE: the listing is key material, not metadata, because a
+        # webhook URL IS the credential. There is no read half to spare.
+        "python benham.py webhook --list",
     ):
         check(f"denied: {cmd[:60]}", codesession._classify_bash(cmd), "denied")
     check("send_message the capability name does not false-match 'send'",
           codesession._classify_bash("python benham.py sendx"), "ask")
+    check("webhook does not false-match a longer word",
+          codesession._classify_bash("python benham.py webhookx"), "ask")
 
     section("read-only: the whole command is the read, or it asks")
     for cmd in (
