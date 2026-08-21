@@ -3,8 +3,10 @@ _testconfig.py - the control plane the gate tests measure against.
 
 Import this BEFORE any `from benham...` line in a test that asserts on a gate
 (who Benham obeys, which guilds allow the agent, where tier 3 may run, where it
-may post). Importing it later does nothing: identity.py resolves and reads its
-control file at import, so the redirect has to be in place first.
+may post), OR in any test that drives code which WRITES state. Importing it later
+does nothing: identity.py resolves and reads its control file at import, and every
+store computes its path from paths.STATE_DIR at import, so both redirects have to
+be in place first.
 
     import os as _os, sys as _sys
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -104,3 +106,32 @@ with open(os.path.join(_fixture_dir, "control.json"), "w", encoding="utf-8") as 
 # Must happen before identity.py is imported - it joins this at import time and
 # reads the result immediately.
 paths.CONFIG_DIR = _fixture_dir
+
+# --------------------------------------------------------------------------
+# STATE_DIR, for the same reason and with a worse symptom.
+#
+# CONFIG_DIR was redirected because tests were READING a file nobody can commit.
+# This is the other direction: tests WRITE. Nothing redirected STATE_DIR, so a
+# store's path resolved to the live state/ of whatever checkout ran the suite -
+# and in the main repo that is the directory the running bot has open.
+#
+# It was not theoretical. state/agent_memory.json in the main checkout holds
+# seven keys, every one of them `test:*`, each pinned at the history_turns
+# ceiling of 20 pairs; the pre-repair backup beside it has the same keys at one
+# pair. They had been accumulating across suite runs for weeks. test_memory.py's
+# `_stored()` helper reads the live file ON PURPOSE - "the turns as they exist on
+# disk" - which is the right assertion pointed at the wrong disk.
+#
+# Several tests had already noticed the hazard one file at a time and worked
+# around it privately: test_control redirects agent.MEMORY_FILE to a temp file,
+# test_guest and test_conversations redirect their own stores, test_memory forgets
+# its keys on the way out. Each fix was correct and none of them generalised, so
+# test_injection - which redirects nothing - went on writing six keys per run.
+# One redirect here covers every store at once, including the ones nobody has
+# written yet, which is the same argument that put CONFIG_DIR above.
+#
+# NOT a substitute for a test cleaning up after itself, and deliberately not
+# shared between runs: the directory is per-process and atexit removes it, so a
+# store that leaks is a store that leaks into a temp dir nobody reads.
+paths.STATE_DIR = os.path.join(_fixture_dir, "state")
+os.makedirs(paths.STATE_DIR, exist_ok=True)
