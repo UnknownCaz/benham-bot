@@ -70,9 +70,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from benham import paths  # noqa: E402 - imports nothing but os; cannot be a cycle
 
-# Invented, and belongs to nobody. Never an owner id - identity.is_guest() refuses
+# Invented, and belong to nobody. Never an owner id - identity.is_guest() refuses
 # the overlap, so an owner here would silently make every guest row a non-guest row.
+#
+# TWO of them, and the second one earns its keep. test_dm_guard.py's central claim
+# is that the raw-`dm` guard is "not about one person", and a fixture with a single
+# guest cannot express that: one id proves the rule fires, it does not prove the
+# rule generalises. That test previously reached for two REAL collaborator ids to
+# say it, which is the thing this file exists to end - it then passed only on
+# Tyler's machine, because identity.py resolves control.json at import and a
+# worktree or a fresh clone has none. A second invented id says the same thing and
+# says it everywhere.
 GUEST_ID = 555000555000555000
+GUEST_ID_2 = 555000555000555001
 
 _EXAMPLE = os.path.join(paths.CONFIG_DIR, "control.json.example")
 
@@ -85,7 +95,8 @@ with open(_EXAMPLE, encoding="utf-8") as _f:
 # Minimum divergence: flip the switch and name a guest, leave everything else -
 # including the absent "mode" key, so the fixture exercises the same default
 # guest_enabled() reads in production.
-_cfg["guest"] = {**_cfg.get("guest", {}), "enabled": True, "ids": [GUEST_ID]}
+_cfg["guest"] = {**_cfg.get("guest", {}), "enabled": True,
+                 "ids": [GUEST_ID, GUEST_ID_2]}
 
 with open(os.path.join(_fixture_dir, "control.json"), "w", encoding="utf-8") as _f:
     json.dump(_cfg, _f, indent=2)
