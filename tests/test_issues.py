@@ -397,6 +397,28 @@ check("the persona is sent as a cacheable block",
 check("cache hits are logged, because a dead cache is silent otherwise",
       "cache_read=" in _guestsrc, True)
 
+
+section("the OWNER prompt knows the tracker exists")
+# persona.md never mentioned file_issue, so Benham on Tyler's own lane could use
+# the capability if asked but would never OFFER it - the same discoverability
+# hole the guest prompt had, in a second place. Found on 2026-08-21 when Tyler
+# tested the guest detector from his own DM (it cannot fire there: an owner is
+# not a guest) and the owner lane said nothing about filing either.
+# Whitespace-collapsed: these are sentences in wrapped prose, and a check that
+# breaks when a line rewraps trains people to reflow prose to suit the test.
+_owner = " ".join(_io.open(_os.path.join(_paths.PROMPTS_DIR, "persona.md"),
+                          encoding="utf-8").read().lower().split())
+check("the capability is named, so the model can actually reach it",
+      "file_issue" in _owner, True)
+check("it is told to offer, because Tyler forgets what is already built",
+      "want that in the tracker?" in _owner, True)
+check("filing is not fixing - needs-triage is stated, not implied",
+      "needs-triage" in _owner, True)
+check("...and it must not hand-send what loop-close already sends",
+      "do not promise to go back and tell someone" in _owner, True)
+check("the guest prefixes are named as THEIR door, not the owner's",
+      "you never use those on their behalf" in _owner, True)
+
 print()
 if _fails:
     print(f"FAIL - {len(_fails)} check(s): {', '.join(_fails)}")
