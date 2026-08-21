@@ -56,17 +56,36 @@ def refused(arg):
         return "refused"
 
 
+def _whitelist(*ids):
+    """Set the guest allowlist - BOTH halves of it, which is the point of a helper.
+
+    `GUEST_PEOPLE` is the source (a name->id map) and `GUEST_IDS` is derived from
+    its values. Setting only one leaves identity.py internally inconsistent, and
+    the half a caller reads decides whether the patch bites: `_allowed()` reads
+    GUEST_PEOPLE, so an earlier version of this file that set GUEST_IDS alone went
+    red the moment outreach started using real names. That was the suite doing its
+    job; this helper is so it cannot happen a second time.
+
+    Ids are their own names here on purpose - the unnamed shape. These checks are
+    about the fallback that applies when nobody has written names down, so the
+    fixture has to be that shape to be testing it.
+    """
+    identity.GUEST_PEOPLE = {str(i): int(i) for i in ids}
+    identity.GUEST_IDS = set(identity.GUEST_PEOPLE.values())
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="benham-outreach-")
     real_store, real_batches = C.STORE, C.BATCHES
     real_control = identity.CONTROL
     real_guests, real_owners = identity.GUEST_IDS, identity.OWNER_IDS
+    real_people = identity.GUEST_PEOPLE
     real_enqueue = None
     try:
         C.STORE = os.path.join(tmp, "conversations.json")
         C.BATCHES = os.path.join(tmp, "ask_batches.json")
         identity.OWNER_IDS = {TYLER}
-        identity.GUEST_IDS = {DOOM}
+        _whitelist(DOOM)
         identity.CONTROL = dict(real_control)
         identity.CONTROL.pop("outreach", None)
 
@@ -102,7 +121,7 @@ def main():
         # it is appropriate to go and bother. Those are different questions, so
         # outreach.people can cut below the whitelist without a code change.
         identity.CONTROL.pop("outreach", None)
-        identity.GUEST_IDS = {DOOM, STRANGER}
+        _whitelist(DOOM, STRANGER)
         check("with no config, any whitelisted guest is reachable",
               [refused(str(DOOM)), refused(str(STRANGER))], [DOOM, STRANGER])
         identity.CONTROL["outreach"] = {"people": {"doom": DOOM}}
@@ -160,6 +179,7 @@ def main():
         C.STORE, C.BATCHES = real_store, real_batches
         identity.CONTROL = real_control
         identity.GUEST_IDS, identity.OWNER_IDS = real_guests, real_owners
+        identity.GUEST_PEOPLE = real_people
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n" + ("ALL PASS" if not _fails else f"{len(_fails)} FAILED"))

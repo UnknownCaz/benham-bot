@@ -57,7 +57,11 @@ def _allowed():
     people = cfg.get("people") or {}
     if people:
         return {str(k).strip().lower(): int(v) for k, v in people.items()}
-    return {str(i): int(i) for i in sorted(identity.GUEST_IDS)}
+    # Real names now, when the guest list carries them. This line used to fake a
+    # name map out of bare ids (`{str(i): int(i)}`) because there was nothing else
+    # to use - identity.people_map does that same fallback centrally, so the fake
+    # is gone and `outreach doom "..."` works off the guest list alone.
+    return {k.lower(): v for k, v in identity.GUEST_PEOPLE.items()}
 
 
 def resolve_target(arg):
