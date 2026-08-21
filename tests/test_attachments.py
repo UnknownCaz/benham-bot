@@ -18,6 +18,12 @@ so a test run never writes into the repo's real downloads/.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
+# Importing bot.py resolves the outbox path and creates it. Empty directories are
+# harmless, but they were being created in the live state/ - the same directory the
+# running bot polls every two seconds - and "this test only makes empty dirs there"
+# is a property of today's code, not a guarantee.
+import _testconfig  # noqa: F401,E402 - must precede every benham import
+
 import asyncio
 import io
 import os

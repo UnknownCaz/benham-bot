@@ -38,6 +38,12 @@ Fully offline - the Anthropic client is a scripted fake, no API calls, no cost.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
+# Driving agent.respond() stores turns, so this file writes to the memory store
+# whether it means to or not. It forgets its own keys on the way out, which made
+# the leak invisible - what it could not undo is that the read-modify-write landed
+# on the live state/ of whatever checkout ran the suite. Redirect first.
+import _testconfig  # noqa: F401,E402 - must precede every benham import
+
 import asyncio
 import sys
 
