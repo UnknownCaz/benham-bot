@@ -465,6 +465,21 @@ async def before_watchdog():
 # =================== end exaroton /server + watchdog block ===================
 
 
+def _named(people):
+    """A people-map rendered for the boot banner: `doom (1097...), draco (1269...)`.
+
+    The banner is the one place a whitelist is read by a human on a routine basis,
+    and until now it printed bare ids - five 19-digit numbers where a wrong one is
+    indistinguishable from a right one. A name beside each is what makes that line
+    checkable rather than decorative.
+
+    An id with no name prints as a bare id, so an unmigrated control.json reads
+    exactly as it always did.
+    """
+    return ", ".join(f"{n} ({i})" if n != str(i) else str(i)
+                     for n, i in sorted(people.items(), key=lambda kv: kv[0].lower()))
+
+
 @client.event
 async def on_ready():
     log(f"Logged in as {client.user} (id {client.user.id})")
@@ -488,7 +503,7 @@ async def on_ready():
                     else f"UNEXPECTED GUEST GRANTS: {', '.join(_grants)}")
         log(f"Guest chat: ON ({guest.MODEL}, DM only, {_surface}"
             f"{', web search on' if guest.WEB_SEARCH else ''}) — "
-            f"{sorted(identity.GUEST_IDS) or 'nobody whitelisted'}, "
+            f"{_named(identity.GUEST_PEOPLE) or 'nobody whitelisted'}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
     else:
         log("Guest chat: OFF — only owners get a reply")

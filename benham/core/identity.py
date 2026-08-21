@@ -134,8 +134,31 @@ def is_owner(user_id):
 # on the second side of it. All a guest id buys is a reply instead of a refusal.
 # --------------------------------------------------------------------------
 
+def people_map(value):
+    """A config list of people as {name: id}, from either shape it may be written in.
+
+    The readable shape is a name->id map, and it is what every people-list here
+    should be written as. A bare array of 19-digit Discord ids is precisely where a
+    wrong id hides in plain sight: the boot banner prints it, it looks exactly like
+    the four beside it, and nothing in the system can tell you it is the wrong
+    person until someone notices Benham talking to a stranger. A name cannot hide
+    that way. `outreach.people` has been the readable shape all along - this makes
+    the others match it rather than the reverse.
+
+    The bare array still parses, and that is not politeness. control.json is a live
+    control plane on a running bot; a format change that refuses the file already on
+    disk would take the bot down on the next restart, which is a worse failure than
+    the unreadability it fixes. An id with no name gets its own id as its name -
+    exactly what outreach._allowed() was already faking locally.
+    """
+    if isinstance(value, dict):
+        return {str(k).strip(): int(v) for k, v in value.items()}
+    return {str(i): int(i) for i in (value or [])}
+
+
 GUEST = CONTROL.get("guest") or {}
-GUEST_IDS = set(int(u) for u in (GUEST.get("ids") or []))
+GUEST_PEOPLE = people_map(GUEST.get("ids"))
+GUEST_IDS = set(GUEST_PEOPLE.values())
 
 # The GitHub intake funnel (core/issues.py). A separate block rather than a key
 # under `guest` because the owner files through it too - being an issuer is a
