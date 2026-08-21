@@ -408,8 +408,19 @@ from benham.core import shared_tools  # noqa: E402
 check("the only tool passed is Anthropic's SERVER-SIDE web search - no client tools",
       [t.get("type") for t in (_fake.messages.kwargs or {}).get("tools", [])],
       [shared_tools.WEB_SEARCH_TYPE] if guest.WEB_SEARCH else [])
+# `system` is a LIST of blocks now, not a string: the persona is sent with a
+# cache_control breakpoint on it (it is ~3.3k stable tokens re-billed on every
+# turn otherwise). Flatten before asserting, and assert the breakpoint too - if
+# the block shape is ever reverted to a bare string the cache dies silently and
+# only the bill would say so.
+_sysblocks = (_fake.messages.kwargs or {}).get("system", "")
+_systext = ("".join(b.get("text", "") for b in _sysblocks)
+            if isinstance(_sysblocks, list) else _sysblocks).lower()
 check("the guest prompt is used, not persona.md",
-      "no tools on this path" in (_fake.messages.kwargs or {}).get("system", "").lower(),
+      "no tools on this path" in _systext, True)
+check("the persona carries a cache breakpoint",
+      isinstance(_sysblocks, list)
+      and _sysblocks[0].get("cache_control", {}).get("type") == "ephemeral",
       True)
 guest.forget()
 

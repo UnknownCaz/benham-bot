@@ -1220,8 +1220,27 @@ async def file_guest_report(message, category, rtext, log_tag,
             ok, reply = ideas.file_idea(message.author.id, message.author.name,
                                         f"[{category}] {rtext}")
             if not ok:
-                await reply_in(message.channel, reply)
-                return
+                # The fallback refused, and the only two reasons it can are its
+                # OWN length limit and its OWN daily cap - both narrower than the
+                # funnel the guest actually used: issues.MAX_QUOTE is 1500 to
+                # ideas.MAX_LEN's 1000, and the two caps count separately. So a
+                # report that passed every check the guest was subject to could
+                # still be dropped here purely because GitHub was down, which
+                # breaks the one property every path through this function must
+                # keep. Record it unsent instead, in the funnel's own jsonl, so
+                # the report survives and `issues retry` can send it later.
+                log(f"guest {category}: FALLBACK ALSO REFUSED ({reply}) - "
+                    f"recording unsent so the report is not lost")
+                if issues.record_unsent(category, rtext,
+                                        guest_id=message.author.id,
+                                        guest_name=message.author.name,
+                                        reason=res):
+                    reply = (f"filed for caz {emoji} - the tracker's "
+                             "unreachable right now, so it's saved and goes up "
+                             "when it's back")
+                else:
+                    await reply_in(message.channel, reply)
+                    return
     else:
         # Not an issuer (or the funnel is off): the report still lands, through
         # the pipeline that predates the funnel. The category travels as a tag

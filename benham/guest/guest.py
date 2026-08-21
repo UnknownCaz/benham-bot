@@ -527,7 +527,18 @@ def respond(user_id, text, log=None, content=None):
     resp = _get_client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
-        system=_system_prompt(),
+        # The persona is a static file read once into _persona_cache: same bytes on
+        # every turn, no clock, no per-guest interpolation. That makes it the one
+        # thing here worth a cache breakpoint - it is ~3.3k tokens re-billed at full
+        # price on every guest message otherwise, which at this history size is over
+        # half the input of a turn. agent.py:461 has done this since it was written;
+        # this path simply never got it. Cached reads bill at 0.1x, and the guest
+        # turns that matter arrive a minute apart, well inside the 5-minute TTL.
+        # If anything per-guest or time-varying is ever added to the system prompt,
+        # it must go in a SECOND block after this one or the cache dies silently -
+        # check usage.cache_read_input_tokens before believing otherwise.
+        system=[{"type": "text", "text": _system_prompt(),
+                 "cache_control": {"type": "ephemeral"}}],
         messages=turns,
         **kw,
     )
@@ -543,6 +554,16 @@ def respond(user_id, text, log=None, content=None):
     offer_line = None
     try:
         offer_line = issues.offer_from_reply(user_id, raw, text)
+        if offer_line is None:
+            # The model declined to tag this turn. Ask CODE whether the guest
+            # just reported a defect anyway - twice in two days the model has
+            # missed one that a human read as obvious, and a third prompt patch
+            # is the same bet at a higher stake. Runs second, and only on a
+            # turn the tag did not claim, so a guest is never asked twice.
+            offer_line = issues.offer_from_message(user_id, text)
+            if offer_line:
+                _log(f"guest issue offer [detector] parked for {user_id}: "
+                     f"{text[:120]!r}")
     except Exception as e:  # noqa: BLE001 - an offer must never eat a reply
         _log(f"guest issue offer failed to park ({e}) - reply unaffected")
 
@@ -571,8 +592,17 @@ def respond(user_id, text, log=None, content=None):
     if u is not None:
         # Same shape usage.py already parses for agent turns, so guest traffic shows
         # up in `usage.py --today` with no change to that file.
+        # cache_read/cache_write ride BEFORE model= on purpose: usage.py's RE_AGENT
+        # captures everything up to " model=" as the body and hands it to kv(), which
+        # parses arbitrary key=value tokens - so these are free to add here and would
+        # be invisible (or worse, break the model match) after it. They are logged
+        # because a prompt cache fails SILENTLY: a stale-looking bill is the only
+        # symptom otherwise. cache_read of 0 across a live back-and-forth means the
+        # system prefix stopped being byte-identical - look there first.
         _log(f"agent usage [guest:{user_id}] "
              f"in={getattr(u, 'input_tokens', 0)} out={getattr(u, 'output_tokens', 0)} "
+             f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
+             f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
              f"model={MODEL}")
     _log(f"guest chat: {user_id} used {mine}/{DAILY_CAP} today "
          f"(global {everyone}/{GLOBAL_CAP})")

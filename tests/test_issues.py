@@ -259,6 +259,144 @@ check("the handout documents all three prefixes, not just idea..",
       all(pfx in _guide for pfx in ("idea..", "bug..", "want..")), True)
 
 
+
+section("the deterministic detector - code notices what the model missed")
+# Both of these are VERBATIM from real DMs where the model's <<issue:>> tag did
+# not fire and a real report was lost. They are the reason this exists, so they
+# are asserted rather than described.
+check("Doom naming the forgetting defect outright (2026-08-20, missed live)",
+      (issues.detect_complaint(
+          "i like the first set so ill go with those, can you also make a "
+          "naming text schematic that i can relay to you due to the issue of "
+          "you easily forgetting past conversation?") or (None,))[0], "bug")
+check("a Storyizier UI report with no second person in it",
+      (issues.detect_complaint(
+          "the agree and respond button for the party choice doesnt seem to "
+          "work properly") or (None,))[0], "bug")
+check("a capability gap phrased as a question",
+      (issues.detect_complaint("why cant you remember what i said an hour "
+                               "ago?") or (None,))[0], "bug")
+check("'having a hard time' counts as a complaint",
+      (issues.detect_complaint("benham is having a hard time seeing images "
+                               "for some reason") or (None,))[0], "bug")
+check("a real wish files as want, not bug",
+      (issues.detect_complaint("it should be able to export my story, you "
+                               "should be able to do that") or (None,))[0],
+      "want")
+
+# Precision is the whole problem: these guests talk about broken video games
+# constantly, and a wrong offer reads as not listening. Every line below was
+# either said for real or is one word away from something that was.
+check("game talk stays out (no subject)",
+      issues.detect_complaint("division 2 is broken right now, the servers "
+                              "keep crashing"), None)
+check("someone else's hardware stays out",
+      issues.detect_complaint("my controller doesnt work properly anymore"),
+      None)
+check("'can you add X' is a request to Benham, not a feature request",
+      issues.detect_complaint("can you add a text note to my files named "
+                              "anime to watch"), None)
+check("...and the other real one that used to false-positive",
+      issues.detect_complaint("can you add some verity to the names"), None)
+check("ordinary chat stays out",
+      issues.detect_complaint("ty, and i hope yopu have a good day"), None)
+check("too short to act on",
+      issues.detect_complaint("it broke"), None)
+check("an explicit prefix wins - the detector never doubles up",
+      issues.detect_complaint("bug.. the thing is broken and you cant see it"),
+      None)
+check("...idea.. too, though bot.py handles it before the brain runs",
+      issues.detect_complaint("idea.. the lore button doesnt work for you"),
+      None)
+
+section("the detector parks like the tag does")
+issues._DETECT_FILE = os.path.join(_tmp, "issue_detect.json")
+issues.OFFERS_FILE = os.path.join(_tmp, "detect_offers.json")
+_complaint = "why cant you remember what i said an hour ago?"
+_line = issues.offer_from_message(DOOM, _complaint)
+check("issuer gets the SAME offer wording the tag produces",
+      isinstance(_line, str) and "say **yes** and it's filed" in _line, True)
+_parked = issues.pending_offer(DOOM)
+check("a proposal is parked", _parked is not None, True)
+check("the quote is the guest's own words, captured by code",
+      _parked["quote"], _complaint)
+check("nothing was filed yet - parking is not filing",
+      _parked.get("url"), None)
+check("a second complaint inside the cooldown is not offered again",
+      issues.offer_from_message(DOOM, "you keep forgetting things we said"),
+      None)
+issues.clear_offer(DOOM)
+check("...still silent while the cooldown holds, offer or no offer",
+      issues.offer_from_message(DOOM, "the lore button doesnt work at all"),
+      None)
+issues._DETECT_FILE = os.path.join(_tmp, "issue_detect2.json")
+check("a non-issuer is never offered anything",
+      issues.offer_from_message(STRANGER, _complaint), None)
+
+section("never lost - a report survives GitHub being down")
+# The hole this closes: ideas.py's fallback is NARROWER than this funnel
+# (MAX_LEN 1000 vs MAX_QUOTE 1500, separate daily caps), so a report could pass
+# every check the guest was subject to and still be dropped when GitHub blinked.
+issues.ISSUES_FILE = os.path.join(_tmp, "unsent.jsonl")
+_long = "x" * 1200
+check("record_unsent writes the record",
+      issues.record_unsent("bug", _long, guest_id=DOOM, guest_name="doom",
+                           reason="couldn't reach the tracker"), True)
+_pending = issues.unsent()
+check("exactly one report is waiting", len(_pending), 1)
+check("it is marked unsent", _pending[0]["unsent"], True)
+check("it has no url yet", _pending[0]["url"], "")
+check("the guest's words are kept in full, not truncated to ideas' limit",
+      len(_pending[0]["quote"]) > 1000, True)
+check("it counts against the cap - the guest was told it was filed",
+      issues.filed_today(DOOM), 1)
+
+gh.calls = []
+gh.fail = None
+_sent, _failed, _urls = issues.retry_unsent()
+check("the retry sends it", (_sent, _failed), (1, 0))
+check("nothing is left waiting", issues.unsent(), [])
+_args = " ".join(gh.calls[0])
+check("the guest-report label survives the retry",
+      "guest-report" in _args, True)
+check("...and so does needs-triage - a retry is not a promotion",
+      "needs-triage" in _args, True)
+check("the guest is still named in the body, not lost to the retry",
+      "doom" in _args, True)
+check("the placeholder is gone, so one report is one record",
+      len([e for e in issues._entries() if e.get("quote")]), 0)
+check("the delivered record carries the url",
+      issues._entries()[-1]["url"].startswith("http"), True)
+check("the cap was not charged twice for one report",
+      issues.filed_today(DOOM), 1)
+
+gh.fail = "still down"
+issues.record_unsent("bug", "the button doesnt work", guest_id=DOOM,
+                     guest_name="doom", reason="down")
+_sent2, _failed2, _ = issues.retry_unsent()
+check("a retry that fails keeps the record", (_sent2, _failed2), (0, 1))
+check("...still waiting, to be tried again", len(issues.unsent()), 1)
+gh.fail = None
+
+section("the persona no longer contradicts a real capability")
+_persona2 = _io.open(_os.path.join(_paths.PROMPTS_DIR, "guest_persona.md"),
+                    encoding="utf-8").read().lower()
+check("web search is carved out of the no-tools absolute",
+      "no tools on this path except web search" in _persona2, True)
+check("the false answer that was actually given is quoted",
+      "knowledge cutoff in early 2024" in _persona2, True)
+check("...and the blanket link refusal too",
+      "load content from outside" in _persona2, True)
+
+section("the guest path caches its system prompt")
+_guestsrc = _io.open(_os.path.join(_os.path.dirname(_paths.PROMPTS_DIR),
+                                  "benham", "guest", "guest.py"),
+                    encoding="utf-8").read()
+check("the persona is sent as a cacheable block",
+      "cache_control" in _guestsrc, True)
+check("cache hits are logged, because a dead cache is silent otherwise",
+      "cache_read=" in _guestsrc, True)
+
 print()
 if _fails:
     print(f"FAIL - {len(_fails)} check(s): {', '.join(_fails)}")
