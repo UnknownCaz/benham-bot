@@ -404,6 +404,73 @@ def filed_today(author_id):
                and str(e.get("day")) == today)
 
 
+def _rewrite(mutate):
+    """Apply `mutate(entry)` to every record and write the file back.
+
+    The jsonl is append-only in normal operation; this is the one path that
+    edits in place, and it exists because a filing gains facts AFTER it is
+    written - the conversation it opened, and later the outcome the reporter
+    was told. Returns the number of records mutate() reported changing.
+    """
+    changed = 0
+    with _lock:
+        entries = _entries()
+        for e in entries:
+            if mutate(e):
+                changed += 1
+        if changed:
+            with open(ISSUES_FILE, "w", encoding="utf-8") as f:
+                for e in entries:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    return changed
+
+
+def attach_conversation(url, cid):
+    """Remember which OWED conversation a filing opened.
+
+    Called from bot.py right after the conversation exists. Without this the
+    tracker and the conversation rail know nothing about each other, so closing
+    an issue could DM the reporter but never shut the conversation that was
+    holding the obligation - leaving a loop that reads as open forever to one
+    half of the system and closed to the other.
+    """
+    if not url or not cid:
+        return False
+
+    def go(e):
+        if e.get("url") == url and not e.get("conversation"):
+            e["conversation"] = cid
+            return True
+        return False
+    return bool(_rewrite(go))
+
+
+def guest_filings():
+    """Delivered filings made on behalf of a guest - the close-the-loop set.
+
+    Owner/CLI filings are excluded: there is nobody to report back to.
+    """
+    return [e for e in _entries()
+            if e.get("author_id") and e.get("url") and not e.get("unsent")]
+
+
+def mark_told(url, outcome):
+    """Record that the reporter has been told this filing's outcome.
+
+    The idempotence guard for the whole close-the-loop lane: it is written
+    AFTER the DM is enqueued, and every later pass skips a record that carries
+    it. Telling someone twice that their bug is fixed is the failure mode this
+    lane has that the filing lane does not.
+    """
+    def go(e):
+        if e.get("url") == url and not e.get("told"):
+            e["told"] = str(outcome)
+            e["told_at"] = datetime.now(timezone.utc).isoformat()
+            return True
+        return False
+    return bool(_rewrite(go))
+
+
 def build_body(category, quote, *, guest_name=None, guest_id=None,
                filed_by="Benham", context=None):
     """The issue body - machine-written frame, guest text fenced as DATA.
