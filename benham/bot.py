@@ -537,6 +537,9 @@ async def on_ready():
     if issues.enabled():
         if not tick_loopclose.is_running():
             tick_loopclose.start()
+        log(f"Loop-close: ON ({issues.REPO}, every 20 min, max "
+            f"{loopclose.MAX_PER_RUN}/pass) - reporters get told when Tyler "
+            "closes or declines what they filed")
     else:
         log("loop-close: OFF - no intake repo configured")
     # Register /server to each command guild. The group is added GLOBALLY (tree.add_command), so we
