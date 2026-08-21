@@ -52,6 +52,7 @@ from benham.core import initiative
 from benham.core import identity
 from benham.core import issues
 from benham.core import jsonio
+from benham.core import loopclose
 from benham.core import msgparts
 from benham.core import notify
 from benham.core import policy
@@ -530,6 +531,14 @@ async def on_ready():
         poll_outbox.start()
     if not tick_conversations.is_running():
         tick_conversations.start()
+    # Only when the funnel is on: with no tracker configured every pass would
+    # read an empty filing list forever, and a loop that can never do anything
+    # is log noise standing in for a feature.
+    if issues.enabled():
+        if not tick_loopclose.is_running():
+            tick_loopclose.start()
+    else:
+        log("loop-close: OFF - no intake repo configured")
     # Register /server to each command guild. The group is added GLOBALLY (tree.add_command), so we
     # copy globals into each guild and sync that guild — guild-scoped syncs appear instantly, and
     # (unlike the old code, which synced the empty guild scope) this actually registers the commands.
@@ -1268,6 +1277,13 @@ async def file_guest_report(message, category, rtext, log_tag,
             direction=conversations.OWED)
         log(f"guest {category} tracked as {conv['id']} (owed to "
             f"{message.author.id})")
+        # Link the filing to the conversation it opened, so closing the issue
+        # in GitHub can shut BOTH - the reporter gets told and the rail stops
+        # holding an obligation nobody is waiting on. Without this the two
+        # halves never learn about each other and a closed report reads as
+        # open forever to the conversation side.
+        if url:
+            issues.attach_conversation(url, conv["id"])
     except Exception as e:  # noqa: BLE001 - filing already succeeded
         log(f"guest {category}: could not open a conversation ({e}) - the "
             "report is safe on disk")
@@ -1968,6 +1984,36 @@ async def tick_conversations():
             except Exception:  # noqa: BLE001
                 log(f"conversation {conv['id']} could not even be banked:\n"
                     + traceback.format_exc())
+
+
+@tasks.loop(minutes=20)
+async def tick_loopclose():
+    """Tell reporters what happened to their reports.
+
+    Decision #12's fourth side, and the half of the intake funnel that decision
+    #28 deferred. It lives HERE rather than in a scheduled task because nothing
+    about it needs a model: the tracker state is the decision, and carrying it
+    to the reporter is pure delivery. The bot is already running and already
+    polling, so this costs one `gh` call per untold filing every 20 minutes and
+    adds no new process, no new approval rule, and no tokens.
+
+    Twenty minutes, not sixty: Tyler triages in bursts, and a reply that lands
+    while he is still in the tracker is worth more than one that arrives an hour
+    after he has moved on. loopclose caps each pass at MAX_PER_RUN so a session
+    that closes twenty issues does not become twenty DMs in one breath.
+
+    The gh calls are blocking, so the whole pass goes to a thread - a stalled
+    subprocess here would otherwise stop the bot answering anyone.
+    """
+    try:
+        done = await asyncio.to_thread(loopclose.run)
+    except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
+        log("loop-close pass failed:\n" + traceback.format_exc())
+        return
+    for item in done:
+        e = item["entry"]
+        log(f"loop closed: issue #{item['number']} {item['outcome']} -> "
+            f"{e.get('author')} ({e.get('author_id')})")
 
 
 @tasks.loop(seconds=2)
