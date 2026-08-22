@@ -213,9 +213,27 @@ def _next_id(data):
 # Opening
 # --------------------------------------------------------------------------
 
+def face_of(conv):
+    """Which face carries this conversation. Absent means the primary face -
+    every record written before faces existed (PLAN-second-face commit 8).
+
+    The face is stamped at OPEN, not at delivery, and that is a deliberate
+    narrowing: the outbox routes the delivering advance_conversation into the
+    carrying face's own directory, and due() below hands a conversation only
+    to the carrying face's tick - so delivery through another face is
+    unreachable from both directions, and one field at birth covers the
+    undelivered window (bot down at ask time) that a delivery-time stamp
+    would leave unowned. Without the filter, two faces' ticks would each see
+    the same overdue conversation in the SHARED store and both would nudge
+    it - the cross-face double-nudge is c19's race one identity over.
+    """
+    return conv.get("face") or paths.DEFAULT_FACE
+
+
 def open_conversation(counterparty, purpose, question, project=None, origin=None,
                       now=None, direction=ASKING, priority=NORMAL,
-                      placement_reason=None, asker_session=None, nudge_cap=None):
+                      placement_reason=None, asker_session=None, nudge_cap=None,
+                      face=None):
     """Start one. Returns the conversation dict.
 
     Several ASKING conversations may be live for one person - they form a queue,
@@ -278,6 +296,9 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "placement_reason": (str(placement_reason) if placement_reason else None),
             "asker_session": (str(asker_session) if asker_session else None),
             "nudge_cap": nudge_cap,
+            # Which face carries this ask, from birth - see face_of(). The
+            # asking process's own face unless the caller says otherwise.
+            "face": str(face or paths.PROCESS_FACE),
             "state": OPEN,
             "opened_at": _iso(now),
             "due_at": _iso(now + NUDGE_AFTER),
@@ -493,7 +514,11 @@ def _queue(data, counterparty):
     live = [c for c in data.values()
             if int(c.get("counterparty", 0)) == int(counterparty)
             and c.get("state") in LIVE_STATES
-            and c.get("direction", ASKING) == ASKING]
+            and c.get("direction", ASKING) == ASKING
+            # Two independent queues (Tyler's decision 3): a face renders,
+            # numbers and binds only its OWN asks. The other face's questions
+            # are its other DM thread's business - one numbering per screen.
+            and face_of(c) == paths.PROCESS_FACE]
     return sorted(live, key=lambda c: (_RANK.get(c.get("priority", NORMAL), 1),
                                        c.get("seq", 0)))
 
@@ -640,7 +665,12 @@ def by_slot(counterparty, slot):
     return q[slot - 1] if 1 <= slot <= len(q) else None
 
 
-BATCHES = os.path.join(paths.STATE_DIR, "ask_batches.json")
+# Per face (commit 8): a batch record stores DISCORD MESSAGE IDS, and a
+# message id belongs to one face's DM channel. Sharing the file was the
+# cross-face bind hazard - a reply in one face's DM resolving a slot against
+# a message the other face rendered. Per-face files make it unrepresentable;
+# the primary face's path is byte-identical to the pre-faces one.
+BATCHES = os.path.join(paths.process_state_dir(), "ask_batches.json")
 
 
 def _batch_rec(counterparty):
@@ -812,6 +842,11 @@ def due(now=None):
         # is on US, and nothing here should ever nudge someone about a thing we
         # have not done yet.
         if c.get("direction", ASKING) != ASKING:
+            continue
+        # Only the carrying face's tick advances a conversation - the store is
+        # shared, and without this line both faces' ticks would nudge the same
+        # overdue question. See face_of().
+        if face_of(c) != paths.PROCESS_FACE:
             continue
         if not beat_due(c, now):
             continue
