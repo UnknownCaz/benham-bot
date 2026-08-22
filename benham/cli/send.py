@@ -33,7 +33,7 @@ def main(argv):
     content = " ".join(argv[2:])
 
     # No "action" key on purpose: bot.py defaults to "send".
-    final = enqueue(face=paths.DEFAULT_FACE, channel_id=channel_id, content=content)
+    final = enqueue(face=paths.PROCESS_FACE, channel_id=channel_id, content=content)
     print(f"Queued -> {final}")
     if no_wait:
         return EXIT_OK

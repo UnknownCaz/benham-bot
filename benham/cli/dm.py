@@ -67,7 +67,8 @@ def _refuse_untracked_question(user_id, content):
         "reply would bind to nothing. That is exactly how Draco got asked the\n"
         "same six questions twice on 2026-08-20.\n"
         "\n"
-        'Use:  python benham.py outreach <who> "your question"\n'
+        f'Use:  python benham.py outreach <who> "your question" '
+        f'--face {paths.PROCESS_FACE}\n'
         "\n"
         "If this really is not a question being put to them (a quote, a URL, an\n"
         "aside that happens to contain '?'), pass --untracked and it goes as-is."
@@ -101,7 +102,7 @@ def main(argv):
             print(refusal, file=sys.stderr)
             return 2
 
-    final = enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=user_id, content=content)
+    final = enqueue(face=paths.PROCESS_FACE, action="dm", user_id=user_id, content=content)
     print(f"Queued DM -> {final}")
     if no_wait:
         return EXIT_OK

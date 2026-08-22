@@ -107,9 +107,14 @@ _SHELL_TOOLS = ("Bash", "PowerShell")
 # the credential - anyone holding one can post as that identity - and
 # `_SECRET_RE` below already treats that file as credential-shaped. A listing
 # is therefore key material, not metadata, so there is no read half to spare.
+# `(?:--face\s+\S+\s+)?` joined both alternatives with commit 10: --face is
+# accepted before or after the subcommand, and a deny that only matched the
+# after form would make `benham.py --face benham dm` a fresh route to the
+# exact send this exists to refuse. The flag-first form is covered HERE, in
+# the greedy deny, not in the strict allow - unrecognised still asks.
 _DENIED_SENDS = re.compile(
-    r"benham\.py\s+(?:dm|send|webhook)\b|"
-    r"benham\.py\s+do\s+(?:dm_user|send_message)\b")
+    r"benham\.py\s+(?:--face\s+\S+\s+)?(?:dm|send|webhook)\b|"
+    r"benham\.py\s+(?:--face\s+\S+\s+)?do\s+(?:dm_user|send_message)\b")
 
 # Any of these anywhere in a command disqualifies the read-only fast path:
 # chaining, pipes, redirects, substitution, newlines. The command must BE the
@@ -119,7 +124,10 @@ _SHELL_META = re.compile(r"[&|;<>`$\r\n]")
 _READ_ONLY_CMD = re.compile(
     r"^\s*python\s+\S*benham\.py\s+"
     r"(?:rooms\b|room\s+read\s+\S+|conv\s+(?:list|show)\b|status\b|"
-    r"ask\s+--queue\s*$)")
+    # a trailing `--face <name>` keeps the queue read on the free path - the
+    # flag is required on every call now, and charset-limited so the option
+    # cannot smuggle anything past the $ anchor
+    r"ask\s+--queue(?:\s+--face\s+[a-z][a-z0-9-]{0,39})?\s*$)")
 
 
 def _classify_bash(command):
@@ -146,9 +154,9 @@ _DENY_SEND_MESSAGE = (
     "the URL is the credential and the sender name is free text, so it can "
     "post as anyone). Do not look for another route to the same effect. "
     "The bounded paths exist and are the right tool: "
-    "`benham.py outreach <collaborator> \"question\"` opens a tracked ask "
+    f"`benham.py outreach <collaborator> \"question\" --face {paths.PROCESS_FACE}` opens a tracked ask "
     "(Tyler approves it, delivery and nudges are handled for you), and "
-    "`benham.py do tell_conversation id=<id> outcome=\"...\" tell=true` "
+    f"`benham.py do tell_conversation id=<id> outcome=\"...\" tell=true --face {paths.PROCESS_FACE}` "
     "delivers an outcome on a conversation that already exists. If the task "
     "genuinely needs a raw DM, say so in your report and stop.")
 

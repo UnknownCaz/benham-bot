@@ -70,7 +70,7 @@ def main(argv):
     # Draft body posted to Testing #asd. Tyler-facing text: plain hyphens, no markdown noise.
     draft_body = f"DRAFT for {where}:\n\n{content}"
 
-    final = enqueue(face=paths.DEFAULT_FACE,
+    final = enqueue(face=paths.PROCESS_FACE,
         channel_id=REVIEW_CHANNEL_ID,
         content=draft_body,
         draft_for_channel_id=target_id,
@@ -80,7 +80,7 @@ def main(argv):
     print(f"  target: {where}")
     print("  review it in Discord, then to send for real run:")
     # Quote the content so it survives the shell as one argument.
-    print(f'    python benham.py send {target_id} "{content}"')
+    print(f'    python benham.py send {target_id} "{content}" --face {paths.PROCESS_FACE}')
     if no_wait:
         return EXIT_OK
     # A draft nobody can see is a review that never happens - wait for the

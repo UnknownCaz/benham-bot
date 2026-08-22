@@ -40,7 +40,7 @@ def main(argv):
             return usage(err)
         (limit,) = limits
 
-    final = enqueue(face=paths.DEFAULT_FACE, action="history", channel_id=channel_id, limit=limit)
+    final = enqueue(face=paths.PROCESS_FACE, action="history", channel_id=channel_id, limit=limit)
     print(f"Queued history request -> {final}")
     if no_wait:
         return EXIT_OK

@@ -73,6 +73,14 @@ def main():
         # Denied WHOLE: the listing is key material, not metadata, because a
         # webhook URL IS the credential. There is no read half to spare.
         "python benham.py webhook --list",
+        # --face (commit 10) is accepted before or after the subcommand, so
+        # the deny must catch BOTH forms - the flag-first one would otherwise
+        # be a fresh route to the exact send this list exists to refuse.
+        'python benham.py --face benham dm 123 "hi"',
+        'python benham.py dm --face benham 123 "hi"',
+        "python benham.py --face codex send 456 something",
+        "python benham.py --face benham do dm_user user_id=123 text=hi",
+        'python benham.py --face benham webhook "hello"',
     ):
         check(f"denied: {cmd[:60]}", codesession._classify_bash(cmd), "denied")
     check("send_message the capability name does not false-match 'send'",
@@ -91,9 +99,18 @@ def main():
         "python benham.py conv show c14",
         "python benham.py status",
         "python benham.py ask --queue",
+        # every call carries --face now; the free reads stay free with it
+        "python benham.py rooms --face benham",
+        "python benham.py status --face codex",
+        "python benham.py conv list --face benham",
+        "python benham.py ask --queue --face benham",
     ):
         check(f"read-only: {cmd[:60]}", codesession._classify_bash(cmd),
               "read_only")
+    check("the --face value on the anchored read is charset-limited - "
+          "no smuggling past the $ anchor",
+          codesession._classify_bash('python benham.py ask --queue --face "x&evil"'),
+          "ask")
 
     section("ask: mutations, compounds, redirects, and everything unrecognised")
     for cmd in (

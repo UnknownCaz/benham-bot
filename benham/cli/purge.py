@@ -81,7 +81,7 @@ def main(argv):
     print(f"Purging messages older than {days} day(s) from {where}.")
     print("  This is PERMANENT - bot.py will report per-channel counts when done.")
 
-    final = enqueue(face=paths.DEFAULT_FACE,
+    final = enqueue(face=paths.PROCESS_FACE,
         action="purge",
         channel_id=channel_id,
         older_than_days=days,
