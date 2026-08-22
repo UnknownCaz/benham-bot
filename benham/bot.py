@@ -66,16 +66,18 @@ except Exception:  # noqa: BLE001
 
 from benham import paths
 
-# Which face this process runs as. Commit 12 of PLAN-second-face wires this
-# from the launch arguments; until then a process is the primary face, and
-# every path below resolves to exactly what it always did.
-FACE = paths.DEFAULT_FACE
+# Which face this process runs as: BENHAM_FACE in the environment, resolved
+# and validated in paths.py before any store computed a path. Absent means the
+# primary face, and every path below resolves to exactly what it always did.
+# The supervisor learns to SET the variable at commit 11; the config block and
+# token that make a second face real arrive at commit 12.
+FACE = paths.PROCESS_FACE
 
 OUTBOX = outbox.outbox_dir(FACE)
 SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
-CHANNELS_FILE = os.path.join(paths.STATE_DIR, "channels.json")
-INBOX_FILE = os.path.join(paths.STATE_DIR, "inbox.jsonl")
+CHANNELS_FILE = os.path.join(paths.process_state_dir(), "channels.json")
+INBOX_FILE = os.path.join(paths.process_state_dir(), "inbox.jsonl")
 
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))  # must precede env reads below
 
