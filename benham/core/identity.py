@@ -188,7 +188,7 @@ DEFAULT_TOKEN_ENV = "BOT_KEY"
 _FACE_KEYS = (
     "token_env", "owner_ids", "destructive_guilds", "agent_guilds",
     "post_guilds", "post_channels", "guest", "agent", "confirm",
-    "presence", "intents",
+    "presence", "intents", "capabilities",
 )
 
 def _face_blocks(cfg):
@@ -234,6 +234,17 @@ def face_gates(face):
         # Legacy: falsy (absent OR []) means the opt-in cap was never set -
         # allow everything, exactly as posting_allowed always read it.
         post_guilds = None if not raw_post else set(int(g) for g in raw_post)
+    # Capabilities are the second field with an asymmetric default, and the
+    # asymmetry runs the OTHER way from post_guilds. Absent means unconfined
+    # for the PRIMARY face - it is the pre-faces bot, and narrowing it must be
+    # an explicit act, never a side effect of migrating the config shape - and
+    # means EMPTY for any other face: a new face is a thing somebody just
+    # wrote, and it reaches nothing until granted (rule 2's direction).
+    raw_caps = block.get("capabilities")
+    if raw_caps is None:
+        caps = None if face == PRIMARY_FACE else frozenset()
+    else:
+        caps = frozenset(str(n) for n in raw_caps)
     return {
         "owner_ids": set(int(u) for u in (block.get("owner_ids") or [])),
         "destructive_guilds": set(int(g) for g in (block.get("destructive_guilds") or [])),
@@ -242,6 +253,7 @@ def face_gates(face):
         "post_channels": set(int(c) for c in (block.get("post_channels") or [])),
         "guest": dict(block.get("guest") or {}),
         "token_env": str(block.get("token_env") or DEFAULT_TOKEN_ENV),
+        "capabilities": caps,
     }
 
 
@@ -281,6 +293,7 @@ def _face_gates_or_empty(face):
             "agent_guilds": set(), "post_guilds": set(),
             "post_channels": set(), "guest": {},
             "token_env": DEFAULT_TOKEN_ENV,
+            "capabilities": frozenset(),
         }
 
 
@@ -455,6 +468,18 @@ def guest_capabilities(face=None):
     """
     block = GUEST if _is_primary(face) else _face_gates_or_empty(face)["guest"]
     return frozenset(str(n) for n in (block.get("capabilities") or []))
+
+
+def face_capabilities(face=None):
+    """The capability names this face may reach: None for unconfined, a
+    frozenset otherwise. The asymmetric default is documented in face_gates -
+    the primary face is unconfined unless its block says otherwise, every
+    other face is empty until granted. policy.rule_face_capability is the one
+    consumer; the machine wall there is NOT expressed through this list and
+    cannot be granted through it."""
+    if _is_primary(face):
+        face = PRIMARY_FACE
+    return _face_gates_or_empty(face)["capabilities"]
 
 
 def agent_guilds(face=None):
