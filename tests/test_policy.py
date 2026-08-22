@@ -492,6 +492,7 @@ import shutil as _shutil
 import tempfile as _tempfile
 
 OTHER_OWNER = 888777666555444333  # invented, in the style of STRANGER above
+CODEX_GUILD = 1777000777000777001  # invented: the one guild codex coordinates
 
 _orig_config_dir = __import__("benham.paths", fromlist=["paths"]).CONFIG_DIR
 from benham import paths as _paths
@@ -504,10 +505,17 @@ _two_face = {
             "token_env": "CODEX_KEY",
             "owner_ids": [TYLER],
             "agent_guilds": [],
-            "destructive_guilds": [],
+            "destructive_guilds": [CODEX_GUILD],
             "post_guilds": [CHILLBAR],
+            # pc_task granted HERE on purpose: the machine wall must beat the
+            # config, or "no shell for the second face" is a convention.
+            "capabilities": ["send_message", "read_channel", "purge_messages",
+                             "pc_task"],
         },
-        "otherface": {"owner_ids": [OTHER_OWNER]},
+        # One grant, so the owner-separation checks below can see past the
+        # (correct) empty-until-granted default that commit 4 added.
+        "otherface": {"owner_ids": [OTHER_OWNER],
+                      "capabilities": ["send_message"]},
     },
     "shared": {"issues": identity.CONTROL.get("issues") or {}},
 }
@@ -525,14 +533,36 @@ _matrix_c = {name: {o: allowed_face(name, o, "codex") for o in ORIGINS}
              for name in matrix}
 check("codex reaches nothing by guild mention (its agent_guilds is empty)",
       all(not row[Origin.OWNER_GUILD] for row in _matrix_c.values()), True)
-# Codex's DM/voice/CLI/SYSTEM columns EQUAL benham's today, by design: the
-# caller phase gates who may ask and from where, not which capabilities a face
-# owns. Per-face capability confinement is rule_face_capability - commit 4 -
-# and when it lands, THIS assertion is the one its diff must consciously edit.
-check("codex's other columns match benham's - capability confinement is commit 4's job",
-      all(_matrix_c[n][o] == _matrix_b[n][o] for n in _matrix_c
-          for o in (Origin.OWNER_DM, Origin.OWNER_VOICE, Origin.LOCAL_CLI,
-                    Origin.SYSTEM)), True)
+
+# Commit 4: the grant table, asserted as an EXACT set per column, the way the
+# guest matrix is. Four names are granted in config; pc_task is refused anyway
+# by the machine wall, so exactly three survive from a DM. (An earlier
+# revision asserted codex's columns EQUAL benham's, with a note that commit 4
+# must consciously edit that line. This is that edit.)
+check("codex reaches EXACTLY its grant, minus the machine wall, from a DM",
+      {n for n in _matrix_c if _matrix_c[n][Origin.OWNER_DM]},
+      {"send_message", "read_channel", "purge_messages"})
+check("...and the same from the local CLI",
+      {n for n in _matrix_c if _matrix_c[n][Origin.LOCAL_CLI]},
+      {"send_message", "read_channel", "purge_messages"})
+check("nothing in codex's grant is SYSTEM-reachable, so its SYSTEM column is empty",
+      {n for n in _matrix_c if _matrix_c[n][Origin.SYSTEM]}, set())
+
+# The machine wall: config granted pc_task to codex above, and it must lose.
+_pd = policy.authorize(capabilities.REGISTRY["pc_task"],
+                       ctx_for_face(Origin.OWNER_DM, "codex"))
+check("pc_task refuses from codex even though the config grants it",
+      _pd.denied, True)
+check("...and the machine wall names itself", _pd.rule, "face_machine")
+check("spawn_in_room is behind the same wall",
+      policy.authorize(capabilities.REGISTRY["spawn_in_room"],
+                       ctx_for_face(Origin.OWNER_DM, "codex")).rule, "face_machine")
+check("an UNGRANTED capability names the grant rule, not the wall",
+      policy.authorize(capabilities.REGISTRY["pin_message"],
+                       ctx_for_face(Origin.OWNER_DM, "codex")).rule,
+      "face_capability")
+check("benham's own pc_task is untouched by the wall",
+      allowed_face("pc_task", Origin.OWNER_DM, "benham"), True)
 
 # Separately owned (decision 2): being Tyler buys nothing on a face whose
 # owner list does not name him, and the refusal is the owner rule doing it.
@@ -562,13 +592,20 @@ def target_face(face, guild_id, channel_id=999):
 
 
 # Per-face-per-guild tier 3 - the composition the plan calls the free win:
-# the same guild, the same action, three different answers by face alone.
+# codex holds tier 3 in the one guild it coordinates and nowhere else, with no
+# new mechanism. Same guild, same action, three answers by face alone.
 check("purge in Testing still CONFIRMS for benham under the faces shape",
       policy.authorize_target(purge, target_face("benham", TESTING)).needs_confirm,
       True)
+check("purge in codex's OWN guild CONFIRMS - tier 3 where it coordinates",
+      policy.authorize_target(purge, target_face("codex", CODEX_GUILD)).needs_confirm,
+      True)
 _dc = policy.authorize_target(purge, target_face("codex", TESTING))
-check("purge in Testing is DENIED for codex - empty destructive_guilds", _dc.denied, True)
+check("purge in Testing is DENIED for codex - not on ITS list", _dc.denied, True)
 check("...naming the destructive rule", _dc.rule, "destructive_guild")
+check("benham holds no tier 3 in codex's guild - the confinement cuts both ways",
+      policy.authorize_target(purge, target_face("benham", CODEX_GUILD)).denied,
+      True)
 check("purge is denied for an undeclared face too",
       policy.authorize_target(purge, target_face("ghost", TESTING)).denied, True)
 

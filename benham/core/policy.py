@@ -372,6 +372,50 @@ def rule_origin_allowed(action, ctx):
                  f"It is only available from: {ways}.")
 
 
+def rule_face_capability(action, ctx):
+    """May THIS face reach THIS capability at all?
+
+    Commit 4 of PLAN-second-face.md, modelled on rule_guest: fail closed for
+    every face that is not the pre-faces bot, distinct refusal reasons, and
+    passing means returning None so later rules still run. This is what makes
+    per-face grants EXPRESSIBLE - without it a second face inherits the whole
+    registry at every tier on day one, and "Codex holds tier 3 in the one
+    guild it coordinates" has nowhere to be written.
+
+    Two checks, and the first is not config:
+
+    * The machine wall. The capabilities marked blocked_when_tainted -
+      pc_task and spawn_in_room, the ones whose whole job is starting a
+      session on Tyler's machine - are PRIMARY-FACE ONLY, whatever any config
+      says. Tyler's call (2026-08-22, confirming the plan's flagged
+      assumption): a second identity may hold admin over a server, never a
+      shell on his machine. Written as a DENY in code rather than an omission
+      in a grant table, so granting it later is a deliberate act of deleting
+      a rule and its test instead of a config edit nobody reviews.
+
+    * The grant table. identity.face_capabilities() is None for an unconfined
+      face - the primary, unless its block says otherwise - and a frozenset
+      for a declared face, absent meaning empty: a new face reaches nothing
+      until granted. Listing a name that does not exist in the registry does
+      nothing, so a typo in the list can only turn things off.
+    """
+    if getattr(action, "blocked_when_tainted", False) \
+            and ctx.face != identity.PRIMARY_FACE:
+        return _deny("face_machine",
+                     f"`{action.name}` reaches the machine, and only the primary "
+                     f"face may. {ctx.face!r} cannot be granted this in any "
+                     "config - the wall is in code, on purpose.")
+    caps = identity.face_capabilities(ctx.face)
+    if caps is None:
+        return None
+    if action.name not in caps:
+        return _deny("face_capability",
+                     f"`{action.name}` is not granted to face {ctx.face!r} in "
+                     "control.json (its capabilities list). Granting it there "
+                     "and restarting is the deliberate step that turns it on.")
+    return None
+
+
 def rule_agent_guild(action, ctx):
     """A guild mention only drives the agent from a guild on the agent list.
 
@@ -549,6 +593,7 @@ RULES = (
     rule_guest,
     rule_owner,
     rule_origin_allowed,
+    rule_face_capability,
     rule_agent_guild,
     rule_blocked_when_tainted,
 )
