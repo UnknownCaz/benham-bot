@@ -197,6 +197,39 @@ reload_refuses("malformed: an uppercase face name refuses to boot",
 reload_refuses("malformed: a face block that is not an object refuses to boot",
                {"faces": {"benham": "yes"}})
 
+# --- the unprompted lane per face (commit 7) --------------------------------
+# Separate budgets was Tyler's call; the floor is per-face-configurable via
+# initiative.min_gap_hours, and the owner-only rule answers for the face the
+# PROCESS runs as - a codex process must not court Benham's owner list.
+
+from benham.core import policy  # noqa: E402 - deliberately after the reloads above
+
+m5 = reload_with({"faces": {
+    "benham": {"owner_ids": [TYLER]},
+    "codex": {"owner_ids": [OTHER], "initiative": {"min_gap_hours": 6}},
+    "sloppy": {"owner_ids": [OTHER], "initiative": {"min_gap_hours": "soon"}},
+}})
+check("min gap defaults to the 48h constant when a face sets nothing",
+      policy.unprompted_min_gap("benham"), policy.UNPROMPTED_MIN_GAP)
+check("a face's own min_gap_hours wins",
+      policy.unprompted_min_gap("codex").total_seconds(), 6 * 3600)
+check("an unparseable gap falls back to the default, never to zero",
+      policy.unprompted_min_gap("sloppy"), policy.UNPROMPTED_MIN_GAP)
+check("an undeclared face gets the default too",
+      policy.unprompted_min_gap("ghost"), policy.UNPROMPTED_MIN_GAP)
+
+_orig_pf = paths.PROCESS_FACE
+try:
+    paths.PROCESS_FACE = "codex"
+    check("a codex process refuses unprompted contact aimed at benham's owner",
+          policy.rule_unprompted_owner_only(
+              {"id": "x", "counterparty": TYLER}, None) is not None, True)
+    check("...and allows its OWN owner",
+          policy.rule_unprompted_owner_only(
+              {"id": "x", "counterparty": OTHER}, None), None)
+finally:
+    paths.PROCESS_FACE = _orig_pf
+
 # --- restore the fixture and prove the module comes back whole --------------
 
 paths.CONFIG_DIR = _FIXTURE_CONFIG_DIR
