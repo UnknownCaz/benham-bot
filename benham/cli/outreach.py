@@ -37,6 +37,7 @@ import argparse
 import os
 import sys
 
+from benham import paths
 from benham.core import conversations, identity, outbox
 
 
@@ -144,7 +145,7 @@ def main(argv):
 
     # The ONLY outward step, and it composes nothing: the running bot reads this
     # and delivers the question already stored on the record.
-    outbox.enqueue(action="advance_conversation", id=conv["id"])
+    outbox.enqueue(face=paths.DEFAULT_FACE, action="advance_conversation", id=conv["id"])
     print(f"asked {who} ({conv['id']}): {a.question}")
     print(f"the bot delivers and nudges it on its own; read it later with: "
           f"python benham.py conv show {conv['id']}")

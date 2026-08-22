@@ -126,7 +126,7 @@ def action(name, tier, summary, params=None, needs_guild=False,
     # value silently overwrites the envelope, or (for "action") blows up with a
     # TypeError deep inside enqueue that names neither the capability nor the
     # parameter. Found the honest way, by declaring a param called "action".
-    RESERVED_PARAMS = {"action", "queued_at", "confirm_token"}
+    RESERVED_PARAMS = {"action", "queued_at", "confirm_token", "face", "source"}
 
     def deco(fn):
         clash = RESERVED_PARAMS & set(params or {})

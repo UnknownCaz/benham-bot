@@ -70,7 +70,7 @@ def main(argv):
     # Draft body posted to Testing #asd. Tyler-facing text: plain hyphens, no markdown noise.
     draft_body = f"DRAFT for {where}:\n\n{content}"
 
-    final = enqueue(
+    final = enqueue(face=paths.DEFAULT_FACE,
         channel_id=REVIEW_CHANNEL_ID,
         content=draft_body,
         draft_for_channel_id=target_id,

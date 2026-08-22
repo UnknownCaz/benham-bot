@@ -28,6 +28,7 @@ could reach it - every other action had a script and this one didn't.
 
 import sys
 
+from benham import paths
 from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
                                 report_outcome, usage)
 
@@ -80,7 +81,7 @@ def main(argv):
     print(f"Purging messages older than {days} day(s) from {where}.")
     print("  This is PERMANENT - bot.py will report per-channel counts when done.")
 
-    final = enqueue(
+    final = enqueue(face=paths.DEFAULT_FACE,
         action="purge",
         channel_id=channel_id,
         older_than_days=days,

@@ -23,6 +23,7 @@ import json
 import os
 import sys
 
+from benham import paths
 from benham.core import capabilities  # noqa: F401 — imported for its registration side effects
 from benham.core import identity
 from benham.core import outbox
@@ -108,7 +109,7 @@ def main(argv):
     except capabilities.ActionError as e:
         return outbox.usage(str(e))
 
-    path = outbox.enqueue(action=name, **params)
+    path = outbox.enqueue(face=paths.DEFAULT_FACE, action=name, **params)
     print(f"queued {name} -> {os.path.basename(path)}")
 
     # A PC task drives a whole Claude Code session and can pause indefinitely on a

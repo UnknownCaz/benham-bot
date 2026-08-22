@@ -143,8 +143,9 @@ def main():
         check("exactly one thing was enqueued", len(sent), 1)
         check("...and it is advance_conversation, which cannot choose recipient "
               "or words", sent[0].get("action"), "advance_conversation")
-        check("...carrying only a conversation id",
-              sorted(sent[0]), ["action", "id"])
+        check("...carrying only a conversation id (plus the face every request "
+              "names since PLAN-second-face commit 5)",
+              sorted(sent[0]), ["action", "face", "id"])
 
         opened = C.get(sent[0]["id"])
         check("a conversation was opened for the collaborator",

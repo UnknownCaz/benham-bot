@@ -14,6 +14,7 @@ Tail inbox.jsonl for live messages instead if the bot has been running.
 
 import sys
 
+from benham import paths
 from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
                                 report_outcome, usage)
 
@@ -39,7 +40,7 @@ def main(argv):
             return usage(err)
         (limit,) = limits
 
-    final = enqueue(action="history", channel_id=channel_id, limit=limit)
+    final = enqueue(face=paths.DEFAULT_FACE, action="history", channel_id=channel_id, limit=limit)
     print(f"Queued history request -> {final}")
     if no_wait:
         return EXIT_OK
