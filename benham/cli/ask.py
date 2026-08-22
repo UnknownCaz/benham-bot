@@ -35,7 +35,7 @@ import sys
 import time
 
 from benham import paths
-from benham.core import conversations, identity, outbox
+from benham.core import caller, conversations, identity, outbox
 
 
 def _owner():
@@ -145,7 +145,11 @@ def main(argv):
         # The registration. cwd and pid, so a banked question can be traced back to
         # whatever was running at the time - months later, when nothing about the
         # session survives except this string.
-        origin=f"session cwd={os.getcwd()} pid={os.getpid()}")
+        origin=f"session cwd={os.getcwd()} pid={os.getpid()}",
+        # The routable half of the registration: the `local_` session id, so
+        # Raven can deliver the answer INTO the asking session instead of
+        # matching cwd and hoping. None when unresolvable - never a guess.
+        asker_session=caller.session_id())
 
     # Delivered through the outbox so the RUNNING bot sends it - this process has no
     # Discord connection and should not grow one. advance_conversation's first beat

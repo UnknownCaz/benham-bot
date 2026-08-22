@@ -1234,7 +1234,10 @@ async def _advance_conversation(ctx, p):
         return {"status": "waiting", "id": conv["id"], "counterparty": who,
                 "due_at": conv.get("due_at"), "nudges": int(conv.get("nudges", 0))}
 
-    if int(conv.get("nudges", 0)) < conversations.MAX_NUDGES:
+    # Per-conversation cap when the record carries one (c19: "ONE nudge max"
+    # lived on a corkboard while this line read the global constant, and Draco
+    # got poked twice by a question that promised zero pressure).
+    if int(conv.get("nudges", 0)) < conversations.nudge_cap_of(conv):
         # Quote the question rather than paraphrasing it. A nudge that restates the
         # ask in new words reads as a second, different question.
         sent = await ch.send("still after this one when you get a sec:\n\n"
@@ -1257,8 +1260,8 @@ async def _advance_conversation(ctx, p):
         owner = await ctx.user(owner_id)
         och = owner.dm_channel or await owner.create_dm()
         await och.send(
-            f"no answer from <@{who}> after {conversations.MAX_NUDGES} nudges - "
-            "banked it.\n\n"
+            f"no answer from <@{who}> after "
+            f"{int(conv.get('nudges', 0))} nudge(s) - banked it.\n\n"
             f"> {conv['question']}\n\n"
             f"({conv['id']}, asked for: {conv['purpose']})",
             # QUIET (item 11). Someone not answering is the definition of news that
