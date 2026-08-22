@@ -188,7 +188,7 @@ DEFAULT_TOKEN_ENV = "BOT_KEY"
 _FACE_KEYS = (
     "token_env", "owner_ids", "destructive_guilds", "agent_guilds",
     "post_guilds", "post_channels", "guest", "agent", "confirm",
-    "presence", "intents", "capabilities",
+    "presence", "intents", "capabilities", "initiative",
 )
 
 def _face_blocks(cfg):
@@ -480,6 +480,23 @@ def face_capabilities(face=None):
     if _is_primary(face):
         face = PRIMARY_FACE
     return _face_gates_or_empty(face)["capabilities"]
+
+
+def initiative_config(face=None):
+    """The initiative block for one face ({} when unset).
+
+    Carries the unprompted lane's per-face knobs - today just min_gap_hours,
+    the cadence floor policy.unprompted_min_gap reads. Separate budgets was
+    Tyler's decision (against the recommendation, consequence stated), and
+    this is the one-number-per-face knob that makes it cheap to reverse.
+    """
+    if _is_primary(face):
+        face = PRIMARY_FACE
+    try:
+        block = _face_blocks(CONTROL)[face]
+    except KeyError:
+        return {}
+    return dict(block.get("initiative") or {})
 
 
 def agent_guilds(face=None):

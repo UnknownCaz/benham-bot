@@ -81,6 +81,33 @@ def state_for(face=DEFAULT_FACE):
     return os.path.join(STATE_DIR, "faces", face)
 
 
+# Which face THIS process runs as, read from the BENHAM_FACE environment
+# variable HERE - this module is imported before any store computes a path and
+# imports nothing itself, so the answer is settled before anyone asks. Absent
+# means the primary face: every pre-faces launch, unchanged. An invalid value
+# refuses the import outright rather than silently running as the primary,
+# because a typo'd face acting as Benham is exactly the misdelivery the whole
+# design exists to prevent (same doctrine as identity's unparseable-control
+# refusal: fail loudly at the cheapest possible moment).
+_env_face = os.environ.get("BENHAM_FACE", "").strip()
+if _env_face:
+    check_face(_env_face)
+PROCESS_FACE = _env_face or DEFAULT_FACE
+
+
+def process_state_dir():
+    """The state root for the face this process runs as.
+
+    The nine PER-FACE stores (agent memory/searches, the four guest stores,
+    channels.json, inbox.jsonl, the outbox) derive from this. The
+    deliberately-SHARED stores (conversations, ask batches until commit 8,
+    rooms, the issues funnel, ideas) keep resolving from STATE_DIR - that
+    split is the spike's classification, and using the wrong root here is the
+    silent-bug class the plan warns commit 6 about.
+    """
+    return state_for(PROCESS_FACE)
+
+
 def prompts_for(face=DEFAULT_FACE):
     """Prompts root for one face; the default face is today's PROMPTS_DIR itself."""
     _check_face(face)

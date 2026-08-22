@@ -34,6 +34,7 @@ still live where they were, and move here one at a time - each with the system f
 working in between, so a regression is always attributable to a single step.
 """
 
+from benham import paths
 from benham.core import identity
 
 
@@ -753,6 +754,26 @@ from datetime import datetime, timedelta, timezone
 # message". Tyler's brief: "once a day at most; every other day is fine."
 UNPROMPTED_MIN_GAP = timedelta(hours=48)
 
+
+def unprompted_min_gap(face=None):
+    """The cadence floor for one face's unprompted lane (commit 7).
+
+    UNPROMPTED_MIN_GAP is the default; a face block may set
+    initiative.min_gap_hours in control.json. Per-face-configurable from day
+    one, not because anyone asked but because separate budgets was Tyler's
+    call with the consequence stated - up to one unprompted DM per gap PER
+    FACE - and the number he will predictably want to tune once he feels it
+    must be a config edit, not a refactor. An unparseable value falls back to
+    the default: a typo here may cost tuning, never the floor itself.
+    """
+    cfg = identity.initiative_config(face if face is not None
+                                     else paths.PROCESS_FACE)
+    try:
+        hours = float(cfg["min_gap_hours"])
+    except (KeyError, TypeError, ValueError):
+        return UNPROMPTED_MIN_GAP
+    return timedelta(hours=hours)
+
 # One unanswered question at a time, and it stops counting after this long.
 # Waiting forever would be safe and useless - the lane would die the first time
 # he was busy for a week. Lapsing is SILENT: nothing is sent when a question
@@ -846,7 +867,7 @@ def rule_unprompted_owner_only(conv, now):
     (see test_outreach). Stated as its own rule rather than left implicit in how
     the CLI happens to fill the field.
     """
-    if int(conv.get("counterparty", 0)) not in identity.OWNER_IDS:
+    if not identity.is_owner(conv.get("counterparty", 0), paths.PROCESS_FACE):
         return _deny("unprompted_owner_only",
                      f"unprompted contact may only go to the owner, and "
                      f"{conv.get('counterparty')} is not one. Reaching a collaborator "
@@ -973,12 +994,13 @@ def rule_unprompted_cadence(conv, now):
         return None
     now = now or _utcnow()
     waited = now - last
-    if waited < UNPROMPTED_MIN_GAP:
-        left = UNPROMPTED_MIN_GAP - waited
+    gap = unprompted_min_gap()  # this process's face - budgets are per face
+    if waited < gap:
+        left = gap - waited
         return _deny("unprompted_cadence",
                      f"the last unprompted question went out "
                      f"{int(waited.total_seconds() // 3600)}h ago and the floor is "
-                     f"{int(UNPROMPTED_MIN_GAP.total_seconds() // 3600)}h. Wait another "
+                     f"{int(gap.total_seconds() // 3600)}h. Wait another "
                      f"{int(left.total_seconds() // 3600) + 1}h. Whatever this is, it keeps.")
     return None
 
