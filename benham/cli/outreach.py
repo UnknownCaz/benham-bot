@@ -25,7 +25,7 @@ THIS IS THE BOUNDED PATH, and it is bounded in the two ways that matter:
 So this needs none of the denied permissions, and asking for them back would have
 been the wrong fix - trading a real boundary for a convenience.
 
-    python benham.py outreach 777000777000777000 "does the image thing work now?"
+    python benham.py outreach <user-id> "does the image thing work now?"
     python benham.py outreach doom "..." --project storyizier
 
 It also gains what a raw DM never had: the ask is nudged on Tyler's policy with no
