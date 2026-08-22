@@ -264,13 +264,17 @@ def face_boot_problem(face, environ=None):
     return None
 
 
-def _primary_gates():
-    """The primary face's gates, or the restrictive-empty view when a declared
-    faces block omits it. Empty, never inherited (rule 1's direction): a
-    process running as a face the config does not name obeys nobody and may
-    do nothing, and face_boot_problem(PRIMARY_FACE) says so in words."""
+def _face_gates_or_empty(face):
+    """face_gates for any face, restrictive-empty for an undeclared one.
+
+    Empty, never inherited (rule 1's direction): a process running as a face
+    the config does not name obeys nobody and may do nothing, and
+    face_boot_problem() says so in words. Every face-aware predicate below
+    resolves an unknown face through this, so a typo'd face name costs
+    capability, never safety.
+    """
     try:
-        return face_gates(PRIMARY_FACE)
+        return face_gates(face)
     except KeyError:
         return {
             "owner_ids": set(), "destructive_guilds": set(),
@@ -280,6 +284,20 @@ def _primary_gates():
         }
 
 
+def _primary_gates():
+    """The primary face's gates - see _face_gates_or_empty."""
+    return _face_gates_or_empty(PRIMARY_FACE)
+
+
+def _is_primary(face):
+    """None means "the face nobody specified", which is the primary face -
+    every pre-faces call site in the tree is a Benham call site. The predicates
+    below keep their EXACT pre-faces read (module snapshot or live CONTROL,
+    whichever each always used) on this path, and go through the face view only
+    for a named non-primary face, so commit 3 changes no default-face answer."""
+    return face is None or face == PRIMARY_FACE
+
+
 _PRIMARY = _primary_gates()
 
 OWNER_IDS = _PRIMARY["owner_ids"]
@@ -287,16 +305,21 @@ DESTRUCTIVE_GUILDS = _PRIMARY["destructive_guilds"]
 AGENT_GUILDS = _PRIMARY["agent_guilds"]
 
 
-def is_owner(user_id):
-    """True only for a user Benham takes direction from.
+def is_owner(user_id, face=None):
+    """True only for a user this face takes direction from.
 
     Note what this deliberately does NOT do: there is no guild-admin escape hatch,
-    no "operator" role, no way for a server owner to inherit control. Benham is one
-    person's proxy. Someone with admin in a guild Benham happens to be in is still
+    no "operator" role, no way for a server owner to inherit control. A face is one
+    person's proxy. Someone with admin in a guild the bot happens to be in is still
     a stranger to it.
+
+    `face` names whose owner list answers (decision: separately owned - sharing
+    owner lists would rebuild the union problem one layer up). Absent means the
+    primary face, which is every pre-faces call site.
     """
+    owners = OWNER_IDS if _is_primary(face) else _face_gates_or_empty(face)["owner_ids"]
     try:
-        return int(user_id) in OWNER_IDS
+        return int(user_id) in owners
     except (TypeError, ValueError):
         return False
 
@@ -364,12 +387,14 @@ def issues_config():
 GUEST_MODES = frozenset({"chat"})
 
 
-def guest_enabled():
-    """Whether the guest surface is switched on and set to a mode this build knows.
+def guest_enabled(face=None):
+    """Whether this face's guest surface is on and set to a mode this build knows.
 
     Both halves matter. `enabled` is the switch Tyler flips; the mode check is what
     stops a control.json written for a later build from silently running guests
-    through the only path this one happens to have.
+    through the only path this one happens to have. Per-face because "who may talk
+    to me" is a property of the identity being talked to - muting one face must
+    not silence another (the guest_quiet bug class, one layer down).
 
     NOT a live kill switch. CONTROL is read once at import, so `enabled: false` - or
     striking someone from `ids` - takes effect on the next restart and not before.
@@ -378,27 +403,35 @@ def guest_enabled():
     making this one reload on its own would put a second, different answer to "who
     may talk to Benham" in the codebase, which is worse than the delay.
     """
-    if not bool(GUEST.get("enabled", False)):
+    block = GUEST if _is_primary(face) else _face_gates_or_empty(face)["guest"]
+    if not bool(block.get("enabled", False)):
         return False
-    return str(GUEST.get("mode", "chat")) in GUEST_MODES
+    return str(block.get("mode", "chat")) in GUEST_MODES
 
 
-def is_guest(user_id):
+def is_guest(user_id, face=None):
     """True for a user on the guest allowlist, and never for an owner.
 
     The owner exclusion is not tidiness. Tyler reaching the guest path would silently
     downgrade him into a no-tools conversation with a separate memory, and the
     symptom - Benham suddenly unable to do anything and not remembering the thread -
     reads like a broken bot rather than a misfiled id. Refusing the overlap here
-    means it cannot happen however the allowlist is edited.
+    means it cannot happen however the allowlist is edited. The exclusion is
+    against the SAME face's owner list - each face draws its own line.
     """
     try:
         uid = int(user_id)
     except (TypeError, ValueError):
         return False
-    if uid in OWNER_IDS:
+    if _is_primary(face):
+        owners, guests = OWNER_IDS, GUEST_IDS
+    else:
+        gates = _face_gates_or_empty(face)
+        owners = gates["owner_ids"]
+        guests = set(people_map(gates["guest"].get("ids")).values())
+    if uid in owners:
         return False
-    return uid in GUEST_IDS
+    return uid in guests
 
 
 def guest_config():
@@ -410,8 +443,8 @@ def guest_config():
 
 
 
-def guest_capabilities():
-    """Capability names control.json grants to guests. Config half of the grant.
+def guest_capabilities(face=None):
+    """Capability names control.json grants to this face's guests.
 
     Empty set unless guest.capabilities is present and non-empty, which is the
     fail-closed direction: an old control.json means no grants, not default
@@ -420,30 +453,49 @@ def guest_capabilities():
     Same import-once semantics as everything else in this file: editing the list
     takes effect on the next restart, and the restart is the kill switch.
     """
-    return frozenset(str(n) for n in (GUEST.get("capabilities") or []))
+    block = GUEST if _is_primary(face) else _face_gates_or_empty(face)["guest"]
+    return frozenset(str(n) for n in (block.get("capabilities") or []))
 
 
-def destructive_allowed(guild_id):
-    """Whether tier-3 actions may run in this guild at all.
+def agent_guilds(face=None):
+    """The guilds where a mention may drive this face's agent.
+
+    The face-aware read of what AGENT_GUILDS answers for the primary - policy's
+    rule_agent_guild asks this so the same mention can be legal for one face and
+    refused for another in the same guild.
+    """
+    if _is_primary(face):
+        return AGENT_GUILDS
+    return _face_gates_or_empty(face)["agent_guilds"]
+
+
+def destructive_allowed(guild_id, face=None):
+    """Whether tier-3 actions may run in this guild at all, for this face.
 
     Checked before the dry-run, not after, so a destructive request aimed at a
     non-allowlisted guild never even reports what it would have done - naming the
     contents of a channel it may not touch is itself a small leak.
 
     A DM has no guild, so guild_id is None there and this returns False: you cannot
-    purge your way through a DM with Benham, which is correct - the confirmation
+    purge your way through a DM with the bot, which is correct - the confirmation
     conversation itself lives there.
+
+    Per-face-per-guild is the composition the second-face plan leans on: a face
+    whose destructive_guilds lists exactly one guild holds tier 3 there and
+    nowhere else, with no new mechanism.
     """
     if guild_id is None:
         return False
+    allowed = (DESTRUCTIVE_GUILDS if _is_primary(face)
+               else _face_gates_or_empty(face)["destructive_guilds"])
     try:
-        return int(guild_id) in DESTRUCTIVE_GUILDS
+        return int(guild_id) in allowed
     except (TypeError, ValueError):
         return False
 
 
-def posting_allowed(guild_id, channel_id):
-    """Whether Benham may post content into this channel at all.
+def posting_allowed(guild_id, channel_id, face=None):
+    """Whether this face may post content into this channel at all.
 
     A hard scope cap, independent of who asked and of why. The case it exists for:
     Benham gets invited to a server, someone there posts text engineered to look
@@ -462,7 +514,8 @@ def posting_allowed(guild_id, channel_id):
     governed instead by the taint rule, which is the relevant control for
     "Benham messaged a stranger".
     """
-    gates = _primary_gates()  # live read of CONTROL, as this function always did
+    gates = (_primary_gates() if _is_primary(face)
+             else _face_gates_or_empty(face))  # live read of CONTROL, as always
     if gates["post_channels"]:
         try:
             return int(channel_id) in gates["post_channels"]
