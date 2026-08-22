@@ -46,7 +46,7 @@ import threading
 from datetime import datetime, timezone
 
 from benham import paths
-from benham.core import conversations, jsonio, policy
+from benham.core import caller, conversations, jsonio, policy
 
 STORE = os.path.join(paths.STATE_DIR, "initiative.json")
 
@@ -245,7 +245,12 @@ def open_question(text, purpose=None, thread_id=None):
         # required and WHENEVER is the honest value. Nothing is blocked on it.
         priority=conversations.WHENEVER,
         origin="initiative (Claude asked on its own)",
-        placement_reason=(f"thread {thread_id}" if thread_id else None))
+        placement_reason=(f"thread {thread_id}" if thread_id else None),
+        # Safe to resolve here because open_question only ever runs in the
+        # initiate CLI's process (see the docstring above) - the daily job's own
+        # session, or None. The BOT never calls this; see caller.py for why it
+        # must not.
+        asker_session=caller.session_id())
     return conv
 
 
