@@ -44,12 +44,17 @@ def _line(c):
     q = " ".join(str(c.get("question", "")).split())[:80]
     who = c.get("counterparty")
     arrow = "<-" if c.get("direction") == C.OWED else "->"
+    # Which face carries it, visible whenever it is not the primary - conv
+    # list/show read across ALL faces (Raven's collection route depends on
+    # that), and an unmarked codex conversation would be invisible rot.
+    face = C.face_of(c)
+    ftag = f" [{face}]" if face != paths.DEFAULT_FACE else ""
     extra = ""
     if c.get("state") == C.ANSWERED:
         extra = f"  -> {' '.join(str(c.get('answer','')).split())[:60]}"
     elif c.get("state") in C.TERMINAL_STATES and c.get("outcome"):
         extra = f"  -> {c['outcome'][:60]}"
-    return f"  {mark:2} {c['id']:<5} [{c.get('state'):8}] {arrow} {who}  {q}{extra}"
+    return f"  {mark:2} {c['id']:<5} [{c.get('state'):8}]{ftag} {arrow} {who}  {q}{extra}"
 
 
 def main(argv):
@@ -104,6 +109,9 @@ def main(argv):
             print(f"  project : {c['project']}")
         if c.get("origin"):
             print(f"  asked by: {c['origin']}")
+        # Always printed, never inferred: Raven reads conversations across all
+        # faces, and the carrying face is part of a record's identity now.
+        print(f"  face    : {C.face_of(c)}")
         if c.get("asker_session"):
             # The routable owner - Raven delivers the answer to this session.
             print(f"  asker session: {c['asker_session']}")

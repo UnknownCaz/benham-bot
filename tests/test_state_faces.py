@@ -55,6 +55,8 @@ check("initiative log unchanged", initiative.LOG_MD,
       os.path.join(S, "initiative-log.md"))
 check("conversations shared, at the shared root", conversations.STORE,
       os.path.join(S, "conversations.json"))
+check("ask batches PER FACE even though conversations are shared (commit 8)",
+      conversations.BATCHES, os.path.join(S, "ask_batches.json"))
 check("rooms shared, at the shared root", rooms.INDEX_FILE,
       os.path.join(S, "rooms.json"))
 check("persona unchanged (commit 9)", agent.PERSONA_FILE,
@@ -104,6 +106,7 @@ print(json.dumps({
     "guest_quiet": guest.QUIET_FILE,
     "guest_searches": guest.SEARCH_LOG,
     "conversations": conversations.STORE,
+    "ask_batches": conversations.BATCHES,
     "rooms_index": rooms.INDEX_FILE,
     "state_dir": paths.STATE_DIR,
 }))
@@ -126,7 +129,8 @@ if proc.returncode == 0:
                        ("guest_quiet", "guest_quiet.json"),
                        ("guest_searches", "guest_searches.jsonl"),
                        ("initiative", "initiative.json"),
-                       ("initiative_log", "initiative-log.md")]:
+                       ("initiative_log", "initiative-log.md"),
+                       ("ask_batches", "ask_batches.json")]:
         check(f"codex {key} lives under faces/codex/", got[key],
               os.path.join(F, fname))
     check("codex persona lives under prompts/faces/codex/ (commit 9)",
