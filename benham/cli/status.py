@@ -3,7 +3,13 @@
 Answers "is Benham up and what is it doing" without touching Discord:
   - is a benham.bot process running (pid)?
   - which guilds/channels does it see (from channels.json, written each boot)?
+  - recent refusals from outbox/failed (last 24h)
   - last login / command-sync lines from the newest log file
+
+The refusals section is the net under every fire-and-forget enqueue: a caller
+that passed --no-wait, or an enqueue made from inside the bot itself (loopclose
+DMs), records its failure in outbox/failed and tells nobody. This is the one
+place all of those surface without reading the bot log.
 
 Prints a short report and exits. Never prints tokens. Run:  python benham.py status
 """
@@ -52,6 +58,38 @@ def mtime(path):
         return None
 
 
+def recent_failures(within_hours=24, limit=10):
+    """Newest outbox/failed results inside the window: [(when_utc, action, error)].
+
+    Reads the *_result.json files bot.py writes when it refuses a request, newest
+    first. `action` falls back to "send" because a bare send request carries no
+    action key (bot.py defaults it), and errors are truncated to keep the report
+    one line per failure - the full text is in the file the line names implicitly.
+    """
+    folder = os.path.join(paths.STATE_DIR, "outbox", "failed")
+    if not os.path.isdir(folder):
+        return []
+    cutoff = datetime.now(timezone.utc).timestamp() - within_hours * 3600
+    results = [os.path.join(folder, fn) for fn in os.listdir(folder)
+               if fn.endswith("_result.json")]
+    results.sort(key=os.path.getmtime, reverse=True)
+    out = []
+    for path in results:
+        if os.path.getmtime(path) < cutoff:
+            break  # sorted newest-first, so everything after this is older
+        res = load_json(path) or {}
+        req = res.get("request") or {}
+        action = res.get("action") or req.get("action") or "send"
+        error = str(res.get("error") or "(no error recorded)")
+        if len(error) > 120:
+            error = error[:117] + "..."
+        when = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+        out.append((when, action, error))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def newest_log_tail(patterns=("restart_run.log", "bot.log", "supervise.log"), keep=("Logged in as", "Synced")):
     logs = [os.path.join(paths.LOG_DIR, p) for p in patterns if os.path.exists(os.path.join(paths.LOG_DIR, p))]
     # Rotated-out captures live in ROOT/logs; live ones in LOG_DIR. A set, because
@@ -89,6 +127,14 @@ def main():
             print(f"  - {g.get('guild')} ({g.get('guild_id')}): {tc} text, {vc} voice")
     else:
         print("guilds:       channels.json not found (bot hasn't booted here yet)")
+
+    failures = recent_failures()
+    if failures:
+        print(f"refused (outbox/failed, last 24h): {len(failures)}")
+        for when, action, error in failures:
+            print(f"  {when:%Y-%m-%d %H:%M}Z  {action:<16} {error}")
+    else:
+        print("refused:      none in the last 24h (outbox/failed)")
 
     logname, tail = newest_log_tail()
     if logname:
