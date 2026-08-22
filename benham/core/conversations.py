@@ -124,6 +124,27 @@ _RANK = {BLOCKING: 0, NORMAL: 1, WHENEVER: 2}
 # Tyler's, retuned 2026-08-15 and proven against Doom before it was ever code.
 NUDGE_AFTER = timedelta(minutes=15)
 MAX_NUDGES = 2
+
+
+def nudge_cap_of(conv):
+    """The nudge budget THIS conversation runs on. Takes a conv dict.
+
+    Per-conversation `nudge_cap` when set, MAX_NUDGES otherwise. Exists because
+    of c19 (2026-08-22): both corkboards said "ONE nudge max, then bank" - written
+    precisely because Draco had been double-asked two days earlier - and the bot
+    nudged twice anyway. The ceiling lived in prose; the timer read this module.
+    A written ask only binds when the thing enforcing the schedule can see it, so
+    the cap is a field on the record the timer already reads.
+
+    Never ABOVE MAX_NUDGES: the global cap is Tyler's conduct policy, proven
+    against a real person, and a per-conversation field must only ever be able to
+    ask for LESS pressure than that, not more. open_conversation refuses a
+    too-large cap outright; the min() here is belt for records edited by hand.
+    """
+    cap = conv.get("nudge_cap")
+    if cap is None:
+        return MAX_NUDGES
+    return max(0, min(int(cap), MAX_NUDGES))
 # An away signal ("brb", visibly mid-game) may only ever EXTEND a wait, and by at
 # most this much. Never shortens: a person who said they were busy has given you
 # information about when to ask again, not permission to ask sooner.
@@ -194,7 +215,7 @@ def _next_id(data):
 
 def open_conversation(counterparty, purpose, question, project=None, origin=None,
                       now=None, direction=ASKING, priority=NORMAL,
-                      placement_reason=None):
+                      placement_reason=None, asker_session=None, nudge_cap=None):
     """Start one. Returns the conversation dict.
 
     Several ASKING conversations may be live for one person - they form a queue,
@@ -217,6 +238,16 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
     exercise it is a test nobody runs. It defaults, and test_conversations calls
     it BOTH ways - the first version of that test always passed a clock, so the
     default path was never run and shipped broken.
+
+    `asker_session` is the calling session's `local_` id (caller.session_id()),
+    or None when nobody could be resolved - null is recorded, never a guess. It
+    is how the Raven courier delivers the answer back to the session that asked;
+    cwd-matching on `origin` is its fallback for records that predate the field.
+
+    `nudge_cap` caps THIS conversation's nudges below the global MAX_NUDGES
+    (0 = never nudge, bank at the deadline). Refused above the global cap: that
+    number is Tyler's conduct policy, and a per-ask field may only ever lower
+    the pressure on a person. See nudge_cap_of() for the c19 incident behind it.
     """
     now = now or _now()
     if priority not in PRIORITIES:
@@ -224,6 +255,13 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             f"unknown priority {priority!r} - one of {', '.join(PRIORITIES)}. "
             "A free-form field would become an arms race; these three are a claim "
             "about the ASKER's state, which is a thing a session actually knows.")
+    if nudge_cap is not None:
+        nudge_cap = int(nudge_cap)
+        if not 0 <= nudge_cap <= MAX_NUDGES:
+            raise ValueError(
+                f"nudge_cap must be between 0 and {MAX_NUDGES} - it can only "
+                "LOWER the pressure on a person, never raise it above the "
+                "proven global policy.")
     with _lock:
         data = _load()
         cid, seq = _next_id(data)
@@ -238,6 +276,8 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "origin": (str(origin) if origin else None),
             "priority": priority,
             "placement_reason": (str(placement_reason) if placement_reason else None),
+            "asker_session": (str(asker_session) if asker_session else None),
+            "nudge_cap": nudge_cap,
             "state": OPEN,
             "opened_at": _iso(now),
             "due_at": _iso(now + NUDGE_AFTER),
@@ -775,7 +815,7 @@ def due(now=None):
             continue
         if not beat_due(c, now):
             continue
-        out.append((c, "nudge" if int(c.get("nudges", 0)) < MAX_NUDGES else "bank"))
+        out.append((c, "nudge" if int(c.get("nudges", 0)) < nudge_cap_of(c) else "bank"))
     out.sort(key=lambda p: p[0].get("seq", 0))
     return out
 
@@ -803,8 +843,9 @@ def nudge(cid, now=None):
     def go(conv):
         if conv.get("state") not in LIVE_STATES:
             raise ValueError(f"{cid} is {conv.get('state')}, not waiting on anyone")
-        if int(conv.get("nudges", 0)) >= MAX_NUDGES:
-            raise ValueError(f"{cid} has already had {MAX_NUDGES} nudges - bank it")
+        cap = nudge_cap_of(conv)
+        if int(conv.get("nudges", 0)) >= cap:
+            raise ValueError(f"{cid} has already had its {cap} nudge(s) - bank it")
         conv["nudges"] = int(conv.get("nudges", 0)) + 1
         conv["state"] = NUDGED
         conv["due_at"] = _iso(now + NUDGE_AFTER)

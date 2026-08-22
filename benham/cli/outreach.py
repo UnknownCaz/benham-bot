@@ -38,7 +38,7 @@ import os
 import sys
 
 from benham import paths
-from benham.core import conversations, identity, outbox
+from benham.core import caller, conversations, identity, outbox
 
 
 def _allowed():
@@ -111,9 +111,18 @@ def main(argv):
     ap.add_argument("question", nargs="?", help="What to ask them")
     ap.add_argument("--purpose", help="What the answer is for, in your words")
     ap.add_argument("--project", help="Which project this belongs to")
+    ap.add_argument("--nudge-cap", type=int, default=None, metavar="N",
+                    help=f"Cap THIS ask's nudges below the default "
+                         f"({conversations.MAX_NUDGES}); 0 = never nudge, just "
+                         "bank at the deadline. For zero-pressure questions - "
+                         "the written 'one nudge max' that never reached the "
+                         "timer is how Draco got poked twice (c19).")
     ap.add_argument("--list", action="store_true",
                     help="Show what is already open with them, and exit")
     a = ap.parse_args(argv)
+    if a.nudge_cap is not None and not 0 <= a.nudge_cap <= conversations.MAX_NUDGES:
+        ap.error(f"--nudge-cap must be 0..{conversations.MAX_NUDGES} - it can "
+                 "only lower the pressure on a person, never raise it")
 
     who = resolve_target(a.who)
 
@@ -141,7 +150,11 @@ def main(argv):
         question=a.question,
         project=a.project,
         direction=conversations.ASKING,
-        origin=f"session cwd={os.getcwd()} pid={os.getpid()}")
+        origin=f"session cwd={os.getcwd()} pid={os.getpid()}",
+        # So Raven can route the answer to the session that asked; None when no
+        # session could be resolved (never a guess - cwd is the fallback then).
+        asker_session=caller.session_id(),
+        nudge_cap=a.nudge_cap)
 
     # The ONLY outward step, and it composes nothing: the running bot reads this
     # and delivers the question already stored on the record.

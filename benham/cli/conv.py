@@ -104,11 +104,15 @@ def main(argv):
             print(f"  project : {c['project']}")
         if c.get("origin"):
             print(f"  asked by: {c['origin']}")
+        if c.get("asker_session"):
+            # The routable owner - Raven delivers the answer to this session.
+            print(f"  asker session: {c['asker_session']}")
         if c.get("answer"):
             print(f"  ANSWER  : {c['answer']}")
         if c.get("outcome"):
             print(f"  outcome : {c['outcome']}")
-        print(f"  nudges  : {c.get('nudges', 0)}   due: {c.get('due_at')}")
+        cap = f" (cap {c['nudge_cap']})" if c.get("nudge_cap") is not None else ""
+        print(f"  nudges  : {c.get('nudges', 0)}{cap}   due: {c.get('due_at')}")
         print("  log:")
         for e in c.get("log", []):
             print(f"    {e['ts'][:19]}  {e['event']}"
