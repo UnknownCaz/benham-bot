@@ -32,7 +32,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from benham import paths  # noqa: E402
 from benham.core import agent  # noqa: E402
 
-MEMORY_FILE = os.path.join(paths.STATE_DIR, "agent_memory.json")
+# --face names whose memory to repair; agent_memory.json is per-face since
+# PLAN-second-face commit 6, and a repair tool that quietly covered only the
+# primary would leave every other face damaged while looking finished - the
+# exact failure this script exists because of. The default is the primary,
+# which is also every pre-faces layout.
+def _memory_file(argv):
+    face = paths.DEFAULT_FACE
+    if "--face" in argv:
+        try:
+            face = argv[argv.index("--face") + 1]
+        except IndexError:
+            raise SystemExit("--face needs a face name after it")
+    return os.path.join(paths.state_for(face), "agent_memory.json")
+
+
+MEMORY_FILE = _memory_file(sys.argv)
 DISPOSABLE = ("test:", "repro", "tokcmp:")
 
 
