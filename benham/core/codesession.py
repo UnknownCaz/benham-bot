@@ -466,7 +466,9 @@ def _options(resume=None):
     return ClaudeAgentOptions(**kw)
 
 
-PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
+# Per-face (PLAN-second-face commit 9): a spawned session sounds like the
+# face that spawned it, and the primary face resolves to today's path.
+PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "persona.md")
 
 
 def _persona():

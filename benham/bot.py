@@ -491,10 +491,12 @@ def _named(people):
 
 @client.event
 async def on_ready():
-    log(f"Logged in as {client.user} (id {client.user.id})")
+    # The face comes first: with two processes possible, "which bot am I
+    # looking at" is the question this log answers before any other.
+    log(f"Logged in as {client.user} (id {client.user.id}) — face: {FACE}")
 
     # --- control plane (identity.py / control.json) ---
-    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — Benham takes direction from these only")
+    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — {FACE} takes direction from these only")
     log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
         f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")

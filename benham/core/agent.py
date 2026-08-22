@@ -57,7 +57,11 @@ MEMORY_FILE = os.path.join(paths.process_state_dir(), "agent_memory.json")
 # "one of the guys" in voice, something terser in DMs - which is a strange thing
 # for a proxy that is supposed to be one person. brain.py was the third reader
 # until voice was archived on 2026-08-16; two surfaces share it now.
-PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
+# Per-face since PLAN-second-face commit 9: the primary face reads exactly
+# prompts/persona.md as always; a named face reads prompts/faces/<name>/.
+# The Hard-rules block stays shared and identical across faces - it is the
+# prompt-level half of the security story, and a per-face copy would drift.
+PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))

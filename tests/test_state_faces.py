@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 from benham import paths
-from benham.core import agent, conversations, initiative, rooms
+from benham.core import agent, conversations, initiative, issues, rooms
 from benham.guest import guest
 
 _fails = []
@@ -57,6 +57,26 @@ check("conversations shared, at the shared root", conversations.STORE,
       os.path.join(S, "conversations.json"))
 check("rooms shared, at the shared root", rooms.INDEX_FILE,
       os.path.join(S, "rooms.json"))
+check("persona unchanged (commit 9)", agent.PERSONA_FILE,
+      os.path.join(paths.PROMPTS_DIR, "persona.md"))
+check("guest persona unchanged", guest.PERSONA_FILE,
+      os.path.join(paths.PROMPTS_DIR, "guest_persona.md"))
+check("issues file as the primary face", issues.FILED_BY, "Benham")
+
+# Codex's persona ships with the plumbing, and its two named prohibitions are
+# asserted the way the guest persona's false sentences are: in a test, so a
+# reword cannot drift them back in. (INTENT: in-world it is "the Codex" -
+# the manuscript never says either word below.)
+_codex_persona = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "prompts", "faces", "codex", "persona.md")
+check("the codex persona file exists in the repo", os.path.exists(_codex_persona), True)
+if os.path.exists(_codex_persona):
+    with open(_codex_persona, encoding="utf-8") as _f:
+        _ptext = _f.read()
+    check("...and is warm-but-businesslike per Tyler's voice answer",
+          "warm but businesslike" in _ptext, True)
+    check("...never breaks frame (INTENT #4 stated inside it)",
+          "break frame" in _ptext, True)
 
 # --- a real codex process: per-face stores move, shared stores DO NOT -------
 # The subprocess bootstraps _testconfig exactly as this file did, so it writes
@@ -67,10 +87,14 @@ import os, sys, json
 sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[2])
 import _testconfig
 from benham import paths
-from benham.core import agent, conversations, initiative, rooms
+from benham.core import agent, conversations, initiative, issues, rooms
 from benham.guest import guest
 print(json.dumps({
     "process_face": paths.PROCESS_FACE,
+    "persona": agent.PERSONA_FILE,
+    "guest_persona": guest.PERSONA_FILE,
+    "filed_by": issues.FILED_BY,
+    "prompts_dir": paths.PROMPTS_DIR,
     "initiative": initiative.STORE,
     "initiative_log": initiative.LOG_MD,
     "agent_memory": agent.MEMORY_FILE,
@@ -105,6 +129,12 @@ if proc.returncode == 0:
                        ("initiative_log", "initiative-log.md")]:
         check(f"codex {key} lives under faces/codex/", got[key],
               os.path.join(F, fname))
+    check("codex persona lives under prompts/faces/codex/ (commit 9)",
+          got["persona"],
+          os.path.join(got["prompts_dir"], "faces", "codex", "persona.md"))
+    check("codex guest persona too", got["guest_persona"],
+          os.path.join(got["prompts_dir"], "faces", "codex", "guest_persona.md"))
+    check("codex files issues as Codex, not as Benham", got["filed_by"], "Codex")
     check("conversations STAY at the shared root for codex - one question owed "
           "is one question owed, whoever carried it",
           got["conversations"], os.path.join(got["state_dir"], "conversations.json"))

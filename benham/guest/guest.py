@@ -66,7 +66,7 @@ load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 # Deliberately NOT agent_memory.json. See the module docstring.
 MEMORY_FILE = os.path.join(paths.process_state_dir(), "guest_memory.json")
 USAGE_FILE = os.path.join(paths.process_state_dir(), "guest_usage.json")
-PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "guest_persona.md")
+PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "guest_persona.md")
 SEARCH_LOG = os.path.join(paths.process_state_dir(), "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
