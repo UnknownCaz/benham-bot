@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from benham.core import issues        # noqa: E402
 from benham.core import loopclose     # noqa: E402
 
-DOOM = 1097631170788851815
+DOOM = 777000777000777000
 
 _fails = []
 

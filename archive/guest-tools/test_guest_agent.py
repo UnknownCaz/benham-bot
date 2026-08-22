@@ -36,7 +36,7 @@ from benham.core import policy
 from benham.core.policy import Origin
 
 TYLER = 273967061619965952
-DOOM = 1097631170788851815
+DOOM = 777000777000777000
 
 _fails = []
 

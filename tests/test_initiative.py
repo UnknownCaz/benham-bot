@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from benham.core import capabilities, conversations as C, identity, initiative, policy
 
 TYLER = 273967061619965952
-DOOM = 1097631170788851815
+DOOM = 777000777000777000
 
 _fails = []
 

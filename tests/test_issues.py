@@ -36,7 +36,7 @@ import time
 from benham.core import directives
 from benham.core import issues
 
-DOOM = 1097631170788851815
+DOOM = 777000777000777000
 STRANGER = 999000999000999000
 
 _fails = []

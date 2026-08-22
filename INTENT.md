@@ -35,10 +35,11 @@ of that set. This — not owner-vs-guest — is the axis the system should be bu
 The current code splits on **who you are** (owner vs guest). It should split on **which project
 you are participating in**. That single mismatch explains most of the structural drift in §3.
 
-**Current participants: Doom only** (doomassassin1, 1097631170788851815). Three other people are
-on the guest whitelist — Legacy/stonecoldslate, han kailo, toastylad007 — and can talk to Benham,
-but guest access is not project participation. Design for one participant; widen when a second
-actually appears.
+**Current participants: Doom only** (doomassassin1; user ids of other people live ONLY in
+untracked config/control.json, never in the tracked tree — tests use invented placeholders,
+scrubbed 2026-08-22). Three other people are on the guest whitelist — Legacy/stonecoldslate,
+han kailo, toastylad007 — and can talk to Benham, but guest access is not project participation.
+Design for one participant; widen when a second actually appears.
 
 ### The conversation is the primitive
 
@@ -1117,7 +1118,7 @@ date; strike them through (with a note of the fix) rather than deleting when clo
 ### 2026-08-20 — guest_quiet did not survive the bot restarting under it
 
 ~~`guest_quiet` returned `{"status": "quieted"}` at 03:51:55Z and the AUTO_REPLY brain answered
-that same user (Draco, 1269372470553743422) at 03:59-04:01, well inside the window.~~ **FIXED the
+that same user (Draco) at 03:59-04:01, well inside the window.~~ **FIXED the
 same day: the quiet deadline now persists to `state/guest_quiet.json`** and a restart changes
 nothing; regression section in `test_guest.py` simulates the restart by discarding the module map
 and requiring it back from disk.
