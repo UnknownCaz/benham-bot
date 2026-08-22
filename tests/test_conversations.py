@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 
 from benham.core import capabilities, conversations as C, identity, policy
 
-DOOM = 1097631170788851815
+DOOM = 777000777000777000
 TYLER = 273967061619965952
 NOW = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
 

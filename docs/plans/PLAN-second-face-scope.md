@@ -143,7 +143,7 @@ But the participant data is already in `control.json` - **as four flat lists, no
 Per decision #21 (Doom only), the honest minimum is **a join, not a subsystem**:
 
 ```json
-"participants": { "doom": { "id": 1097631170788851815,
+"participants": { "doom": { "id": 777000777000777000,
                             "projects": ["storyizier", "minecraft-clone"] } }
 ```
 

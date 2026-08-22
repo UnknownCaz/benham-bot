@@ -361,7 +361,7 @@ section("People-lists parse from BOTH shapes - the old one is not a courtesy")
 # is a worse failure than the unreadability it fixes. So the old shape is asserted
 # as its own case, deliberately, rather than left to be inferred from the new one
 # passing.
-_DOOM, _DRACO = 1097631170788851815, 1269372470553743422
+_DOOM, _DRACO = 777000777000777000, 777000777000777001
 
 check("the readable shape parses to the right ids",
       identity.people_map({"doom": _DOOM, "draco": _DRACO}),
