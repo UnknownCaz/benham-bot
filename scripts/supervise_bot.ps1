@@ -31,6 +31,7 @@ which ignores the hidden style, and the supervisor reappears in Alt+Tab. Nothing
 running headless - every line below also goes to supervise.log.
 #>
 param(
+    [string]$Face = 'benham',     # which bot identity this supervisor keeps alive
     [int]$MaxLogMB = 5,           # rotate supervise.log past this
     [int]$FastExitSeconds = 60,   # ran for less than this = a "fast" exit
     [int]$MaxFastExits = 5,       # this many in a row = stop trying
@@ -38,10 +39,28 @@ param(
     [int]$MaxDelaySeconds = 300
 )
 
+# One supervisor per face (PLAN-second-face commit 11). The single-instance
+# rule is now PER FACE: one benham and one codex may coexist, a second of
+# either may not. Three things key off the face, and the PRIMARY face keeps
+# every legacy name byte-identical so the existing Scheduled Task, the old
+# mutex, and status.py's process query all keep meaning what they meant:
+#   log    supervise.log            /  supervise-<face>.log
+#   mutex  ...-supervisor           /  ...-supervisor-<face>
+#   match  '-m benham.bot' WITHOUT a --face marker  /  WITH '--face <face>'
+# A non-primary launch line carries `--face <name>` purely as a process
+# marker - BENHAM_FACE in the environment is the mechanism, and bot.py
+# refuses a launch whose marker and environment disagree.
+if ($Face -notmatch '^[a-z][a-z0-9-]{0,39}$') {
+    Write-Host "invalid face name '$Face' (lowercase kebab, max 40 chars) - refusing"
+    exit 2
+}
+$Primary = ($Face -eq 'benham')
+
 # This script lives in scripts/; the bot and its logs are addressed from the repo root.
 $Dir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Dir
-$Log = Join-Path $Dir 'logs\supervise.log'
+if ($Primary) { $Log = Join-Path $Dir 'logs\supervise.log' }
+else          { $Log = Join-Path $Dir "logs\supervise-$Face.log" }
 
 function Write-Log($msg) {
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ssZ')
@@ -71,17 +90,26 @@ function Rotate-Log {
 }
 
 function Get-BotPid {
-    # Same query status.py uses, so both agree on what "the bot is running" means.
+    # Same base query status.py uses, so both agree on what "the bot is
+    # running" means - narrowed per face by the launch marker: the primary is
+    # a benham.bot process WITHOUT any --face marker (every legacy launch),
+    # a named face is one whose command line carries its own marker.
     try {
-        $p = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop |
-             Where-Object { $_.CommandLine -match '-m benham\.bot' } |
-             Select-Object -First 1 -ExpandProperty ProcessId
-        return $p
+        $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop |
+                 Where-Object { $_.CommandLine -match '-m benham\.bot' }
+        if ($Primary) {
+            $procs = $procs | Where-Object { $_.CommandLine -notmatch '--face\s' }
+        } else {
+            $procs = $procs | Where-Object { $_.CommandLine -match ('--face\s+' + [regex]::Escape($Face) + '(\s|$)') }
+        }
+        return $procs | Select-Object -First 1 -ExpandProperty ProcessId
     } catch { return $null }
 }
 
-# --- single instance ------------------------------------------------------
-$mutex = New-Object System.Threading.Mutex($false, 'Local\benham-bot-supervisor')
+# --- single instance (per face) -------------------------------------------
+if ($Primary) { $MutexName = 'Local\benham-bot-supervisor' }
+else          { $MutexName = "Local\benham-bot-supervisor-$Face" }
+$mutex = New-Object System.Threading.Mutex($false, $MutexName)
 if (-not $mutex.WaitOne(0)) {
     Write-Log "another supervisor already holds the lock - exiting rather than starting a second"
     exit 1
@@ -89,7 +117,7 @@ if (-not $mutex.WaitOne(0)) {
 
 $already = Get-BotPid
 if ($already) {
-    Write-Log "benham.bot is already running (pid $already), started outside this supervisor."
+    Write-Log "benham.bot [$Face] is already running (pid $already), started outside this supervisor."
     Write-Log "Refusing to start a second - one token, two gateways means duplicate replies"
     Write-Log "and duplicate outbox actions. Stop that process first, then run this again."
     $mutex.ReleaseMutex()
@@ -97,20 +125,31 @@ if ($already) {
 }
 
 # --- the loop -------------------------------------------------------------
-Write-Log "supervisor up (fast-exit threshold ${FastExitSeconds}s, give up after $MaxFastExits)"
+Write-Log "supervisor up for face '$Face' (fast-exit threshold ${FastExitSeconds}s, give up after $MaxFastExits)"
 $fastExits = 0
 
 try {
     while ($true) {
         Rotate-Log
-        Write-Log "starting benham.bot"
+        Write-Log "starting benham.bot [$Face]"
         $started = Get-Date
 
         # cmd does the redirect, not PowerShell. In 5.1, redirecting a native
         # command's stderr from PowerShell wraps every line in an ErrorRecord and
         # sets $? false even on a clean exit, which would make every shutdown look
         # like a failure in the log.
-        & cmd /c "python -u -m benham.bot >> `"$Log`" 2>&1"
+        #
+        # BENHAM_FACE is the mechanism (paths.py reads it before any store
+        # computes a path); the --face argv on non-primary launches is only
+        # the process marker Get-BotPid matches on. The primary launch line
+        # stays EXACTLY the legacy one, markerless, so status.py's query and
+        # any hand check keep finding it the way they always did.
+        $env:BENHAM_FACE = $Face
+        if ($Primary) {
+            & cmd /c "python -u -m benham.bot >> `"$Log`" 2>&1"
+        } else {
+            & cmd /c "python -u -m benham.bot --face $Face >> `"$Log`" 2>&1"
+        }
         $code = $LASTEXITCODE
         $ran = [int]((Get-Date) - $started).TotalSeconds
 
