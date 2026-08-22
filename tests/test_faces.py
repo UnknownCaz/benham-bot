@@ -90,6 +90,8 @@ check("legacy: face destructive_guilds IS the global set",
 check("legacy: guest ids flow from the face view",
       set(identity.people_map(g["guest"].get("ids")).values()), identity.GUEST_IDS)
 check("legacy: token env defaults to BOT_KEY", g["token_env"], "BOT_KEY")
+check("legacy: the primary face is unconfined (capabilities None)",
+      identity.face_capabilities(), None)
 
 # --- legacy: explicit empty post_guilds still means the cap was never set ---
 # Today `"post_guilds": []` is falsy and allows everything. The declared-face
@@ -139,6 +141,16 @@ check("rule 2: codex absent agent_guilds is empty",
       m.face_gates("codex")["agent_guilds"], set())
 check("rule 2: codex absent destructive_guilds is empty",
       m.face_gates("codex")["destructive_guilds"], set())
+
+# capabilities carry the OTHER asymmetric default (commit 4): the primary is
+# unconfined unless its block says otherwise - migrating the config shape must
+# not narrow the live bot - while a new face reaches nothing until granted.
+check("capabilities: benham-under-faces with no list stays unconfined",
+      m.face_capabilities("benham"), None)
+check("capabilities: codex with no list is EMPTY, not unconfined",
+      m.face_capabilities("codex"), frozenset())
+check("capabilities: an undeclared face is empty too",
+      m.face_capabilities("ghost"), frozenset())
 
 # rule 3: token problems are reported in words, never raised. These run HERE,
 # while the two-face config is still the loaded one - reload() mutates the

@@ -439,5 +439,201 @@ check("and rule_owner deliberately does NOT - it is rule_guest's lane",
 print(f"\n  matrix covers {len(matrix)} actions x {len(ORIGINS)} origins "
       f"= {len(matrix) * len(ORIGINS)} combinations")
 
+# ==========================================================================
+section("The face dimension — the same matrix, per identity (commit 3)")
+# ==========================================================================
+# PLAN-second-face commit 3: CallContext carries which bot identity a call acts
+# AS, and the gate rules read that face's config block. Three properties, in
+# rising order of consequence:
+#   1. a context that never mentions faces IS the primary face, everywhere -
+#      commit 3 must be invisible to every pre-faces call site;
+#   2. the two context copies carry the face - a copy that reverted to the
+#      primary would be the with_taint laundering bug wearing a new field;
+#   3. under a declared faces config, each face answers from its OWN block -
+#      owners, agent guilds, guest lane, destructive scope, posting scope.
+
+_base = CallContext.owner_dm(TYLER, 111)
+check("a context built without a face carries the primary face",
+      _base.face, identity.PRIMARY_FACE)
+check("for_target carries the face", _base.for_target(TESTING, 999).face, _base.face)
+check("with_taint carries the face", _base.with_taint().face, _base.face)
+_cx = CallContext.owner_dm(TYLER, 111, face="codex")
+check("an explicit face survives for_target", _cx.for_target(TESTING).face, "codex")
+check("an explicit face survives with_taint", _cx.with_taint().face, "codex")
+
+
+def ctx_for_face(origin, face, tainted=False, guild_id=TESTING):
+    c = ctx_for(origin, tainted, guild_id)
+    return CallContext(c.origin, c.actor_id, c.guild_id, c.channel_id, c.tainted,
+                       face=face)
+
+
+def allowed_face(action_name, origin, face):
+    act = capabilities.REGISTRY[action_name]
+    return policy.authorize(act, ctx_for_face(origin, face)).allowed
+
+
+# Property 1, stated over the WHOLE matrix rather than a sample: naming the
+# primary face explicitly changes no cell anywhere.
+_matrix_explicit = {name: {o: allowed_face(name, o, identity.PRIMARY_FACE)
+                           for o in ORIGINS}
+                    for name in matrix}
+check("naming the primary face explicitly changes nothing, anywhere",
+      _matrix_explicit == matrix, True)
+
+# Property 3 needs a declared faces config. Reload identity against one whose
+# benham block mirrors the fixture's top-level keys EXACTLY, so the benham
+# matrix stays comparable cell for cell. reload() mutates the module in place,
+# so policy's `identity` reference follows automatically - and so does every
+# check below, which is why the fixture restore at the end is itself asserted.
+import importlib
+import json as _json
+import shutil as _shutil
+import tempfile as _tempfile
+
+OTHER_OWNER = 888777666555444333  # invented, in the style of STRANGER above
+CODEX_GUILD = 1777000777000777001  # invented: the one guild codex coordinates
+
+_orig_config_dir = __import__("benham.paths", fromlist=["paths"]).CONFIG_DIR
+from benham import paths as _paths
+_face_scratch = _tempfile.mkdtemp(prefix="benham-policy-faces-")
+_two_face = {
+    "faces": {
+        "benham": {k: identity.CONTROL[k] for k in identity._FACE_KEYS
+                   if k in identity.CONTROL},
+        "codex": {
+            "token_env": "CODEX_KEY",
+            "owner_ids": [TYLER],
+            "agent_guilds": [],
+            "destructive_guilds": [CODEX_GUILD],
+            "post_guilds": [CHILLBAR],
+            # pc_task granted HERE on purpose: the machine wall must beat the
+            # config, or "no shell for the second face" is a convention.
+            "capabilities": ["send_message", "read_channel", "purge_messages",
+                             "pc_task"],
+        },
+        # One grant, so the owner-separation checks below can see past the
+        # (correct) empty-until-granted default that commit 4 added.
+        "otherface": {"owner_ids": [OTHER_OWNER],
+                      "capabilities": ["send_message"]},
+    },
+    "shared": {"issues": identity.CONTROL.get("issues") or {}},
+}
+with open(_os.path.join(_face_scratch, "control.json"), "w", encoding="utf-8") as _f:
+    _json.dump(_two_face, _f)
+_paths.CONFIG_DIR = _face_scratch
+importlib.reload(identity)
+
+_matrix_b = {name: {o: allowed_face(name, o, "benham") for o in ORIGINS}
+             for name in matrix}
+check("declaring faces changes NOTHING for the primary face - full matrix identical",
+      _matrix_b == matrix, True)
+
+_matrix_c = {name: {o: allowed_face(name, o, "codex") for o in ORIGINS}
+             for name in matrix}
+check("codex reaches nothing by guild mention (its agent_guilds is empty)",
+      all(not row[Origin.OWNER_GUILD] for row in _matrix_c.values()), True)
+
+# Commit 4: the grant table, asserted as an EXACT set per column, the way the
+# guest matrix is. Four names are granted in config; pc_task is refused anyway
+# by the machine wall, so exactly three survive from a DM. (An earlier
+# revision asserted codex's columns EQUAL benham's, with a note that commit 4
+# must consciously edit that line. This is that edit.)
+check("codex reaches EXACTLY its grant, minus the machine wall, from a DM",
+      {n for n in _matrix_c if _matrix_c[n][Origin.OWNER_DM]},
+      {"send_message", "read_channel", "purge_messages"})
+check("...and the same from the local CLI",
+      {n for n in _matrix_c if _matrix_c[n][Origin.LOCAL_CLI]},
+      {"send_message", "read_channel", "purge_messages"})
+check("nothing in codex's grant is SYSTEM-reachable, so its SYSTEM column is empty",
+      {n for n in _matrix_c if _matrix_c[n][Origin.SYSTEM]}, set())
+
+# The machine wall: config granted pc_task to codex above, and it must lose.
+_pd = policy.authorize(capabilities.REGISTRY["pc_task"],
+                       ctx_for_face(Origin.OWNER_DM, "codex"))
+check("pc_task refuses from codex even though the config grants it",
+      _pd.denied, True)
+check("...and the machine wall names itself", _pd.rule, "face_machine")
+check("spawn_in_room is behind the same wall",
+      policy.authorize(capabilities.REGISTRY["spawn_in_room"],
+                       ctx_for_face(Origin.OWNER_DM, "codex")).rule, "face_machine")
+check("an UNGRANTED capability names the grant rule, not the wall",
+      policy.authorize(capabilities.REGISTRY["pin_message"],
+                       ctx_for_face(Origin.OWNER_DM, "codex")).rule,
+      "face_capability")
+check("benham's own pc_task is untouched by the wall",
+      allowed_face("pc_task", Origin.OWNER_DM, "benham"), True)
+
+# Separately owned (decision 2): being Tyler buys nothing on a face whose
+# owner list does not name him, and the refusal is the owner rule doing it.
+_d = policy.authorize(send, CallContext.owner_dm(TYLER, 111, face="otherface"))
+check("Tyler does not direct a face that does not name him", _d.allowed, False)
+check("...and the refusal names the owner rule", _d.rule, "owner")
+check("the face's own owner directs it",
+      policy.authorize(send, CallContext.owner_dm(OTHER_OWNER, 111,
+                                                  face="otherface")).allowed, True)
+check("an UNDECLARED face obeys nobody (fail closed)",
+      policy.authorize(send, CallContext.owner_dm(TYLER, 111,
+                                                  face="ghost")).allowed, False)
+
+# The guest lane is per face: the fixture guest is benham's guest, not codex's.
+_gb = CallContext.guest_dm(_testconfig.GUEST_ID, 111)
+_gc = CallContext.guest_dm(_testconfig.GUEST_ID, 111, face="codex")
+check("benham's guest lane is on under the faces shape",
+      policy.may_chat_as_guest(_gb).allowed, True)
+check("the same person is refused on codex's lane",
+      policy.may_chat_as_guest(_gc).allowed, False)
+check("...because codex's guest surface is off, not because of who they are",
+      policy.rule_guest(_probe, _gc).rule, "guest_disabled")
+
+
+def target_face(face, guild_id, channel_id=999):
+    return CallContext.owner_dm(TYLER, 111, face=face).for_target(guild_id, channel_id)
+
+
+# Per-face-per-guild tier 3 - the composition the plan calls the free win:
+# codex holds tier 3 in the one guild it coordinates and nowhere else, with no
+# new mechanism. Same guild, same action, three answers by face alone.
+check("purge in Testing still CONFIRMS for benham under the faces shape",
+      policy.authorize_target(purge, target_face("benham", TESTING)).needs_confirm,
+      True)
+check("purge in codex's OWN guild CONFIRMS - tier 3 where it coordinates",
+      policy.authorize_target(purge, target_face("codex", CODEX_GUILD)).needs_confirm,
+      True)
+_dc = policy.authorize_target(purge, target_face("codex", TESTING))
+check("purge in Testing is DENIED for codex - not on ITS list", _dc.denied, True)
+check("...naming the destructive rule", _dc.rule, "destructive_guild")
+check("benham holds no tier 3 in codex's guild - the confinement cuts both ways",
+      policy.authorize_target(purge, target_face("benham", CODEX_GUILD)).denied,
+      True)
+check("purge is denied for an undeclared face too",
+      policy.authorize_target(purge, target_face("ghost", TESTING)).denied, True)
+
+# Posting scope per face, including the declared-face deny default.
+check("codex posts where its own list says (Chillbar)",
+      policy.authorize_target(send_a, target_face("codex", CHILLBAR, 123)).allowed,
+      True)
+check("codex may NOT post into Testing, though benham may",
+      (policy.authorize_target(send_a,
+                               target_face("codex", TESTING, 809357286036078612)).allowed,
+       policy.authorize_target(send_a,
+                               target_face("benham", TESTING, 809357286036078612)).allowed),
+      (False, True))
+check("otherface declared no post_guilds at all: DENIED, not allow-everything",
+      policy.authorize_target(send_a,
+                              target_face("otherface", TESTING, 123)).allowed, False)
+
+# Restore the fixture and prove the module comes back whole - the reload above
+# would otherwise leak into any check added after this section.
+_paths.CONFIG_DIR = _orig_config_dir
+importlib.reload(identity)
+_shutil.rmtree(_face_scratch, ignore_errors=True)
+check("fixture restored: the legacy matrix answer holds again",
+      allowed("send_message", Origin.OWNER_DM), True)
+check("fixture restored: no faces declared", identity.FACES_DECLARED, False)
+
+print(f"\n  face dimension: {len(matrix)} actions x {len(ORIGINS)} origins x 2 faces "
+      f"re-checked, plus per-face target rules")
+
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
 sys.exit(1 if _fails else 0)
