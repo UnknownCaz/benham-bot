@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 from benham import paths
-from benham.core import agent, conversations, rooms
+from benham.core import agent, conversations, initiative, rooms
 from benham.guest import guest
 
 _fails = []
@@ -49,6 +49,10 @@ check("guest memory unchanged", guest.MEMORY_FILE, os.path.join(S, "guest_memory
 check("guest usage unchanged", guest.USAGE_FILE, os.path.join(S, "guest_usage.json"))
 check("guest quiet unchanged", guest.QUIET_FILE, os.path.join(S, "guest_quiet.json"))
 check("guest search log unchanged", guest.SEARCH_LOG, os.path.join(S, "guest_searches.jsonl"))
+check("initiative store unchanged", initiative.STORE,
+      os.path.join(S, "initiative.json"))
+check("initiative log unchanged", initiative.LOG_MD,
+      os.path.join(S, "initiative-log.md"))
 check("conversations shared, at the shared root", conversations.STORE,
       os.path.join(S, "conversations.json"))
 check("rooms shared, at the shared root", rooms.INDEX_FILE,
@@ -63,10 +67,12 @@ import os, sys, json
 sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[2])
 import _testconfig
 from benham import paths
-from benham.core import agent, conversations, rooms
+from benham.core import agent, conversations, initiative, rooms
 from benham.guest import guest
 print(json.dumps({
     "process_face": paths.PROCESS_FACE,
+    "initiative": initiative.STORE,
+    "initiative_log": initiative.LOG_MD,
     "agent_memory": agent.MEMORY_FILE,
     "agent_searches": agent.SEARCH_LOG,
     "guest_memory": guest.MEMORY_FILE,
@@ -94,7 +100,9 @@ if proc.returncode == 0:
                        ("guest_memory", "guest_memory.json"),
                        ("guest_usage", "guest_usage.json"),
                        ("guest_quiet", "guest_quiet.json"),
-                       ("guest_searches", "guest_searches.jsonl")]:
+                       ("guest_searches", "guest_searches.jsonl"),
+                       ("initiative", "initiative.json"),
+                       ("initiative_log", "initiative-log.md")]:
         check(f"codex {key} lives under faces/codex/", got[key],
               os.path.join(F, fname))
     check("conversations STAY at the shared root for codex - one question owed "

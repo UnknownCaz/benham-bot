@@ -48,12 +48,12 @@ from datetime import datetime, timezone
 from benham import paths
 from benham.core import conversations, jsonio, policy
 
-STORE = os.path.join(paths.STATE_DIR, "initiative.json")
+STORE = os.path.join(paths.process_state_dir(), "initiative.json")
 
 # The human-readable half. Gitignored alongside the json - these are Claude's
 # private notes about Tyler and questions about his life, and neither belongs in
 # a repo that has a remote.
-LOG_MD = os.path.join(paths.STATE_DIR, "initiative-log.md")
+LOG_MD = os.path.join(paths.process_state_dir(), "initiative-log.md")
 
 # How many runs to keep in the json. The markdown log is never truncated - it is
 # the audit trail, it is a few lines a day, and a year of it is a small file.
@@ -476,7 +476,7 @@ def lane_state(now=None):
         "last_delivered_at": _iso(last) if last else None,
         "hours_since_last": (round((now - last).total_seconds() / 3600, 1)
                              if last else None),
-        "min_gap_hours": int(policy.UNPROMPTED_MIN_GAP.total_seconds() // 3600),
+        "min_gap_hours": int(policy.unprompted_min_gap().total_seconds() // 3600),
         "consecutive_lapses": lapses,
         "dormant": lapses >= policy.UNPROMPTED_MAX_LAPSES,
         "open_threads": len(threads(state=T_OPEN)),
