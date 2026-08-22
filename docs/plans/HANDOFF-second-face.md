@@ -70,15 +70,28 @@ the hub's to write, not yours - that split is the fix for what went wrong earlie
 
 ## Do not break these
 
-- **Do not narrow Benham's scopes on guild `1324218608234008613` (Next Big Novel).** Another
-  session is restructuring that server through Benham right now - ~111 outbox actions today,
-  last at 23:23Z. Commit 12 carries a precondition about this; honour it.
-- **38 `set_channel_permissions` calls were REFUSED BY DISCORD today** - "Missing Access" /
-  "Missing Permissions". Benham's *role* in that guild is under-privileged; my diagnosis is
-  role hierarchy (several refused targets are roles that same run had just created, and Discord
-  refuses edits on roles above your own). Routed to the restructure session and to Tyler.
-  **Nothing surfaces a failed outbox request back to whoever enqueued it**, so that session may
-  believe those 38 landed.
+- **Do not narrow Benham's scopes on guild `1324218608234008613` (Next Big Novel) without
+  checking.** As of 2026-08-21 ~23:50Z the restructure that was running through Benham is
+  **finished and verified**. The commit 12 precondition is therefore satisfiable - but confirm
+  it rather than trusting this line, which was written minutes after it changed.
+- **A permission failure mode Codex will meet, because this is its future job.** 38
+  `set_channel_permissions` calls failed in that guild on 2026-08-21. **My first diagnosis -
+  role hierarchy - was wrong**, and the restructure session that made those calls supplied the
+  real one: it denied `@everyone` `view_channel` on a category **before** granting Benham an
+  explicit allow. Benham's access ran through `@everyone`, so the deny cost it view, and without
+  view it could no longer edit overwrites, move the channel, or undo its own change. Self-
+  inflicted, one-way from the bot side, needed a human grant to recover.
+  **The rule: apply allows FIRST, verify the returned overwrite actually contains them, and only
+  then fire any deny. Never infer success from readability.**
+  Also: **discord.py returns `view_channel` as `read_messages`** - same bit, `view_channel` is
+  an alias. Grepping a `before` payload for the literal `"view_channel"` reports 100% false
+  drift. That restructure is finished and verified (35/35 correct, 0 errors), and Benham
+  currently holds full permissions there because Tyler granted them to clear the lockout.
+- **The outbox failure-surfacing gap is owned by a SEPARATE session - do not build it here.**
+  The fire-and-forget enqueue path swallows Discord refusals (they land in `failed/`, the
+  caller is never told); `do.py`'s wait path already blocks and exits non-zero, so the gap is
+  narrower than first reported. A dedicated session is fixing it in runtime code. Commit 5 of
+  the plan keeps only the provenance/failure-reason one-liners and rebases on that fix.
 - **Codex is a character, not a process** (INTENT #4). Named from Tyler's own novel - the
   Eclipse Codex, "a ledger, not a mentor". Voice brief: warm but businesslike, subject is
   always the work. In-world it is "the Codex", never "EclipseUI", and the manuscript never says
