@@ -97,6 +97,7 @@ def load_control():
             "Fix the syntax, or move the file aside to run on restrictive defaults "
             "deliberately."
         ) from e
+    _validate_faces(cfg)
     out = dict(_DEFAULTS)
     for k, v in cfg.items():
         if k.startswith("_"):  # "_comment"-style annotation keys in the example file
@@ -105,11 +106,185 @@ def load_control():
     return out
 
 
+def _validate_faces(cfg):
+    """Refuse to boot on a faces block nobody should run on a guess.
+
+    Same doctrine as the JSON check above: these are all shapes someone just
+    wrote, not legacy files nobody migrated, so the loud failure is the cheap
+    one. Three refusals:
+
+      * `faces` that is not a non-empty dict of dicts - a control plane that
+        cannot say who its faces are.
+      * a face name paths.check_face rejects - face names reach os.path.join,
+        so a bad one is refused here rather than filtered there.
+      * `faces` alongside a top-level `owner_ids`. Under `faces` every owner
+        list lives inside a face block, so a top-level one looks like it grants
+        ownership and grants nothing - the worst of the available readings, and
+        the one this refuses on (spike rule 4). Other stray top-level keys are
+        left alone: they can only fail to grant reach, not fail to grant safety.
+    """
+    faces = cfg.get("faces")
+    if faces is None:
+        return
+    if not isinstance(faces, dict) or not faces:
+        raise ControlFileError(
+            f"{CONTROL_FILE}: `faces` must be a non-empty object of face blocks, "
+            f"got {type(faces).__name__}. Remove the key to run the single-face "
+            "legacy shape, or declare at least one face."
+        )
+    for name, block in faces.items():
+        try:
+            paths.check_face(name)
+        except ValueError as e:
+            raise ControlFileError(f"{CONTROL_FILE}: bad face name in `faces`: {e}") from e
+        if not isinstance(block, dict):
+            raise ControlFileError(
+                f"{CONTROL_FILE}: face {name!r} must be an object, "
+                f"got {type(block).__name__}."
+            )
+    if "owner_ids" in cfg:
+        raise ControlFileError(
+            f"{CONTROL_FILE} declares `faces` AND a top-level `owner_ids`. "
+            "Under `faces`, owner lists live inside each face block and a "
+            "top-level one is ignored - a config that looks like it grants "
+            "ownership and does not is worse than one that refuses to boot. "
+            "Move `owner_ids` into the face it belongs to."
+        )
+
+
 CONTROL = load_control()
 
-OWNER_IDS = set(int(u) for u in CONTROL.get("owner_ids", []) or [])
-DESTRUCTIVE_GUILDS = set(int(g) for g in CONTROL.get("destructive_guilds", []) or [])
-AGENT_GUILDS = set(int(g) for g in CONTROL.get("agent_guilds", []) or [])
+
+# --------------------------------------------------------------------------
+# Faces (PLAN-second-face.md, commit 2). A face is one bot identity - its own
+# token, owner list, guild scopes, guest surface. Two config shapes:
+#
+#   legacy   no `faces` key. One implicit face, the primary (benham), reading
+#            the top-level keys exactly as it always has. Tyler's current
+#            control.json is this shape and must boot byte-identically.
+#   faces    a `faces` block keyed by name; per-face keys move inside each
+#            block, genuinely-shared config moves under `shared`.
+#
+# The fail-closed rules, from the spike (PLAN-second-face-spike.md §5):
+#   1. a face with no owner_ids of its own gets [], NEVER the global list -
+#      inheriting would rebuild the union problem separate ownership exists
+#      to prevent. A face nobody owns takes direction from nobody.
+#   2. guild lists absent means empty; post_guilds absent means DENY for a
+#      declared face. That last is a deliberate divergence from the legacy
+#      default (absent = allow everything, the opt-in cap): a declared face
+#      is not a legacy config nobody migrated, it is a thing somebody just
+#      wrote, so absent scope costs capability rather than safety.
+#   3. a face naming an unset token env var refuses to boot THAT face,
+#      loudly, without taking the process down - see face_boot_problem().
+#   4. `faces` + top-level owner_ids refuses to boot - see _validate_faces().
+# --------------------------------------------------------------------------
+
+PRIMARY_FACE = paths.DEFAULT_FACE  # "benham"
+DEFAULT_TOKEN_ENV = "BOT_KEY"
+
+# The keys that belong to one face rather than to the project. Used only to
+# build the legacy implicit block; in the faces shape each block carries its
+# own copy of whichever it needs.
+_FACE_KEYS = (
+    "token_env", "owner_ids", "destructive_guilds", "agent_guilds",
+    "post_guilds", "post_channels", "guest", "agent", "confirm",
+    "presence", "intents",
+)
+
+def _face_blocks(cfg):
+    """name -> raw face block, from either config shape. Pure on purpose: the
+    functions below read CONTROL through this at CALL time, the same live read
+    posting_allowed has always done, so tests (and nothing else - CONTROL is
+    still import-once doctrine) can swap CONTROL and watch the gates follow."""
+    declared = cfg.get("faces")
+    if declared is not None:
+        return dict(declared)
+    return {PRIMARY_FACE: {k: cfg[k] for k in _FACE_KEYS if k in cfg}}
+
+
+FACES_DECLARED = "faces" in CONTROL
+FACES = _face_blocks(CONTROL)  # import-time snapshot, for listings and boot banners
+
+
+def face_names():
+    """The declared faces, primary first when present - a real list, so the
+    boot banner and list_rooms-style surfaces print names, not a dict repr."""
+    names = sorted(_face_blocks(CONTROL))
+    if PRIMARY_FACE in names:
+        names.remove(PRIMARY_FACE)
+        names.insert(0, PRIMARY_FACE)
+    return names
+
+
+def face_gates(face):
+    """The normalized gate view for one face: sets, not raw config lists.
+
+    KeyError for an undeclared face is the honest signal - callers that want
+    prose use face_boot_problem(). post_guilds is the one field with a shape
+    difference: None means allow-everything and is only producible by the
+    legacy implicit face (rule 2 above); a declared face gets a real set,
+    empty meaning deny.
+    """
+    declared = CONTROL.get("faces") is not None
+    block = _face_blocks(CONTROL)[face]
+    raw_post = block.get("post_guilds")
+    if declared:
+        post_guilds = set(int(g) for g in (raw_post or []))
+    else:
+        # Legacy: falsy (absent OR []) means the opt-in cap was never set -
+        # allow everything, exactly as posting_allowed always read it.
+        post_guilds = None if not raw_post else set(int(g) for g in raw_post)
+    return {
+        "owner_ids": set(int(u) for u in (block.get("owner_ids") or [])),
+        "destructive_guilds": set(int(g) for g in (block.get("destructive_guilds") or [])),
+        "agent_guilds": set(int(g) for g in (block.get("agent_guilds") or [])),
+        "post_guilds": post_guilds,
+        "post_channels": set(int(c) for c in (block.get("post_channels") or [])),
+        "guest": dict(block.get("guest") or {}),
+        "token_env": str(block.get("token_env") or DEFAULT_TOKEN_ENV),
+    }
+
+
+def face_boot_problem(face, environ=None):
+    """None if this face can boot; else one plain sentence saying why not.
+
+    Rule 3's surface: whoever launches a face calls this first, refuses to
+    start THAT face on a non-None answer, and says the sentence out loud. The
+    process carrying other faces stays up - a face nobody can authenticate
+    should cost that face, not the fleet.
+    """
+    env = os.environ if environ is None else environ
+    if face not in FACES:
+        return (
+            f"unknown face {face!r}: control.json declares {face_names()}"
+        )
+    var = face_gates(face)["token_env"]
+    if not env.get(var):
+        return f"face {face!r} names token env {var!r}, which is not set"
+    return None
+
+
+def _primary_gates():
+    """The primary face's gates, or the restrictive-empty view when a declared
+    faces block omits it. Empty, never inherited (rule 1's direction): a
+    process running as a face the config does not name obeys nobody and may
+    do nothing, and face_boot_problem(PRIMARY_FACE) says so in words."""
+    try:
+        return face_gates(PRIMARY_FACE)
+    except KeyError:
+        return {
+            "owner_ids": set(), "destructive_guilds": set(),
+            "agent_guilds": set(), "post_guilds": set(),
+            "post_channels": set(), "guest": {},
+            "token_env": DEFAULT_TOKEN_ENV,
+        }
+
+
+_PRIMARY = _primary_gates()
+
+OWNER_IDS = _PRIMARY["owner_ids"]
+DESTRUCTIVE_GUILDS = _PRIMARY["destructive_guilds"]
+AGENT_GUILDS = _PRIMARY["agent_guilds"]
 
 
 def is_owner(user_id):
@@ -156,14 +331,18 @@ def people_map(value):
     return {str(i): int(i) for i in (value or [])}
 
 
-GUEST = CONTROL.get("guest") or {}
+GUEST = _PRIMARY["guest"]
 GUEST_PEOPLE = people_map(GUEST.get("ids"))
 GUEST_IDS = set(GUEST_PEOPLE.values())
 
 # The GitHub intake funnel (core/issues.py). A separate block rather than a key
 # under `guest` because the owner files through it too - being an issuer is a
 # per-person grant layered ON TOP of being a guest, not a property of guests.
-ISSUES = CONTROL.get("issues") or {}
+# Project truth rather than a face's, so in the faces shape it lives under
+# `shared` (the tracker has no face column - spike §1); legacy reads it from
+# the top level as always.
+_SHARED = (CONTROL.get("shared") or {}) if FACES_DECLARED else CONTROL
+ISSUES = _SHARED.get("issues") or {}
 
 
 def issues_config():
@@ -272,27 +451,30 @@ def posting_allowed(guild_id, channel_id):
     against that is a judgement call somewhere; this one is arithmetic.
 
     `post_channels` wins when set (the tight configuration). Otherwise the channel's
-    guild must be on `post_guilds`. An empty/absent config allows everything, which
-    keeps existing behaviour for anyone who never sets it - the cap is opt-in, and a
-    silently-restrictive default would look like the bot being broken.
+    guild must be on `post_guilds`. In the legacy shape an empty/absent config
+    allows everything, which keeps existing behaviour for anyone who never sets
+    it - the cap is opt-in, and a silently-restrictive default would look like
+    the bot being broken. Under a declared `faces` block the default flips to
+    DENY (face_gates rule 2): a declared face is a thing somebody just wrote,
+    so its absent scope costs capability, never safety.
 
-    A channel with no guild is a DM. Those are allowed here and governed instead by
-    the taint rule, which is the relevant control for "Benham messaged a stranger".
+    A channel with no guild is a DM. Those are allowed here in both shapes and
+    governed instead by the taint rule, which is the relevant control for
+    "Benham messaged a stranger".
     """
-    cfg_channels = set(int(c) for c in (CONTROL.get("post_channels") or []))
-    if cfg_channels:
+    gates = _primary_gates()  # live read of CONTROL, as this function always did
+    if gates["post_channels"]:
         try:
-            return int(channel_id) in cfg_channels
+            return int(channel_id) in gates["post_channels"]
         except (TypeError, ValueError):
             return False
 
-    cfg_guilds = CONTROL.get("post_guilds")
-    if not cfg_guilds:
-        return True
     if guild_id is None:
         return True  # DM; see docstring
+    if gates["post_guilds"] is None:
+        return True  # legacy shape, cap never set
     try:
-        return int(guild_id) in set(int(g) for g in cfg_guilds)
+        return int(guild_id) in gates["post_guilds"]
     except (TypeError, ValueError):
         return False
 
