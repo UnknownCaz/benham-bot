@@ -32,6 +32,7 @@ import argparse
 import json
 import sys
 
+from benham import paths
 from benham.core import conversations, initiative, outbox, policy
 
 
@@ -191,7 +192,7 @@ def cmd_ask(a):
     # This process has no Discord connection and must not grow one - and routing
     # through the outbox is what puts the send back through policy at the moment
     # it actually happens.
-    outbox.enqueue(action="deliver_unprompted", id=conv["id"])
+    outbox.enqueue(face=paths.DEFAULT_FACE, action="deliver_unprompted", id=conv["id"])
     initiative.record_run(initiative.R_ASKED,
                           a.why or "the run judged this worth asking.",
                           question=a.question, conv_id=conv["id"],

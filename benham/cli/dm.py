@@ -34,6 +34,7 @@ get past is a guard people route around in worse ways.
 
 import sys
 
+from benham import paths
 from benham.core import identity
 from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
                                 report_outcome, usage)
@@ -100,7 +101,7 @@ def main(argv):
             print(refusal, file=sys.stderr)
             return 2
 
-    final = enqueue(action="dm", user_id=user_id, content=content)
+    final = enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=user_id, content=content)
     print(f"Queued DM -> {final}")
     if no_wait:
         return EXIT_OK

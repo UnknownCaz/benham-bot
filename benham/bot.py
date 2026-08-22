@@ -55,6 +55,7 @@ from benham.core import jsonio
 from benham.core import loopclose
 from benham.core import msgparts
 from benham.core import notify
+from benham.core import outbox
 from benham.core import policy
 from benham.core import rooms
 
@@ -64,7 +65,13 @@ except Exception:  # noqa: BLE001
     audioop = None
 
 from benham import paths
-OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
+
+# Which face this process runs as. Commit 12 of PLAN-second-face wires this
+# from the launch arguments; until then a process is the primary face, and
+# every path below resolves to exactly what it always did.
+FACE = paths.DEFAULT_FACE
+
+OUTBOX = outbox.outbox_dir(FACE)
 SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
 CHANNELS_FILE = os.path.join(paths.STATE_DIR, "channels.json")
@@ -2057,6 +2064,13 @@ async def poll_outbox():
                 req = json.load(f)
             action = req.get("action", "send")
 
+            # A request names which face acts on it (commit 5); the decision
+            # itself is outbox.misdelivered, pure and tested. Raising here
+            # lands the file in failed/ with the reason on the record.
+            _mis = outbox.misdelivered(req, FACE)
+            if _mis:
+                raise ValueError(_mis)
+
             # --- capability-registry actions (capabilities.py) ---
             # The legacy names below (send/dm/speak/edit/delete/history/purge) predate
             # the registry and keep their own handling; everything added since is
@@ -2066,7 +2080,8 @@ async def poll_outbox():
             if action in capabilities.REGISTRY:
                 act = capabilities.REGISTRY[action]
                 params = {k: v for k, v in req.items()
-                          if k not in ("action", "queued_at", "confirm_token", "actor_id")}
+                          if k not in ("action", "queued_at", "confirm_token",
+                                       "actor_id", "face", "source")}
                 token = req.get("confirm_token")
 
                 if act.needs_confirm and not token:

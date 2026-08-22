@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import _testconfig                 # noqa: F401,E402 - must precede every benham import
 
+from benham import paths
 from benham.core import outbox     # noqa: E402
 from benham.cli import send        # noqa: E402
 from benham.cli import dm          # noqa: E402
@@ -92,31 +93,31 @@ def stub_bot(dest_dirname, result, timeout=10):
 
 
 section("wait_result finds the verdict wherever _finish filed it")
-_req = outbox.enqueue(action="dm", user_id=1, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=1, content="hi")
 bot_finish(_req, "sent", {"status": "sent", "message_id": 42})
 _res, _where = outbox.wait_result(_req, timeout=5)
 check("a delivered request reads back from sent/", _where, "sent")
 check("...with the result intact", _res and _res.get("message_id"), 42)
 
-_req = outbox.enqueue(action="dm", user_id=2, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=2, content="hi")
 bot_finish(_req, "failed", {"status": "failed", "error": "NotFound: Unknown User"})
 _res, _where = outbox.wait_result(_req, timeout=5)
 check("a refused request reads back from failed/", _where, "failed")
 check("...with the recorded error", _res and _res.get("error"),
       "NotFound: Unknown User")
 
-_req = outbox.enqueue(action="dm", user_id=3, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=3, content="hi")
 _res, _where = outbox.wait_result(_req, timeout=1)
 check("no result in time reads as (None, None), not a crash", (_res, _where),
       (None, None))
 
 section("report_outcome speaks the exit-code convention and prints the error")
-_req = outbox.enqueue(action="dm", user_id=4, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=4, content="hi")
 bot_finish(_req, "sent", {"status": "sent", "message_id": 7})
 _code, _ = outbox.report_outcome(_req, timeout=5)
 check("delivered -> exit code 0", _code, outbox.EXIT_OK)
 
-_req = outbox.enqueue(action="dm", user_id=5, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=5, content="hi")
 bot_finish(_req, "failed", {"status": "failed", "error": "Forbidden: Cannot send"})
 _err = io.StringIO()
 with redirect_stderr(_err):
@@ -127,7 +128,7 @@ check("...and the caller was SHOWN the error - the whole point",
 check("...and the result is handed back for callers that print more",
       _res and _res.get("status"), "failed")
 
-_req = outbox.enqueue(action="dm", user_id=6, content="hi")
+_req = outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=6, content="hi")
 _err = io.StringIO()
 with redirect_stderr(_err):
     _code, _ = outbox.report_outcome(_req, timeout=1)

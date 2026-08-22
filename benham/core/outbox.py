@@ -22,7 +22,23 @@ import uuid
 from datetime import datetime, timezone
 
 from benham import paths
-OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
+
+
+def outbox_dir(face):
+    """The outbox directory for one face (PLAN-second-face commit 5).
+
+    paths.state_for carries the guarantee: the primary face resolves to
+    exactly today's state/outbox, a named face to state/faces/<name>/outbox.
+    Each bot process polls only its own face's directory, which is what makes
+    "which face sends this message" a fact instead of a listdir race.
+    """
+    return os.path.join(paths.state_for(face), "outbox")
+
+
+# The primary face's outbox - byte-identical to the pre-faces constant, and
+# still what bot.py resolves its own paths against until commit 12 wires a
+# face into the process launch.
+OUTBOX = outbox_dir(paths.DEFAULT_FACE)
 
 # Where bot.py archives a processed request and its sibling _result.json.
 RESULT_DIRS = ("sent", "failed")
@@ -70,23 +86,63 @@ def parse_ids(values, labels):
     return out, None
 
 
-def enqueue(**fields):
-    """Atomically drop one request into the outbox and return its final path.
+def enqueue(face=None, **fields):
+    """Atomically drop one request into a face's outbox and return its final path.
 
-    `queued_at` is stamped here so every request carries it and no caller has to
-    remember. Pass any other fields the action needs; bot.py reads them by name.
+    `face` is REQUIRED (Tyler's call: --face on every call), and it is a
+    ValueError rather than a default because the failure it prevents is
+    silent: a caller that means one identity and reaches another. Until the
+    CLI grows its --face flag (commit 10), every call site passes
+    paths.DEFAULT_FACE explicitly - the requirement lives here so no new
+    caller can forget.
+
+    Three fields are stamped so no caller has to remember: `queued_at`;
+    `face`, so the request file itself says who is to act on it and the bot
+    can refuse a misdelivered one; and `source`, the invoking command line -
+    working out who enqueued a request tonight took clustering timestamps,
+    and with two faces that question gets asked more, not less. Pass any
+    other fields the action needs; bot.py reads them by name.
     """
-    os.makedirs(OUTBOX, exist_ok=True)
+    if not face:
+        raise ValueError(
+            "enqueue() requires face=: every request names which bot identity "
+            "acts on it, so a caller meaning one face can never silently reach "
+            "another. Pass face=paths.DEFAULT_FACE to mean Benham."
+        )
+    box = outbox_dir(face)  # validates the name; a traversal is unrepresentable
+    os.makedirs(box, exist_ok=True)
     req = dict(fields)
+    req["face"] = face
     req.setdefault("queued_at", datetime.now(timezone.utc).isoformat())
+    req.setdefault("source", " ".join(sys.argv[:2]).strip() or "unknown")
 
     name = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-    tmp = os.path.join(OUTBOX, name + ".json.tmp")
-    final = os.path.join(OUTBOX, name + ".json")
+    tmp = os.path.join(box, name + ".json.tmp")
+    final = os.path.join(box, name + ".json")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(req, f, indent=2)
     os.replace(tmp, final)  # atomic - the poller never sees a partial request
     return final
+
+
+def misdelivered(req, process_face):
+    """Why this request must NOT run in this process, or None if it may.
+
+    A pure decision function, wired at the one poll site in bot.py - the shape
+    the rooms build named before building ("assertive stubs, pure decision
+    functions"), so the wall is testable without a Discord harness. A process
+    polls only its own face's directory, so a mismatch means a file was moved
+    by hand or a path derivation broke; either way, acting as another identity
+    is the one thing a face must never do. A request with no face field is a
+    pre-faces file and runs on the primary, so nothing queued before the
+    upgrade is stranded.
+    """
+    req_face = req.get("face", paths.DEFAULT_FACE)
+    if req_face != process_face:
+        return (f"request names face {req_face!r} but this process runs as "
+                f"{process_face!r} - misdelivered, refusing to act as another "
+                "identity")
+    return None
 
 
 def wait_result(req_path, timeout=60):
@@ -98,11 +154,15 @@ def wait_result(req_path, timeout=60):
     request that Discord refuses lands in outbox/failed with the error, and a
     caller that never looks there walks away believing it succeeded.
     """
+    # The request's own directory says which face's outbox to watch - derived
+    # from the path rather than from the module constant, so a result is found
+    # beside its request whichever face carried it.
+    box = os.path.dirname(req_path)
     base = os.path.splitext(os.path.basename(req_path))[0]
     deadline = time.time() + timeout
     while time.time() < deadline:
         for d in RESULT_DIRS:
-            folder = os.path.join(OUTBOX, d)
+            folder = os.path.join(box, d)
             if not os.path.isdir(folder):
                 continue
             for fn in os.listdir(folder):

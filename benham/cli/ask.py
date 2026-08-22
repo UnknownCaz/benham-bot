@@ -34,6 +34,7 @@ import os
 import sys
 import time
 
+from benham import paths
 from benham.core import conversations, identity, outbox
 
 
@@ -149,7 +150,7 @@ def main(argv):
     # Delivered through the outbox so the RUNNING bot sends it - this process has no
     # Discord connection and should not grow one. advance_conversation's first beat
     # is the ask itself, so the same action that nudges and banks also delivers.
-    outbox.enqueue(action="advance_conversation", id=conv["id"])
+    outbox.enqueue(face=paths.DEFAULT_FACE, action="advance_conversation", id=conv["id"])
     slot = conversations.slot_of(conv["id"])
     total = len(conversations.queue_for(who))
     where = f" - slot {slot} of {total}" if total > 1 else ""
