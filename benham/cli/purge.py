@@ -2,15 +2,20 @@
 purge.py - bulk-delete messages older than N days.
 
 Usage:
-    python benham.py purge <channel_id> [--days N] [--scope channel|guild]
+    python benham.py purge <channel_id> [--days N] [--scope channel|guild] [--no-wait]
 
-    --days   default 7. Messages older than this are deleted.
-    --scope  "channel" (default) purges just that channel;
-             "guild" sweeps every text channel in the channel's guild.
+    --days     default 7. Messages older than this are deleted.
+    --scope    "channel" (default) purges just that channel;
+               "guild" sweeps every text channel in the channel's guild.
+    --no-wait  enqueue and exit without waiting for the result.
 
 Enqueues a {"action":"purge", ...} request into ./outbox. bot.py reports per-channel
 counts and any per-channel errors (a channel it lacks Manage Messages in is recorded
-rather than aborting the sweep) in outbox/sent/<name>_result.json.
+rather than aborting the sweep) in outbox/sent/<name>_result.json. By default this
+waits for that result and prints those counts and errors - they used to be written
+faithfully and shown to nobody - and exits non-zero when the whole request was
+refused. The wait is generous (5 min) because Discord deletes messages older than
+14 days one at a time; a timeout means still running, not failed.
 
 Deletion is PERMANENT. There is no undo, so the scope and day count are printed back
 before the request is queued. Discord itself refuses to bulk-delete messages older
@@ -23,16 +28,24 @@ could reach it - every other action had a script and this one didn't.
 
 import sys
 
-from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
+                                report_outcome, usage)
 
 DEFAULT_DAYS = 7
 SCOPES = ("channel", "guild")
 
+# A guild sweep with years-old messages deletes them one at a time; 60s would
+# report a healthy purge as missing. Same reasoning as do.py's pc_task carve-out.
+WAIT_TIMEOUT = 300
+
 
 def main(argv):
     console_utf8()
+    no_wait = "--no-wait" in argv
+    argv = [a for a in argv if a != "--no-wait"]
     if len(argv) < 2:
-        return usage("Usage: python benham.py purge <channel_id> [--days N] [--scope channel|guild]")
+        return usage("Usage: python benham.py purge <channel_id> [--days N] "
+                     "[--scope channel|guild] [--no-wait]")
 
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
@@ -74,7 +87,16 @@ def main(argv):
         scope=scope,
     )
     print(f"Queued purge request -> {final}")
-    return EXIT_OK
+    if no_wait:
+        return EXIT_OK
+    code, result = report_outcome(final, timeout=WAIT_TIMEOUT)
+    if code == EXIT_OK and result:
+        print(f"  deleted {result.get('deleted_total', '?')} message(s)")
+        for ch, n in (result.get("deleted_by_channel") or {}).items():
+            print(f"    {ch}: {n}")
+        for ch, err in (result.get("errors") or {}).items():
+            print(f"    {ch}: SKIPPED - {err}")
+    return code
 
 
 if __name__ == "__main__":

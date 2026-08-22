@@ -11,7 +11,12 @@ outbox/sent or outbox/failed with a result file.
 
 Discord only lets a bot DM a user who shares a guild with it and has not disabled
 DMs from server members. If that is not the case the request lands in
-outbox/failed with a Forbidden error rather than failing silently.
+outbox/failed with a Forbidden error - and by default this command waits for
+that result and exits non-zero with the error printed, so the refusal reaches
+the caller instead of only the archive. (Before 2026-08-21 it printed "Queued"
+and exited 0 either way; a spawned session once DM'd a nonexistent user, got a
+clean exit, and the 404 reached nobody.) --no-wait restores fire-and-forget;
+refusals then show up only in `python benham.py status`.
 
 ASKING A COLLABORATOR SOMETHING IS NOT THIS COMMAND'S JOB. A raw dm opens no
 conversation, so nothing tracks that a question is owed and nothing binds their
@@ -30,7 +35,8 @@ get past is a guard people route around in worse ways.
 import sys
 
 from benham.core import identity
-from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
+                                report_outcome, usage)
 
 # The bot's owner. Kept here rather than in a config file because dm.py is the
 # only thing that needs it; move it out if a second caller ever appears.
@@ -70,10 +76,11 @@ def _refuse_untracked_question(user_id, content):
 def main(argv):
     console_utf8()
     untracked = "--untracked" in argv
-    argv = [a for a in argv if a != "--untracked"]
+    no_wait = "--no-wait" in argv
+    argv = [a for a in argv if a not in ("--untracked", "--no-wait")]
     if len(argv) < 3:
         return usage('Usage: python benham.py dm <user_id|--tyler> "message text" '
-                     '[--untracked]')
+                     '[--untracked] [--no-wait]')
 
     if argv[1] == "--tyler":
         user_id = TYLER_ID
@@ -95,7 +102,10 @@ def main(argv):
 
     final = enqueue(action="dm", user_id=user_id, content=content)
     print(f"Queued DM -> {final}")
-    return EXIT_OK
+    if no_wait:
+        return EXIT_OK
+    code, _ = report_outcome(final)
+    return code
 
 
 if __name__ == "__main__":

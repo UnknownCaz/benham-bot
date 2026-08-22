@@ -17,11 +17,15 @@ at all.
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 
 from benham import paths
 OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
+
+# Where bot.py archives a processed request and its sibling _result.json.
+RESULT_DIRS = ("sent", "failed")
 
 # Conventional exit codes, shared by every CLI here:
 #   0 ok, 1 runtime failure, 2 usage error.
@@ -83,3 +87,61 @@ def enqueue(**fields):
         json.dump(req, f, indent=2)
     os.replace(tmp, final)  # atomic - the poller never sees a partial request
     return final
+
+
+def wait_result(req_path, timeout=60):
+    """Poll for the result file bot.py writes next to the archived request.
+
+    Returns (result_dict, "sent"|"failed") once the bot has answered, or
+    (None, None) after `timeout` seconds without one. Lived in do.py first;
+    moved here when it turned out every other enqueuer needed it too - a
+    request that Discord refuses lands in outbox/failed with the error, and a
+    caller that never looks there walks away believing it succeeded.
+    """
+    base = os.path.splitext(os.path.basename(req_path))[0]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for d in RESULT_DIRS:
+            folder = os.path.join(OUTBOX, d)
+            if not os.path.isdir(folder):
+                continue
+            for fn in os.listdir(folder):
+                if fn.startswith(base) and fn.endswith("_result.json"):
+                    with open(os.path.join(folder, fn), encoding="utf-8") as f:
+                        return json.load(f), d
+        time.sleep(0.5)
+    return None, None
+
+
+def report_outcome(req_path, timeout=60):
+    """Wait for the bot's verdict on one queued request and say what happened.
+
+    Returns (exit_code, result_dict_or_None). This is the default tail of every
+    enqueue-style CLI: before it existed, `send`/`dm`/`delete`/... printed
+    "Queued" and exited 0, so a request Discord refused was recorded faithfully
+    in outbox/failed and surfaced to nobody - the caller had no error to see
+    unless it hand-rolled result-file polling.
+
+    Three outcomes:
+      - archived to sent/:    one confirmation line, EXIT_OK
+      - archived to failed/:  the recorded error, EXIT_FAIL
+      - no result in time:    still queued (bot busy or down), EXIT_FAIL -
+        the request itself is unaffected and still runs when the bot gets to it
+    """
+    result, where = wait_result(req_path, timeout=timeout)
+    if result is None:
+        print(f"no result within {timeout}s. The request is still queued and "
+              f"will run when the bot gets to it; check outbox/sent/. "
+              f"(is bot.py running? `python benham.py status`)", file=sys.stderr)
+        return EXIT_FAIL, None
+    if where == "failed":
+        print(f"REFUSED: {result.get('error', '(no error recorded)')}",
+              file=sys.stderr)
+        return EXIT_FAIL, result
+    line = f"done: status={result.get('status', '?')}"
+    if result.get("message_id"):
+        line += f", message_id={result['message_id']}"
+    if result.get("channel"):
+        line += f", channel={result['channel']}"
+    print(line)
+    return EXIT_OK, result
