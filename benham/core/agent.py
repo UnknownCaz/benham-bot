@@ -51,13 +51,17 @@ from benham import paths
 # load_dotenv does not overwrite variables that are already set, so a real shell
 # environment variable still wins and loading twice is harmless.
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
-MEMORY_FILE = os.path.join(paths.STATE_DIR, "agent_memory.json")
+MEMORY_FILE = os.path.join(paths.process_state_dir(), "agent_memory.json")
 # The one shared personality file, also read by codesession.py (PC). Benham used
 # to be three different characters depending on how you reached him - a casual
 # "one of the guys" in voice, something terser in DMs - which is a strange thing
 # for a proxy that is supposed to be one person. brain.py was the third reader
 # until voice was archived on 2026-08-16; two surfaces share it now.
-PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "persona.md")
+# Per-face since PLAN-second-face commit 9: the primary face reads exactly
+# prompts/persona.md as always; a named face reads prompts/faces/<name>/.
+# The Hard-rules block stays shared and identical across faces - it is the
+# prompt-level half of the security story, and a per-face copy would drift.
+PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))
@@ -74,7 +78,7 @@ SEARCHES_PER_TURN = int(_cfg.get("searches_per_turn", 3))
 # Separate from guest_searches.jsonl on purpose: one file per surface, so a glance
 # at a line never needs the role field to tell you whose query it was, and a
 # moderation pass over guest traffic is not diluted by Tyler's own lookups.
-SEARCH_LOG = os.path.join(paths.STATE_DIR, "agent_searches.jsonl")
+SEARCH_LOG = os.path.join(paths.process_state_dir(), "agent_searches.jsonl")
 
 _client = None
 _last_call = {}          # conversation key -> monotonic time

@@ -55,6 +55,7 @@ from benham.core import jsonio
 from benham.core import loopclose
 from benham.core import msgparts
 from benham.core import notify
+from benham.core import outbox
 from benham.core import policy
 from benham.core import rooms
 
@@ -64,11 +65,19 @@ except Exception:  # noqa: BLE001
     audioop = None
 
 from benham import paths
-OUTBOX = os.path.join(paths.STATE_DIR, "outbox")
+
+# Which face this process runs as: BENHAM_FACE in the environment, resolved
+# and validated in paths.py before any store computed a path. Absent means the
+# primary face, and every path below resolves to exactly what it always did.
+# The supervisor learns to SET the variable at commit 11; the config block and
+# token that make a second face real arrive at commit 12.
+FACE = paths.PROCESS_FACE
+
+OUTBOX = outbox.outbox_dir(FACE)
 SENT = os.path.join(OUTBOX, "sent")
 FAILED = os.path.join(OUTBOX, "failed")
-CHANNELS_FILE = os.path.join(paths.STATE_DIR, "channels.json")
-INBOX_FILE = os.path.join(paths.STATE_DIR, "inbox.jsonl")
+CHANNELS_FILE = os.path.join(paths.process_state_dir(), "channels.json")
+INBOX_FILE = os.path.join(paths.process_state_dir(), "inbox.jsonl")
 
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))  # must precede env reads below
 
@@ -482,10 +491,12 @@ def _named(people):
 
 @client.event
 async def on_ready():
-    log(f"Logged in as {client.user} (id {client.user.id})")
+    # The face comes first: with two processes possible, "which bot am I
+    # looking at" is the question this log answers before any other.
+    log(f"Logged in as {client.user} (id {client.user.id}) — face: {FACE}")
 
     # --- control plane (identity.py / control.json) ---
-    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — Benham takes direction from these only")
+    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — {FACE} takes direction from these only")
     log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
         f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
@@ -2057,6 +2068,13 @@ async def poll_outbox():
                 req = json.load(f)
             action = req.get("action", "send")
 
+            # A request names which face acts on it (commit 5); the decision
+            # itself is outbox.misdelivered, pure and tested. Raising here
+            # lands the file in failed/ with the reason on the record.
+            _mis = outbox.misdelivered(req, FACE)
+            if _mis:
+                raise ValueError(_mis)
+
             # --- capability-registry actions (capabilities.py) ---
             # The legacy names below (send/dm/speak/edit/delete/history/purge) predate
             # the registry and keep their own handling; everything added since is
@@ -2066,7 +2084,8 @@ async def poll_outbox():
             if action in capabilities.REGISTRY:
                 act = capabilities.REGISTRY[action]
                 params = {k: v for k, v in req.items()
-                          if k not in ("action", "queued_at", "confirm_token", "actor_id")}
+                          if k not in ("action", "queued_at", "confirm_token",
+                                       "actor_id", "face", "source")}
                 token = req.get("confirm_token")
 
                 if act.needs_confirm and not token:
@@ -2353,11 +2372,42 @@ def configure_logging():
     root.setLevel(logging.INFO)
 
 
+def _launch_face_problem(argv, process_face):
+    """Why this launch line must not proceed, or None. Pure, for the tests.
+
+    The supervisor launches non-primary faces with a `--face <name>` argv
+    marker so process matching can tell two faces apart (a CommandLine query
+    cannot see BENHAM_FACE). The marker is NOT the mechanism - the env var
+    is - so a marker that disagrees with the env is a misconfigured launch,
+    and running as either face on a guess is the misdelivery the whole design
+    refuses. Absent marker means nothing: every legacy launch line.
+    """
+    if "--face" in argv:
+        i = argv.index("--face")
+        if i + 1 >= len(argv):
+            return "--face marker with no name after it"
+        marked = argv[i + 1]
+        if marked != process_face:
+            return (f"launch line says --face {marked!r} but BENHAM_FACE "
+                    f"resolves to {process_face!r} - refusing to run as either "
+                    "on a guess")
+    return None
+
+
 def main():
     console_utf8()
-    token = os.environ.get("BOT_KEY")
-    if not token:
-        raise SystemExit("BOT_KEY not set — put it in environ.env as BOT_KEY=<token>")
+    problem = _launch_face_problem(sys.argv[1:], FACE)
+    if problem:
+        raise SystemExit(problem)
+    # Rule 3 of the faces design: a face that cannot authenticate refuses to
+    # boot, in words. For the primary face on a legacy config this reads
+    # BOT_KEY exactly as it always did.
+    problem = identity.face_boot_problem(FACE)
+    if problem:
+        raise SystemExit(
+            f"{problem} — put it in environ.env, or launch a face the "
+            "control plane declares.")
+    token = os.environ.get(identity.face_gates(FACE)["token_env"])
     configure_logging()
     # log_handler=None stops discord.py installing a handler of its own. Its records
     # still propagate to the root handler set up above, so the gateway diagnostics

@@ -64,10 +64,10 @@ from benham import paths
 load_dotenv(os.path.join(paths.CONFIG_DIR, "environ.env"))
 
 # Deliberately NOT agent_memory.json. See the module docstring.
-MEMORY_FILE = os.path.join(paths.STATE_DIR, "guest_memory.json")
-USAGE_FILE = os.path.join(paths.STATE_DIR, "guest_usage.json")
-PERSONA_FILE = os.path.join(paths.PROMPTS_DIR, "guest_persona.md")
-SEARCH_LOG = os.path.join(paths.STATE_DIR, "guest_searches.jsonl")
+MEMORY_FILE = os.path.join(paths.process_state_dir(), "guest_memory.json")
+USAGE_FILE = os.path.join(paths.process_state_dir(), "guest_usage.json")
+PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "guest_persona.md")
+SEARCH_LOG = os.path.join(paths.process_state_dir(), "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
 MODEL = _CFG.get("model") or "claude-haiku-4-5"
@@ -108,7 +108,7 @@ _last_call = {}          # user_id -> monotonic timestamp of last accepted messa
 
 QUIET_DEFAULT_MINUTES = 60
 QUIET_MAX_MINUTES = 240
-QUIET_FILE = os.path.join(paths.STATE_DIR, "guest_quiet.json")
+QUIET_FILE = os.path.join(paths.process_state_dir(), "guest_quiet.json")
 
 _quiet = None            # user_id -> time.time() deadline; None until first touch
 _quiet_lock = threading.Lock()

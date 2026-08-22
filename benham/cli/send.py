@@ -14,6 +14,7 @@ only in `python benham.py status`.
 
 import sys
 
+from benham import paths
 from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
                                 report_outcome, usage)
 
@@ -32,7 +33,7 @@ def main(argv):
     content = " ".join(argv[2:])
 
     # No "action" key on purpose: bot.py defaults to "send".
-    final = enqueue(channel_id=channel_id, content=content)
+    final = enqueue(face=paths.PROCESS_FACE, channel_id=channel_id, content=content)
     print(f"Queued -> {final}")
     if no_wait:
         return EXIT_OK

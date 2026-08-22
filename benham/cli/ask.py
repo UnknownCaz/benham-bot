@@ -34,6 +34,7 @@ import os
 import sys
 import time
 
+from benham import paths
 from benham.core import caller, conversations, identity, outbox
 
 
@@ -119,7 +120,7 @@ def main(argv):
         for c in waiting:
             print(f"  {c['id']}: {c['question'][:80]}", file=sys.stderr)
             print(f"     -> {str(c.get('answer',''))[:140]}", file=sys.stderr)
-        print("  (act on it, then: python benham.py conv close <id> \"what happened\")",
+        print(f"  (act on it, then: python benham.py conv close <id> \"what happened\" --face {paths.PROCESS_FACE})",
               file=sys.stderr)
         print("", file=sys.stderr)
     if a.queue:
@@ -153,14 +154,14 @@ def main(argv):
     # Delivered through the outbox so the RUNNING bot sends it - this process has no
     # Discord connection and should not grow one. advance_conversation's first beat
     # is the ask itself, so the same action that nudges and banks also delivers.
-    outbox.enqueue(action="advance_conversation", id=conv["id"])
+    outbox.enqueue(face=paths.PROCESS_FACE, action="advance_conversation", id=conv["id"])
     slot = conversations.slot_of(conv["id"])
     total = len(conversations.queue_for(who))
     where = f" - slot {slot} of {total}" if total > 1 else ""
     print(f"asked {who} ({conv['id']}, {a.priority}{where}): {a.question}")
 
     if a.no_wait:
-        print(f"not waiting - read it later with: python benham.py conv show {conv['id']}")
+        print(f"not waiting - read it later with: python benham.py conv show {conv['id']} --face {paths.PROCESS_FACE}")
         return 0
 
     deadline = time.time() + max(10, int(a.timeout))
