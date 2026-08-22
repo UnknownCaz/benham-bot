@@ -2372,11 +2372,42 @@ def configure_logging():
     root.setLevel(logging.INFO)
 
 
+def _launch_face_problem(argv, process_face):
+    """Why this launch line must not proceed, or None. Pure, for the tests.
+
+    The supervisor launches non-primary faces with a `--face <name>` argv
+    marker so process matching can tell two faces apart (a CommandLine query
+    cannot see BENHAM_FACE). The marker is NOT the mechanism - the env var
+    is - so a marker that disagrees with the env is a misconfigured launch,
+    and running as either face on a guess is the misdelivery the whole design
+    refuses. Absent marker means nothing: every legacy launch line.
+    """
+    if "--face" in argv:
+        i = argv.index("--face")
+        if i + 1 >= len(argv):
+            return "--face marker with no name after it"
+        marked = argv[i + 1]
+        if marked != process_face:
+            return (f"launch line says --face {marked!r} but BENHAM_FACE "
+                    f"resolves to {process_face!r} - refusing to run as either "
+                    "on a guess")
+    return None
+
+
 def main():
     console_utf8()
-    token = os.environ.get("BOT_KEY")
-    if not token:
-        raise SystemExit("BOT_KEY not set — put it in environ.env as BOT_KEY=<token>")
+    problem = _launch_face_problem(sys.argv[1:], FACE)
+    if problem:
+        raise SystemExit(problem)
+    # Rule 3 of the faces design: a face that cannot authenticate refuses to
+    # boot, in words. For the primary face on a legacy config this reads
+    # BOT_KEY exactly as it always did.
+    problem = identity.face_boot_problem(FACE)
+    if problem:
+        raise SystemExit(
+            f"{problem} — put it in environ.env, or launch a face the "
+            "control plane declares.")
+    token = os.environ.get(identity.face_gates(FACE)["token_env"])
     configure_logging()
     # log_handler=None stops discord.py installing a handler of its own. Its records
     # still propagate to the root handler set up above, so the gateway diagnostics

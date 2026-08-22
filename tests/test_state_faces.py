@@ -143,6 +143,24 @@ if proc.returncode == 0:
 else:
     print(f"      stderr: {proc.stderr[-600:]}")
 
+# --- the launch marker (commit 11) ------------------------------------------
+# The supervisor marks non-primary launch lines with `--face <name>` so
+# process matching can tell faces apart; the env var stays the mechanism, and
+# a launch whose marker disagrees with the environment refuses to run as
+# either. Pure function, held to here the way misdelivered() is.
+
+from benham import bot as _bot  # noqa: E402 - after _testconfig, deliberately
+
+check("a markerless launch is every legacy launch: no problem",
+      _bot._launch_face_problem([], "benham"), None)
+check("a marker agreeing with the environment: no problem",
+      _bot._launch_face_problem(["--face", "codex"], "codex"), None)
+_lp = _bot._launch_face_problem(["--face", "codex"], "benham")
+check("a marker DISAGREEING with the environment refuses", _lp is not None, True)
+check("...naming both faces", "codex" in (_lp or "") and "benham" in (_lp or ""), True)
+check("a dangling marker refuses",
+      _bot._launch_face_problem(["--face"], "benham") is not None, True)
+
 # --- benham.py requires --face on every call (commit 10) --------------------
 # Tyler's decision, the safer-more-annoying option: which identity a command
 # acts as is said, never guessed. One parse point in benham.py, flowing
