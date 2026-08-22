@@ -57,15 +57,33 @@ Measured from `state/outbox/sent`, today:
 
 **Commit 12 gets simpler and its precondition gets harder.** With Codex holding admin, Benham drops Next Big Novel *entirely* - agent, destructive and post - so the `post_guilds` question I got wrong dissolves on its own. But: **Benham's scopes on that guild must not change until (a) the restructure is confirmed finished AND (b) Codex is live and proven able to do that work.** Between those two points the capability gap would be real.
 
-### Related, found while tracing: Benham is already hitting a wall in that server
+### Related, found while tracing - and my first diagnosis of it was WRONG
 
-**38 of today's `set_channel_permissions` requests FAILED** (44 failures total). The cause is not a bug here - it is Discord:
+38 `set_channel_permissions` calls failed in that guild today. I reported them as current,
+unnoticed, and caused by role hierarchy. **All three were wrong.** The session that made those
+calls had already diagnosed and fixed them hours earlier; the new roles sat at position 1 with
+Benham at position 3, so Benham was always *above* what it was editing.
 
-> `ActionError: Discord refused set_channel_permissions: Benham's role lacks the permission for it in that server (Missing Access / Missing Permissions)`
+**The real mechanism, and it matters because it is squarely Codex's future job:** that session
+denied `@everyone` `view_channel` on a category **before** granting Benham an explicit allow.
+Benham's access to those channels ran through `@everyone`, so the deny cost it view - and
+without view it could no longer edit overwrites, move the channel, or undo its own change.
+Self-inflicted, one-way from the bot side, only a human grant could recover it.
 
-Benham's **role** in Next Big Novel is under-privileged for the work being asked of it. That is a Discord role setting, fixable in seconds by someone with admin there, and it is worth knowing before deciding who holds admin going forward.
+**Rule for Codex's permission work: apply allows FIRST, verify the returned overwrite actually
+contains them, and only then fire any deny. Never infer success from readability.**
 
----
+**Gotcha for whoever writes the verifier: discord.py returns `view_channel` as `read_messages`**
+- same permission bit, `view_channel` is an alias. Grepping a `before` payload for the literal
+string `"view_channel"` reports 100% false drift.
+
+**Status: that restructure is finished and verified** - re-applied as an idempotent check,
+35/35 already correct, 0 errors. Benham currently holds full permissions on that guild because
+Tyler granted them to clear the lockout above.
+
+**What survived from my report, and it is the part that matters:** those 38 failures were
+visible to me at all only because they sat in `outbox/failed/` where nothing surfaces them.
+See the commit 5 note.
 
 ## Phase 1 - Foundations (no behaviour change at all)
 
@@ -94,7 +112,11 @@ Benham's **role** in Next Big Novel is under-privileged for the work being asked
 
 **5. Outbox per face.** Two path constants derive from the face; `enqueue()` **requires** `face=` (your answer: `--face` on every call). ~0.5 half-days, high.
 
-> **CONFIRMED for this commit: outbox provenance + failure reasons, both.** Working out that the 22:46 post belonged to a restructure took reading action types and clustering timestamps, because **no request file records who enqueued it**. With two faces that gets worse, not better. `enqueue()` is already being opened here for the required `face=`, so **a `source` field is nearly free at the same time** - and the same gap has a sibling: a request that lands in `outbox/failed/` **does not record why it failed**. I had to go to the bot log to learn that 38 permission calls were refused by Discord. Both are one-line fixes while this file is open, and both are **in this commit** per your answer. Bumps commit 5 to ~0.75 half-days.
+> **CONFIRMED for this commit: outbox provenance + failure reasons - and a third thing that is now the most valuable of them.**
+> Working out who enqueued the 22:46 post took clustering timestamps, because **no request file records who enqueued it**; working out why 38 requests failed took reading the bot log, because **a request in `outbox/failed/` does not record why it died**. Both are one-liners while `enqueue()` is open for the required `face=`.
+>
+> **But the real gap is bigger than either: the fire-and-forget enqueue path never surfaces a failure back to the caller.** A request fails, lands in `failed/`, and whoever asked for it is never told. **With two faces that is worse, not better** - a coordinator whose permission edits silently no-op is a specific, foreseeable disaster.
+> **Two narrowings since first written (2026-08-22), both of which shrink this commit.** First, the gap is narrower than reported: `do.py`'s wait path already blocks on the result and exits non-zero, so the blind spot is the fire-and-forget path only. Second, **a separate session owns fixing it in code - it is not part of this plan.** Commit 5 keeps the two one-liners (~0.75 half-days) and rebases on whatever that fix does to `enqueue()`; result-surfacing is off this plan's books. The question this note used to ask you is withdrawn - it has an owner.
 
 **6. The nine per-face stores.** `agent_memory`, `agent_searches`, `guest_memory`, `guest_usage`, `guest_quiet`, `guest_searches`, `channels.json`, `inbox.jsonl`, plus `repair_memory.py --face`. **Migration is `mkdir` + `mv`** - the classification is already done and `agent_memory` is empty as of tonight's purge, so there is almost nothing to move. ~2 half-days, medium-high.
 
@@ -133,6 +155,10 @@ After commits **2, 3, 4, 6, 7, 9, 12**. Commits 1, 5, 8, 10, 11 are inert until 
 
 ## Total
 
-**~13.5 half-days (~7 dev days)**, medium-high. Up from 11-13 because your reduced-capability answer added commit 4 - which I think is the right trade: one half-day now for a second identity that cannot purge a channel.
+**~13.75 half-days (~7 dev days)**, medium-high. Up from 11-13 because your reduced-capability answer added commit 4 - which I think is the right trade: one half-day now for per-face grants that keep Codex's tier 3 confined to the one server it coordinates.
+
+## The handoff file
+
+`HANDOFF-second-face.md` carries its own expiry and this plan owns pulling the trigger: **delete it when commit 13 is verified, or the moment the second face is abandoned**, moving anything still true into `INTENT.md` first. No separate task tracks this - a trigger-gated chip for it was retired as premature, so if this plan is rejected, deleting the handoff (and marking these PLAN docs superseded) is part of the rejection.
 
 **Sequence is yours to approve, change, or reorder.**
