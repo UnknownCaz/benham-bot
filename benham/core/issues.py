@@ -57,6 +57,11 @@ from benham.core import jsonio
 from benham.core import msgparts
 
 ISSUES_FILE = os.path.join(paths.STATE_DIR, "guest_issues.jsonl")
+
+# Who issue records say did the filing: the face this process runs as.
+# "Benham" was hardcoded in three signatures until PLAN-second-face commit 9;
+# a Codex filing attributed to Benham is the name leak the spike flagged.
+FILED_BY = paths.PROCESS_FACE.capitalize()
 OFFERS_FILE = os.path.join(paths.STATE_DIR, "issue_offers.json")
 
 # category -> (github label, title prefix). "want" is Tyler's word for a guest-
@@ -473,7 +478,7 @@ def mark_told(url, outcome):
 
 
 def build_body(category, quote, *, guest_name=None, guest_id=None,
-               filed_by="Benham", context=None):
+               filed_by=FILED_BY, context=None):
     """The issue body - machine-written frame, guest text fenced as DATA.
 
     The header is written by THIS code, never the model, because future Claude
@@ -503,7 +508,7 @@ def build_body(category, quote, *, guest_name=None, guest_id=None,
 
 
 def record_unsent(category, quote, *, guest_id=None, guest_name=None,
-                  filed_by="Benham", project=None, reason=None):
+                  filed_by=FILED_BY, project=None, reason=None):
     """Record a report that could NOT reach GitHub, so it is not lost.
 
     The last line of defence behind file_guest_report's fallback: called only
@@ -609,7 +614,7 @@ def _run_gh(args, timeout=30):
 
 
 def file_issue(category, title, quote, *, guest_id=None, guest_name=None,
-               filed_by="Benham", project=None, context=None,
+               filed_by=FILED_BY, project=None, context=None,
                count_against_cap=True):
     """File one issue. Returns (ok, url_or_reason).
 
