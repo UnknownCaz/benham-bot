@@ -23,7 +23,8 @@ import json
 import os
 import sys
 
-from benham.core.outbox import EXIT_OK, console_utf8, enqueue, parse_ids, usage
+from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
+                                report_outcome, usage)
 
 from benham import paths
 
@@ -49,8 +50,11 @@ def resolve_channel(channel_id):
 
 def main(argv):
     console_utf8()
+    no_wait = "--no-wait" in argv
+    argv = [a for a in argv if a != "--no-wait"]
     if len(argv) < 3:
-        return usage('Usage: python benham.py draft <target_channel_id> "reply text"')
+        return usage('Usage: python benham.py draft <target_channel_id> "reply text" '
+                     '[--no-wait]')
     ids, err = parse_ids(argv[1:2], ["target_channel_id"])
     if err:
         return usage(err)
@@ -77,7 +81,12 @@ def main(argv):
     print("  review it in Discord, then to send for real run:")
     # Quote the content so it survives the shell as one argument.
     print(f'    python benham.py send {target_id} "{content}"')
-    return EXIT_OK
+    if no_wait:
+        return EXIT_OK
+    # A draft nobody can see is a review that never happens - wait for the
+    # review-channel post to actually land, like every other enqueuer.
+    code, _ = report_outcome(final)
+    return code
 
 
 if __name__ == "__main__":

@@ -22,13 +22,10 @@ between the two calls invalidates it rather than silently running something else
 import json
 import os
 import sys
-import time
 
 from benham.core import capabilities  # noqa: F401 — imported for its registration side effects
 from benham.core import identity
 from benham.core import outbox
-
-RESULT_DIRS = ("sent", "failed")
 
 
 def _print_list(argv):
@@ -87,23 +84,6 @@ def _parse_kv(pairs):
     return out, None
 
 
-def _wait_for_result(req_path, timeout=60):
-    """Poll for the result file bot.py writes next to the archived request."""
-    base = os.path.splitext(os.path.basename(req_path))[0]
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        for d in RESULT_DIRS:
-            folder = os.path.join(outbox.OUTBOX, d)
-            if not os.path.isdir(folder):
-                continue
-            for fn in os.listdir(folder):
-                if fn.startswith(base) and fn.endswith("_result.json"):
-                    with open(os.path.join(folder, fn), encoding="utf-8") as f:
-                        return json.load(f), d
-        time.sleep(0.5)
-    return None, None
-
-
 def main(argv):
     outbox.console_utf8()
     if not argv or argv[0] in ("-h", "--help", "help") and len(argv) == 1:
@@ -136,7 +116,7 @@ def main(argv):
     # bot as dead. The request itself is unaffected either way - it stays queued
     # and the bot still runs it - but the message printed here would be a lie.
     timeout = 1800 if name == "pc_task" else 60
-    result, where = _wait_for_result(path, timeout=timeout)
+    result, where = outbox.wait_result(path, timeout=timeout)
     if result is None:
         print(f"no result within {timeout}s. The request is still queued and will "
               f"run when the bot gets to it; check outbox/sent/. "

@@ -2048,6 +2048,10 @@ async def poll_outbox():
         # especially the success log() -- is bookkeeping that must never be able to
         # turn a completed action into a FAILED one.
         action_done = False
+        # Pre-set so the failure handler can name what was attempted even when
+        # the request file itself would not parse.
+        req = None
+        action = None
         try:
             with open(path, "r", encoding="utf-8") as f:
                 req = json.load(f)
@@ -2266,6 +2270,13 @@ async def poll_outbox():
                 log(traceback.format_exc())
                 continue
             result.update({"status": "failed", "error": f"{type(e).__name__}: {e}"})
+            # Name what failed. Every success path records action and request;
+            # the failure record - the one whose whole job is to be read later -
+            # carried neither, so `status` had to label every refusal "send".
+            if action is not None:
+                result.setdefault("action", action)
+            if req is not None:
+                result.setdefault("request", req)
             log(f"FAILED {fname}: {result['error']}")
             log(traceback.format_exc())
             _finish(path, fname, FAILED, result)

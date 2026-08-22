@@ -226,7 +226,7 @@ for servers flagged `watch: true`.
 
 Plain text messages are **not** command-triggered: the bot records what it sees to `inbox.jsonl`
 and only engages when addressed - an owner DM or an @-mention, or a guest DM if guest chat is on.
-No plain message engages the model on its own; the wake-word path that used to went with voice.
+No plain message engages the model on its own; the wake-word path that used to go with voice.
 The autonomous triggers that DO exist read no chat at all: the 60-second conversation tick
 (nudges, banks and delivers asks via `advance_conversation`, the one outward action SYSTEM can
 reach) and the exaroton watchdog. The manual audit caught this sentence claiming there were none.
