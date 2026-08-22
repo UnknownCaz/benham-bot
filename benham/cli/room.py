@@ -37,10 +37,14 @@ def main(argv):
     p_post = sub.add_parser("post", help="Leave a message (rides the outbox)")
     p_post.add_argument("name")
     p_post.add_argument("text")
+    p_post.add_argument("--no-wait", action="store_true",
+                        help="enqueue and exit without waiting for the result")
 
     p_create = sub.add_parser("create", help="Create a room (rides the outbox)")
     p_create.add_argument("name")
     p_create.add_argument("purpose", nargs="?", default="")
+    p_create.add_argument("--no-wait", action="store_true",
+                          help="enqueue and exit without waiting for the result")
 
     args = ap.parse_args(argv)
 
@@ -72,7 +76,10 @@ def main(argv):
                               text=args.text)
         print(f"queued -> {path}\n(the bot appends it within ~2s; nothing is "
               "woken - v1 rooms are pull-only)")
-        return 0
+        if args.no_wait:
+            return 0
+        code, _ = outbox.report_outcome(path)
+        return code
 
     if args.cmd == "create":
         if not store.valid_name(args.name):
@@ -82,7 +89,10 @@ def main(argv):
         path = outbox.enqueue(action="create_room", name=args.name,
                               purpose=args.purpose)
         print(f"queued -> {path}")
-        return 0
+        if args.no_wait:
+            return 0
+        code, _ = outbox.report_outcome(path)
+        return code
 
     return 2
 
