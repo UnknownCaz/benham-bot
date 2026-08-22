@@ -27,7 +27,10 @@ Source layout (since the Aug 2026 reorg): the `benham/` package holds all code â
 `benham/core/` (shared libraries), `benham/cli/` (one module per command), `benham/guest/`
 (the guest lane), `benham/bot.py` (the process), `benham/paths.py` (the one module that knows
 where every file lives). `benham.py` at the root is the CLI dispatcher; `python benham.py --help`
-is the command catalog. Non-code splits by who writes it: `config/` (hand-edited), `state/`
+is the command catalog. **Every command requires `--face <name>`** - `--face benham` for the
+usual bot - because with two faces possible, which identity a command acts as is said, never
+guessed (PLAN-second-face commit 10; `BENHAM_FACE` in the environment also satisfies it). The
+command tables below omit the flag for readability; add it to anything you actually run. Non-code splits by who writes it: `config/` (hand-edited), `state/`
 (bot-written, never committed), `prompts/` (personas + guardrails), `logs/`, `scripts/`
 (supervisor, tray, Task Scheduler exports, `gen_readme.py`), `tests/`.
 
@@ -100,11 +103,11 @@ message content anywhere can talk its way into a delete. Expiry means cancelled;
 assent.
 
 ```bash
-python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test"
+python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test" --face benham
 #   --- DRY RUN, nothing has happened ---
 #   Delete 1 messages from #asd in Testing Server
 #   ... To run it for real, repeat with: confirm_token=80ac01
-python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test" confirm_token=80ac01
+python benham.py do purge_messages channel_id=809357286036078612 limit=20 contains="test" confirm_token=80ac01 --face benham
 ```
 
 ## PC access - a real Claude Code session
@@ -234,9 +237,9 @@ reach) and the exaroton watchdog. The manual audit caught this sentence claiming
 ### Example - reply to a friend, review-first
 
 ```
-python benham.py catchup 1525016583305429072 15                              # read recent #minecraft-chat
-python benham.py draft 1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # DRAFT -> Testing #asd
-python benham.py send  1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me"   # after you eyeball it
+python benham.py catchup 1525016583305429072 15 --face benham                            # read recent #minecraft-chat
+python benham.py draft 1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me" --face benham # DRAFT -> Testing #asd
+python benham.py send  1525016583305429072 "world's up at UnknownCaz-Gt25.exaroton.me" --face benham # after you eyeball it
 ```
 
 ## Safety model

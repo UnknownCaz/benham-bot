@@ -143,6 +143,43 @@ if proc.returncode == 0:
 else:
     print(f"      stderr: {proc.stderr[-600:]}")
 
+# --- benham.py requires --face on every call (commit 10) --------------------
+# Tyler's decision, the safer-more-annoying option: which identity a command
+# acts as is said, never guessed. One parse point in benham.py, flowing
+# through the same BENHAM_FACE variable the stores already read.
+
+_benham_py = os.path.join(_root, "benham.py")
+_no_env = {k: v for k, v in os.environ.items() if k != "BENHAM_FACE"}
+_no_env["PYTHONIOENCODING"] = "utf-8"
+
+p = subprocess.run([sys.executable, _benham_py, "rooms"],
+                   capture_output=True, text=True, env=_no_env, timeout=120,
+                   cwd=_root)
+check("a bare command is refused", p.returncode, 2)
+check("...and the error teaches the fix", "--face benham" in p.stderr, True)
+
+p = subprocess.run([sys.executable, _benham_py, "rooms", "--face", "Codex!"],
+                   capture_output=True, text=True, env=_no_env, timeout=120,
+                   cwd=_root)
+check("an invalid --face is refused loudly", p.returncode, 2)
+check("...naming the bad value", "Codex!" in p.stderr, True)
+
+p = subprocess.run([sys.executable, _benham_py, "rooms", "--face", "benham"],
+                   capture_output=True, text=True, env=_no_env, timeout=120,
+                   cwd=_root)
+check("--face benham runs the command", p.returncode, 0)
+
+p = subprocess.run([sys.executable, _benham_py, "rooms"],
+                   capture_output=True, text=True, timeout=120, cwd=_root,
+                   env=dict(_no_env, BENHAM_FACE="benham"))
+check("BENHAM_FACE in the environment satisfies the requirement - that is "
+      "how the supervisor will launch face processes", p.returncode, 0)
+
+p = subprocess.run([sys.executable, _benham_py, "--help"],
+                   capture_output=True, text=True, env=_no_env, timeout=120,
+                   cwd=_root)
+check("--help stays reachable without a face", p.returncode, 0)
+
 # --- a typo'd face refuses the interpreter, never runs as the primary -------
 
 env_bad = dict(os.environ, BENHAM_FACE="Codex!", PYTHONIOENCODING="utf-8")

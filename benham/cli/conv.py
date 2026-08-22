@@ -128,7 +128,7 @@ def main(argv):
                 fields = {"action": "tell_conversation", "id": c["id"]}
                 if a.note:
                     fields["note"] = a.note
-                outbox.enqueue(face=paths.DEFAULT_FACE, **fields)
+                outbox.enqueue(face=paths.PROCESS_FACE, **fields)
                 print(f"queued the outcome to {c['counterparty']} - "
                       f"`conv show {c['id']}` will show a counterparty-told event "
                       "once it lands")

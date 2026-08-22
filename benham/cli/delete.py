@@ -36,7 +36,7 @@ def main(argv):
         return usage(err)
     channel_id, message_id = ids
 
-    final = enqueue(face=paths.DEFAULT_FACE, action="delete", channel_id=channel_id, message_id=message_id)
+    final = enqueue(face=paths.PROCESS_FACE, action="delete", channel_id=channel_id, message_id=message_id)
     print(f"Delete request queued -> {final}")
     print(f"  channel {channel_id}, message {message_id}")
     if no_wait:

@@ -174,7 +174,7 @@ def run(dry_run=False, limit=MAX_PER_RUN):
             item["sent"] = False
             done.append(item)
             continue
-        outbox.enqueue(face=paths.DEFAULT_FACE, action="dm", user_id=int(entry["author_id"]),
+        outbox.enqueue(face=paths.PROCESS_FACE, action="dm", user_id=int(entry["author_id"]),
                        content=item["message"])
         issues.mark_told(entry["url"], item["outcome"])
         cid = entry.get("conversation")

@@ -73,7 +73,7 @@ def main(argv):
             print(f"no room named {args.name!r} - create_room is explicit, "
                   "never implicit. `python benham.py rooms` lists what exists.")
             return 1
-        path = outbox.enqueue(face=paths.DEFAULT_FACE, action="post_room", name=args.name,
+        path = outbox.enqueue(face=paths.PROCESS_FACE, action="post_room", name=args.name,
                               text=args.text)
         print(f"queued -> {path}\n(the bot appends it within ~2s; nothing is "
               "woken - v1 rooms are pull-only)")
@@ -87,7 +87,7 @@ def main(argv):
             print(f"{args.name!r} is not a valid room name - lowercase kebab, "
                   "max 40 chars.")
             return 1
-        path = outbox.enqueue(face=paths.DEFAULT_FACE, action="create_room", name=args.name,
+        path = outbox.enqueue(face=paths.PROCESS_FACE, action="create_room", name=args.name,
                               purpose=args.purpose)
         print(f"queued -> {path}")
         if args.no_wait:
