@@ -54,7 +54,10 @@ DEFAULT_FACE = "benham"
 _FACE_ALPHABET = set("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
-def _check_face(face):
+def check_face(face):
+    """Raise ValueError unless `face` is a legal face name. Public on purpose:
+    identity.py validates config-declared names against the same rule that
+    guards the filesystem, so the two can never disagree about what a face is."""
     if (
         not isinstance(face, str)
         or not face
@@ -65,6 +68,9 @@ def _check_face(face):
         raise ValueError(
             f"invalid face name {face!r}: lowercase kebab, starts with a letter, max 40 chars"
         )
+
+
+_check_face = check_face  # the functions below predate the public name
 
 
 def state_for(face=DEFAULT_FACE):
