@@ -107,36 +107,44 @@ class CallContext:
     the start of a conversation and gated after Benham has read a channel.
     """
 
-    __slots__ = ("origin", "actor_id", "guild_id", "channel_id", "tainted")
+    __slots__ = ("origin", "actor_id", "guild_id", "channel_id", "tainted", "face")
 
     def __init__(self, origin, actor_id=None, guild_id=None, channel_id=None,
-                 tainted=False):
+                 tainted=False, face=None):
         self.origin = origin
         self.actor_id = actor_id
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.tainted = tainted
+        # Which bot identity this call acts AS (PLAN-second-face commit 3).
+        # Resolved at construction rather than carried as None, so every rule
+        # and every repr sees a real name. None means the primary face because
+        # every pre-faces call site in the tree is a Benham call site - and the
+        # copies below must CARRY it: a copy that quietly reverted to the
+        # primary face would be the with_taint bug with a different field.
+        self.face = face or identity.PRIMARY_FACE
 
     # Constructors named for the call site, so reading bot.py tells you the origin
     # without having to remember which string means what.
 
     @classmethod
-    def owner_dm(cls, actor_id, channel_id=None, tainted=False):
+    def owner_dm(cls, actor_id, channel_id=None, tainted=False, face=None):
         return cls(Origin.OWNER_DM, actor_id=actor_id, channel_id=channel_id,
-                   tainted=tainted)
+                   tainted=tainted, face=face)
 
     @classmethod
-    def owner_guild(cls, actor_id, guild_id, channel_id=None, tainted=False):
+    def owner_guild(cls, actor_id, guild_id, channel_id=None, tainted=False,
+                    face=None):
         return cls(Origin.OWNER_GUILD, actor_id=actor_id, guild_id=guild_id,
-                   channel_id=channel_id, tainted=tainted)
+                   channel_id=channel_id, tainted=tainted, face=face)
 
     @classmethod
-    def owner_voice(cls, actor_id, guild_id, channel_id=None):
+    def owner_voice(cls, actor_id, guild_id, channel_id=None, face=None):
         return cls(Origin.OWNER_VOICE, actor_id=actor_id, guild_id=guild_id,
-                   channel_id=channel_id)
+                   channel_id=channel_id, face=face)
 
     @classmethod
-    def guest_dm(cls, actor_id, channel_id=None):
+    def guest_dm(cls, actor_id, channel_id=None, face=None):
         """A DM from a whitelisted non-owner.
 
         Always tainted. A guest's own message is text a person other than the owner
@@ -147,21 +155,21 @@ class CallContext:
         where its input came from instead of claiming to be clean.
         """
         return cls(Origin.GUEST_DM, actor_id=actor_id, channel_id=channel_id,
-                   tainted=True)
+                   tainted=True, face=face)
 
     @classmethod
-    def local(cls, actor_id=None):
+    def local(cls, actor_id=None, face=None):
         """A request from the filesystem (outbox/do.py).
 
         Trusted at roughly the level of a DM, on the reasoning that writing into
         outbox/ already requires having the machine - so it is not a weaker channel
         than Discord, and treating it as one would cost capability for no security.
         """
-        return cls(Origin.LOCAL_CLI, actor_id=actor_id)
+        return cls(Origin.LOCAL_CLI, actor_id=actor_id, face=face)
 
     @classmethod
-    def system(cls, guild_id=None):
-        return cls(Origin.SYSTEM, guild_id=guild_id)
+    def system(cls, guild_id=None, face=None):
+        return cls(Origin.SYSTEM, guild_id=guild_id, face=face)
 
     def for_target(self, guild_id, channel_id=None):
         """A copy naming the guild/channel this call actually targets.
@@ -175,7 +183,7 @@ class CallContext:
         """
         return CallContext(self.origin, self.actor_id, guild_id,
                            channel_id if channel_id is not None else self.channel_id,
-                           self.tainted)
+                           self.tainted, face=self.face)
 
     def with_taint(self, tainted=True):
         """A copy with the taint flag set. MONOTONIC - it can only ever add.
@@ -194,11 +202,13 @@ class CallContext:
         taint is unrepresentable, so no future edit can reintroduce the clearing.
         """
         return CallContext(self.origin, self.actor_id, self.guild_id,
-                           self.channel_id, bool(tainted) or self.tainted)
+                           self.channel_id, bool(tainted) or self.tainted,
+                           face=self.face)
 
     def __repr__(self):
         return (f"CallContext(origin={self.origin!r}, actor={self.actor_id}, "
-                f"guild={self.guild_id}, tainted={self.tainted})")
+                f"guild={self.guild_id}, tainted={self.tainted}, "
+                f"face={self.face!r})")
 
 
 class Decision:
@@ -288,17 +298,17 @@ def rule_guest(action, ctx):
     """
     if ctx.origin not in Origin.GUEST:
         return None
-    if not identity.guest_enabled():
+    if not identity.guest_enabled(ctx.face):
         return _deny("guest_disabled",
                      "guest access is switched off in control.json.")
-    if not identity.is_guest(ctx.actor_id):
+    if not identity.is_guest(ctx.actor_id, ctx.face):
         return _deny("guest_allowlist",
                      f"user {ctx.actor_id} is not on the guest allowlist.")
     if not getattr(action, "guest", False):
         return _deny("guest_capability",
                      f"`{action.name}` is not a guest capability. Guests reach "
                      "only what is explicitly marked for them, and this is not.")
-    if action.name not in identity.guest_capabilities():
+    if action.name not in identity.guest_capabilities(ctx.face):
         return _deny("guest_config",
                      f"`{action.name}` is guest-capable in code but not granted "
                      "in control.json (guest.capabilities). Adding it there and "
@@ -332,7 +342,7 @@ def rule_owner(action, ctx):
         return None
     if ctx.origin not in Origin.HUMAN:
         return None
-    if identity.is_owner(ctx.actor_id):
+    if identity.is_owner(ctx.actor_id, ctx.face):
         return None
     return _deny("owner",
                  f"`{action.name}` was requested by user {ctx.actor_id}, who is not "
@@ -371,7 +381,7 @@ def rule_agent_guild(action, ctx):
     """
     if ctx.origin != Origin.OWNER_GUILD:
         return None
-    if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
+    if ctx.guild_id is not None and int(ctx.guild_id) in identity.agent_guilds(ctx.face):
         return None
     return _deny("agent_guild",
                  f"`{action.name}` was requested by mention in guild {ctx.guild_id}, "
@@ -446,7 +456,7 @@ def rule_destructive_guild(action, ctx):
     """
     if not action.destructive:
         return None
-    if identity.destructive_allowed(ctx.guild_id):
+    if identity.destructive_allowed(ctx.guild_id, ctx.face):
         return None
     where = "a DM" if ctx.guild_id is None else f"guild {ctx.guild_id}"
     return _deny("destructive_guild",
@@ -472,7 +482,7 @@ def rule_posting_scope(action, ctx):
     """
     if not action.posts:
         return None
-    if identity.posting_allowed(ctx.guild_id, ctx.channel_id):
+    if identity.posting_allowed(ctx.guild_id, ctx.channel_id, ctx.face):
         return None
     return _deny("posting_scope",
                  f"`{action.name}` would post into channel {ctx.channel_id} "
@@ -584,13 +594,13 @@ def may_engage_agent(ctx):
     # reaching here, and this says it again anyway. Spending an API call is itself
     # the thing being protected, so the check that decides it should not depend on
     # a caller having done its own.
-    if ctx.origin in Origin.HUMAN and not identity.is_owner(ctx.actor_id):
+    if ctx.origin in Origin.HUMAN and not identity.is_owner(ctx.actor_id, ctx.face):
         return _deny("engage_owner",
                      f"user {ctx.actor_id} is not my owner")
     if ctx.origin == Origin.OWNER_DM:
         return _ALLOW
     if ctx.origin == Origin.OWNER_GUILD:
-        if ctx.guild_id is not None and int(ctx.guild_id) in identity.AGENT_GUILDS:
+        if ctx.guild_id is not None and int(ctx.guild_id) in identity.agent_guilds(ctx.face):
             return _ALLOW
         return _deny("engage_guild",
                      f"guild {ctx.guild_id} is not on agent_guilds in control.json")
@@ -618,9 +628,9 @@ def may_chat_as_guest(ctx):
     if ctx.origin not in Origin.GUEST:
         return _deny("guest_origin",
                      f"guest chat is not reachable from {ctx.origin}")
-    if not identity.guest_enabled():
+    if not identity.guest_enabled(ctx.face):
         return _deny("guest_disabled", "guest chat is switched off in control.json")
-    if not identity.is_guest(ctx.actor_id):
+    if not identity.is_guest(ctx.actor_id, ctx.face):
         return _deny("guest_allowlist",
                      f"user {ctx.actor_id} is not on the guest allowlist")
     return _ALLOW
