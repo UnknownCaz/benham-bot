@@ -80,6 +80,22 @@ if os.path.exists(_codex_persona):
     check("...never breaks frame (INTENT #4 stated inside it)",
           "break frame" in _ptext, True)
 
+# The guest persona too - guest.py falls back to a hardcoded "You are Benham"
+# prompt when the face's guest_persona.md is missing, so for codex a missing
+# file is not a degraded prompt, it is the WRONG CHARACTER answering Draco.
+# Found at commit 12; this pin keeps the file from being lost in a reorganise.
+_codex_guest = os.path.join(os.path.dirname(_codex_persona), "guest_persona.md")
+check("the codex GUEST persona exists (fallback would answer as Benham)",
+      os.path.exists(_codex_guest), True)
+if os.path.exists(_codex_guest):
+    with open(_codex_guest, encoding="utf-8") as _f:
+        _gtext = _f.read()
+    check("...it is Codex speaking", "You are Codex" in _gtext, True)
+    check("...and forbids answering as Benham or Claude by name",
+          "Do not introduce yourself as Claude, as Benham" in _gtext, True)
+    check("...web search carve-out survives (the cannot-list lesson, 3-for-3)",
+          "no tools on this path except web search" in _gtext, True)
+
 # --- a real codex process: per-face stores move, shared stores DO NOT -------
 # The subprocess bootstraps _testconfig exactly as this file did, so it writes
 # nothing into live state; it then prints every path for the parent to judge.
