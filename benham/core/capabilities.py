@@ -1694,13 +1694,115 @@ async def _create_role(ctx, p):
     g = ctx.guild(p["guild_id"])
     if ctx.dry_run:
         return {"summary": f"Create a new role **{p['name']}** in **{g.name}**",
-                "detail": "It starts with no permissions; granting any is a separate step."}
+                "detail": "It starts with no permissions; grant any with edit_role."}
     kw = {"name": str(p["name"]), "hoist": bool(p.get("hoist")),
           "mentionable": bool(p.get("mentionable")), "reason": "via Benham"}
     if p.get("color"):
         kw["color"] = discord.Color(int(str(p["color"]).lstrip("#"), 16))
     r = await g.create_role(**kw)
     return {"status": "created", "role_id": r.id, "name": r.name}
+
+
+# The permission bits people actually mean when they say a role is "powerful" -
+# add_role's dry-run has always named these on the role being handed out, and
+# edit_role's preview uses the same list for the same reason: the confirmation
+# is the last moment the reader can notice what they are about to switch on.
+_NOTABLE_PERMS = ("administrator", "manage_guild", "manage_roles",
+                  "manage_channels", "ban_members", "kick_members",
+                  "manage_messages", "mention_everyone")
+
+
+@action("edit_role", identity.MANAGE,
+        "Change a role's server-wide permissions (grant/revoke, merged onto what "
+        "it already has - naming one permission leaves the others alone), or its "
+        "name/color/hoist/mentionable. create_role's 'granting any is a separate "
+        "step' is this step.",
+        {"guild_id": {"type": "int", "required": True},
+         "role_id": {"type": "int", "required": True,
+                     "desc": "Role to edit (list_roles has the ids)"},
+         "grant": {"type": "list",
+                   "desc": "Permission names to turn ON, e.g. ['manage_channels']. "
+                           "'administrator' is full control of the guild."},
+         "revoke": {"type": "list", "desc": "Permission names to turn OFF, same spelling"},
+         "name": {"type": "str"},
+         "color": {"type": "str", "desc": "Hex like 'FF5555'"},
+         "hoist": {"type": "bool", "desc": "Show separately in the member list"},
+         "mentionable": {"type": "bool"},
+         "reason": {"type": "str"}}, needs_guild=True,
+        outward=True, always_confirm=True, taints=True)
+async def _edit_role(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    role = g.get_role(int(p["role_id"]))
+    if role is None:
+        raise ActionError(f"no role {p['role_id']} in {g.name} - list_roles has the ids")
+    if role.managed:
+        raise ActionError(
+            f"'{role.name}' is a managed role - it belongs to an integration or "
+            "bot and Discord refuses edits to it")
+    if role.is_default():
+        # Legal in Discord, refused here: @everyone is every member at once, the
+        # single widest lever a guild has. Channel-level exceptions belong in
+        # set_channel_permissions; a server-wide @everyone change is hand work.
+        raise ActionError("editing @everyone is refused here - it changes every "
+                          "member at once. Do that by hand in Server Settings.")
+    # Same two legibility guards as add_role: Discord answers both cases with a
+    # bare 403 that names neither the role nor the reason.
+    if role.position >= g.me.top_role.position:
+        raise ActionError(
+            f"'{role.name}' sits above this bot's own role - move the bot's role "
+            "higher in Server Settings > Roles first")
+    if not g.me.guild_permissions.manage_roles:
+        raise ActionError(f"this bot lacks Manage Roles in {g.name}, so it cannot "
+                          "edit any role there")
+
+    grant_names, grant_keys = _perm_list(p.get("grant"), "grant")
+    revoke_names, revoke_keys = _perm_list(p.get("revoke"), "revoke")
+    dupes = sorted(set(grant_keys) & set(revoke_keys))
+    if dupes:
+        # The same bit on both sides, possibly under two spellings - setattr
+        # would let the second write win while the caller is told both applied.
+        raise ActionError(f"grant and revoke both name: {', '.join(dupes)} - "
+                          "one bit cannot go both ways")
+    cosmetic = [k for k in ("name", "color", "hoist", "mentionable") if k in p]
+    if not grant_names and not revoke_names and not cosmetic:
+        raise ActionError("nothing to change - pass grant/revoke permission "
+                          "names, or name/color/hoist/mentionable")
+
+    if ctx.dry_run:
+        notable = [n for n in grant_names if _perm_key(n) in
+                   {_perm_key(x) for x in _NOTABLE_PERMS}]
+        warn = ((" Granting: " + ", ".join(notable) +
+                 (" - FULL CONTROL of the guild." if "administrator" in notable else "."))
+                if notable else "")
+        held = f"\n{len(role.members)} member(s) currently hold it." if role.members else ""
+        return {"summary": f"Edit the role **{role.name}** in **{g.name}**",
+                "detail": (f"Turn ON: {', '.join(grant_names) or 'nothing'}. "
+                           f"Turn OFF: {', '.join(revoke_names) or 'nothing'}."
+                           f"{' Also changes: ' + ', '.join(cosmetic) + '.' if cosmetic else ''}"
+                           f"{warn}{held}")}
+
+    perms = discord.Permissions(role.permissions.value)
+    perms.update(**{k: True for k in grant_keys})
+    perms.update(**{k: False for k in revoke_keys})
+    kw = {"permissions": perms, "reason": p.get("reason") or "via Benham"}
+    if "name" in p:
+        kw["name"] = str(p["name"])
+    if "color" in p and p["color"]:
+        kw["color"] = discord.Color(int(str(p["color"]).lstrip("#"), 16))
+    if "hoist" in p:
+        kw["hoist"] = bool(p["hoist"])
+    if "mentionable" in p:
+        kw["mentionable"] = bool(p["mentionable"])
+    await role.edit(**kw)
+    # Re-read rather than echo the request: the returned facts are what Discord
+    # actually holds now, the same never-infer-success-from-the-request rule the
+    # overwrite verifier lives by.
+    after = g.get_role(role.id)
+    now_notable = sorted(n for n, v in after.permissions
+                         if v and n in _NOTABLE_PERMS)
+    return {"status": "role_edited", "role": after.name, "role_id": after.id,
+            "granted": grant_names, "revoked": revoke_names,
+            "now_notable": now_notable}
 
 
 @action("set_nickname", identity.MANAGE, "Change a member's nickname (blank to clear).",
