@@ -419,6 +419,14 @@ async def _get_message(ctx, p):
 # and a bare `from benham import paths` would be shadowed there.
 from benham import paths as _paths
 
+# Every Discord-side reason= this file writes. The ACTING face's name, not a
+# hardcoded "Benham": these land in the server's audit log, where "this bot"
+# would say nothing and the wrong name would misattribute a Codex action to
+# Benham. PROCESS_FACE is fixed per process, so in a benham process this is
+# byte-for-byte the string it always wrote - the same mechanism as
+# issues.FILED_BY, pinned by test_face_wording.py.
+VIA = "via " + _paths.PROCESS_FACE.capitalize()
+
 DOWNLOAD_DIR = os.path.join(_paths.STATE_DIR, "downloads")
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024      # per file, unless the caller raises it
 HARD_ATTACHMENT_BYTES = 100 * 1024 * 1024   # ceiling the caller cannot raise past
@@ -534,7 +542,7 @@ async def _read_attachments(ctx, p):
     return res
 
 
-@action("list_guilds", identity.READ, "List every server Benham is in.", {},
+@action("list_guilds", identity.READ, "List every server this bot is in.", {},
         taints=True)
 async def _list_guilds(ctx, p):
     out = []
@@ -591,7 +599,7 @@ async def _list_members(ctx, p):
             "members": [member_dict(m) for m in members[:limit]]}
 
 
-@action("member_info", identity.READ, "Everything Benham can see about one member.",
+@action("member_info", identity.READ, "Everything this bot can see about one member.",
         {"guild_id": {"type": "int", "required": True},
          "user_id": {"type": "int", "required": True}},
         taints=True)
@@ -681,7 +689,7 @@ def _rank(rec, low):
         {"query": {"type": "str", "required": True,
                    "desc": "A name or part of one, an @mention, or a user id"},
          "guild_id": {"type": "int",
-                      "desc": "Search one server (default: every server Benham is in)"},
+                      "desc": "Search one server (default: every server this bot is in)"},
          "limit": {"type": "int", "desc": "Max matches to return (default 25)"}},
         taints=True)
 async def _find_user(ctx, p):
@@ -1518,7 +1526,7 @@ async def _react(ctx, p):
 
 
 @action("typing", identity.SPEAK,
-        "Show the 'Benham is typing...' indicator for a few seconds.",
+        "Show this bot's 'typing...' indicator for a few seconds.",
         {"channel_id": {"type": "int", "required": True},
          "seconds": {"type": "int", "desc": "Default 5, max 30"}})
 async def _typing(ctx, p):
@@ -1534,7 +1542,7 @@ async def _typing(ctx, p):
 # TIER 2 - MANAGE. Real change, exact inverse available.
 # ==========================================================================
 
-@action("edit_message", identity.MANAGE, "Edit one of Benham's own messages.",
+@action("edit_message", identity.MANAGE, "Edit one of this bot's own messages.",
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
          "content": {"type": "str", "required": True}},
@@ -1566,7 +1574,7 @@ async def _unpin_message(ctx, p):
     return {"status": "unpinned", "message_id": m.id}
 
 
-@action("unreact", identity.MANAGE, "Remove Benham's own reaction from a message.",
+@action("unreact", identity.MANAGE, "Remove this bot's own reaction from a message.",
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
          "emoji": {"type": "str", "required": True}})
@@ -1659,7 +1667,7 @@ async def _add_role(ctx, p):
         return {"summary": f"Give **{m}** the role **{role.name}** in **{m.guild.name}**",
                 "detail": (f"That role grants: {', '.join(notable) if notable else 'no elevated permissions'}."
                            + (f"\n{len(role.members)} member(s) currently have it." if role.members else ""))}
-    await m.add_roles(role, reason=p.get("reason") or "via Benham")
+    await m.add_roles(role, reason=p.get("reason") or VIA)
     return {"status": "role_added", "user": str(m), "role": role.name}
 
 
@@ -1679,7 +1687,7 @@ async def _remove_role(ctx, p):
         return {"summary": f"Take the role **{role.name}** away from **{m}** in **{m.guild.name}**",
                 "detail": "They do not currently have it - this would be a no-op."
                           if not has else "This removes whatever access that role granted them."}
-    await m.remove_roles(role, reason=p.get("reason") or "via Benham")
+    await m.remove_roles(role, reason=p.get("reason") or VIA)
     return {"status": "role_removed", "user": str(m), "role": role.name}
 
 
@@ -1696,7 +1704,7 @@ async def _create_role(ctx, p):
         return {"summary": f"Create a new role **{p['name']}** in **{g.name}**",
                 "detail": "It starts with no permissions; grant any with edit_role."}
     kw = {"name": str(p["name"]), "hoist": bool(p.get("hoist")),
-          "mentionable": bool(p.get("mentionable")), "reason": "via Benham"}
+          "mentionable": bool(p.get("mentionable")), "reason": VIA}
     if p.get("color"):
         kw["color"] = discord.Color(int(str(p["color"]).lstrip("#"), 16))
     r = await g.create_role(**kw)
@@ -1784,7 +1792,7 @@ async def _edit_role(ctx, p):
     perms = discord.Permissions(role.permissions.value)
     perms.update(**{k: True for k in grant_keys})
     perms.update(**{k: False for k in revoke_keys})
-    kw = {"permissions": perms, "reason": p.get("reason") or "via Benham"}
+    kw = {"permissions": perms, "reason": p.get("reason") or VIA}
     if "name" in p:
         kw["name"] = str(p["name"])
     if "color" in p and p["color"]:
@@ -1813,7 +1821,7 @@ async def _edit_role(ctx, p):
 async def _set_nickname(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     old = m.nick
-    await m.edit(nick=(p.get("nickname") or None), reason="via Benham")
+    await m.edit(nick=(p.get("nickname") or None), reason=VIA)
     return {"status": "renamed", "user": str(m), "from": old, "to": p.get("nickname")}
 
 
@@ -1828,7 +1836,7 @@ async def _timeout_member(ctx, p):
     m = await ctx.member(p["guild_id"], p["user_id"])
     mins = int(p["minutes"])
     until = None if mins <= 0 else datetime.now(timezone.utc) + timedelta(minutes=mins)
-    await m.timeout(until, reason=p.get("reason") or "via Benham")
+    await m.timeout(until, reason=p.get("reason") or VIA)
     return {"status": "timeout_lifted" if mins <= 0 else "timed_out",
             "user": str(m), "minutes": mins,
             "until": until.isoformat() if until else None}
@@ -1864,17 +1872,17 @@ async def _create_channel(ctx, p):
         raise ValueError(f"Discord allows at most {_MAX_FORUM_TAGS} forum tags, got {len(raw_tags)}")
 
     if kind == "voice":
-        c = await g.create_voice_channel(str(p["name"]), category=cat, reason="via Benham")
+        c = await g.create_voice_channel(str(p["name"]), category=cat, reason=VIA)
     elif kind == "category":
-        c = await g.create_category(str(p["name"]), reason="via Benham")
+        c = await g.create_category(str(p["name"]), reason=VIA)
     elif kind == "forum":
         c = await g.create_forum(str(p["name"]), category=cat, topic=p.get("topic"),
                                  available_tags=[discord.ForumTag(name=t) for t in raw_tags],
-                                 reason="via Benham")
+                                 reason=VIA)
     else:
         c = await g.create_text_channel(str(p["name"]), category=cat,
                                         topic=p.get("topic"), nsfw=bool(p.get("nsfw")),
-                                        reason="via Benham")
+                                        reason=VIA)
     out = {"status": "created", "channel_id": c.id, "name": c.name, "type": c.type.name}
     if kind == "forum":
         out["tags"] = [t.name for t in c.available_tags]
@@ -1903,7 +1911,7 @@ async def _edit_channel(ctx, p):
         kw["category"] = ch.guild.get_channel(int(p["category_id"]))
     if not kw:
         raise ActionError("nothing to change - pass at least one field")
-    await ch.edit(reason="via Benham", **kw)
+    await ch.edit(reason=VIA, **kw)
     return {"status": "edited", "channel_id": ch.id,
             "before": before, "after": channel_dict(await ctx.channel(ch.id))}
 
@@ -2006,7 +2014,7 @@ async def _set_channel_permissions(ctx, p):
             "permission it does not hold itself."
         )
 
-    reason = p.get("reason") or "via Benham"
+    reason = p.get("reason") or VIA
     before = _overwrite_state(ch.overwrites_for(role))
 
     if p.get("reset"):
@@ -2061,7 +2069,7 @@ async def _create_invite(ctx, p):
     ch = await ctx.channel(p["channel_id"])
     inv = await ch.create_invite(
         max_age=int(p.get("max_age_seconds", 86400) or 0),
-        max_uses=int(p.get("max_uses") or 0), reason="via Benham")
+        max_uses=int(p.get("max_uses") or 0), reason=VIA)
     return {"status": "created", "url": inv.url, "code": inv.code,
             "expires_in": inv.max_age, "max_uses": inv.max_uses}
 
@@ -2074,13 +2082,13 @@ async def _unban_member(ctx, p):
     g = ctx.guild(p["guild_id"])
     u = await ctx.user(p["user_id"])
     try:
-        await g.unban(u, reason="via Benham")
+        await g.unban(u, reason=VIA)
     except discord.NotFound:
         raise ActionError(f"{u} is not banned in {g.name}")
     return {"status": "unbanned", "user": str(u), "guild": g.name}
 
 
-@action("set_presence", identity.MANAGE, "Set Benham's status and activity.",
+@action("set_presence", identity.MANAGE, "Set this bot's status and activity.",
         {"status": {"type": "str", "desc": "online | idle | dnd | invisible"},
          "activity_type": {"type": "str", "desc": "playing | listening | watching | competing | none"},
          "activity_name": {"type": "str"}},
@@ -2141,9 +2149,9 @@ async def _guest_wake(ctx, p):
     return {"status": "woken" if was_quiet else "was_not_quiet", "user_id": uid}
 
 
-@action("set_bot_nickname", identity.MANAGE, "Change Benham's own nickname in a server.",
+@action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",
         {"guild_id": {"type": "int", "required": True},
-         "nickname": {"type": "str", "desc": "Blank resets to 'Benham'"}}, needs_guild=True, taints=True)
+         "nickname": {"type": "str", "desc": "Blank resets to the bot's own username"}}, needs_guild=True, taints=True)
 async def _set_bot_nickname(ctx, p):
     g = ctx.guild(p["guild_id"])
     old = g.me.nick
@@ -2157,7 +2165,7 @@ async def _set_bot_nickname(ctx, p):
         outward=True)
 async def _create_webhook(ctx, p):
     ch = await ctx.channel(p["channel_id"])
-    wh = await ch.create_webhook(name=str(p["name"]), reason="via Benham")
+    wh = await ch.create_webhook(name=str(p["name"]), reason=VIA)
     # The URL is a bearer credential - anyone holding it can post as this webhook.
     # Returned because the caller asked for it, but never logged by run().
     return {"status": "created", "webhook_id": wh.id, "name": wh.name, "url": wh.url,
@@ -2492,7 +2500,7 @@ async def _delete_channel(ctx, p):
                             f"- this destroys its entire message history"),
                 "detail": f"Type: {ch.type.name}, {last}. This cannot be undone."}
     name = ch.name
-    await ch.delete(reason="via Benham")
+    await ch.delete(reason=VIA)
     return {"status": "deleted", "channel": name, "channel_id": ch.id}
 
 
@@ -2516,7 +2524,7 @@ async def _delete_role(ctx, p):
                           f"{' ...' if len(holders) > 10 else ''}\n"
                           "Who held it cannot be recovered afterwards."}
     name, count = role.name, len(role.members)
-    await role.delete(reason="via Benham")
+    await role.delete(reason=VIA)
     return {"status": "deleted", "role": name, "stripped_from": count}
 
 
@@ -2531,7 +2539,7 @@ async def _kick_member(ctx, p):
                 "detail": f"Joined {m.joined_at:%Y-%m-%d}, roles: "
                           f"{', '.join(r.name for r in m.roles if r.name != '@everyone') or 'none'}. "
                           "They can rejoin with a fresh invite."}
-    await m.kick(reason=p.get("reason") or "via Benham")
+    await m.kick(reason=p.get("reason") or VIA)
     return {"status": "kicked", "user": str(m), "user_id": m.id}
 
 
@@ -2557,7 +2565,7 @@ async def _ban_member(ctx, p):
         return {"summary": f"Ban **{who}** from **{g.name}**",
                 "detail": f"Reason: {p.get('reason') or '(none given)'}{extra}"}
     u = await ctx.user(p["user_id"])
-    await g.ban(u, reason=p.get("reason") or "via Benham",
+    await g.ban(u, reason=p.get("reason") or VIA,
                 delete_message_days=min(max(days, 0), 7))
     return {"status": "banned", "user": str(u), "user_id": u.id, "guild": g.name}
 
@@ -2574,7 +2582,7 @@ async def _delete_emoji(ctx, p):
         return {"summary": f"Delete emoji **:{e.name}:** from **{g.name}**",
                 "detail": f"{e.url}\nThe image is not recoverable from Discord afterwards."}
     name = e.name
-    await e.delete(reason="via Benham")
+    await e.delete(reason=VIA)
     return {"status": "deleted", "emoji": name}
 
 

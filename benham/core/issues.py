@@ -502,7 +502,10 @@ def build_body(category, quote, *, guest_name=None, guest_id=None,
     lines.append(fenced if fenced else "(no quotable text)")
     if context:
         lines += ["", f"Context: {context}"]
-    lines += ["", f"Category: {category} - filed via Benham "
+    # filed_by, not a hardcoded name - the header already attributes the filing
+    # to the acting face, and this trailer must not contradict it (a Codex
+    # filing signed "via Benham" is the name leak FILED_BY exists to prevent).
+    lines += ["", f"Category: {category} - filed via {filed_by} "
                   f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%MZ')}"]
     return "\n".join(lines)
 
