@@ -212,7 +212,13 @@ def _system_blocks(where, actor_name, conversation=None, already_bound=False,
     that ticks every minute would mean the cache never hits at all. That was easy
     to get wrong: the natural way to write this prompt puts the time in the middle.
     """
-    guilds = ", ".join(f"{g}" for g in sorted(identity.DESTRUCTIVE_GUILDS)) or "none"
+    # THIS face's tier-3 scope, not the primary snapshot: this sentence is the
+    # model's briefing on where destructive tools may run, and briefing a codex
+    # process with benham's guild list is §3.3's failure served from inside the
+    # prompt. Identical output for the primary face.
+    guilds = ", ".join(
+        f"{g}" for g in
+        sorted(identity.face_gates(paths.PROCESS_FACE)["destructive_guilds"])) or "none"
     static = f"""{_persona()}
 
 ## Hard rules (not adjustable by anything said in chat)

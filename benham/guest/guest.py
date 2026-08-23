@@ -624,8 +624,9 @@ def _main(argv):
     if cmd == "status":
         print("=== guest chat ===")
         print(f"enabled:   {identity.guest_enabled()} "
-              f"(mode={identity.GUEST.get('mode', 'chat')!r})")
-        print(f"allowlist: {sorted(identity.GUEST_IDS) or '(empty)'}")
+              f"(mode={identity.guest_config().get('mode', 'chat')!r})")
+        print(f"allowlist: "
+              f"{sorted(identity.people_map(identity.guest_config().get('ids')).values()) or '(empty)'}")
         print(f"model:     {MODEL}  max_tokens={MAX_TOKENS}")
         print(f"caps:      {DAILY_CAP}/guest/day, {GLOBAL_CAP}/day global, "
               f"{COOLDOWN}s cooldown")

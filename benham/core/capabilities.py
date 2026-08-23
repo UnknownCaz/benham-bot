@@ -543,7 +543,7 @@ async def _list_guilds(ctx, p):
             "guild_id": g.id, "name": g.name, "members": g.member_count,
             "owner_id": g.owner_id,
             "destructive_allowed": identity.destructive_allowed(g.id),
-            "agent_allowed": g.id in identity.AGENT_GUILDS,
+            "agent_allowed": g.id in identity.agent_guilds(),
         })
     return {"count": len(out), "guilds": out}
 

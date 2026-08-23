@@ -119,11 +119,18 @@ class CallContext:
         self.tainted = tainted
         # Which bot identity this call acts AS (PLAN-second-face commit 3).
         # Resolved at construction rather than carried as None, so every rule
-        # and every repr sees a real name. None means the primary face because
-        # every pre-faces call site in the tree is a Benham call site - and the
+        # and every repr sees a real name. None means the face THIS PROCESS
+        # runs as (commit 12): BENHAM_FACE is the mechanism everywhere else -
+        # the CLI, the stores, conversations stamp their face through
+        # paths.PROCESS_FACE - and an unmarked mint site in a codex process is
+        # a codex call site, not a benham one. Defaulting to the primary here
+        # instead would let every such site authorize as the unconfined face,
+        # which silences rule_face_capability and the machine wall in the one
+        # process they exist for. In a benham process (and the test process)
+        # PROCESS_FACE IS the primary, so this is byte-identical there. The
         # copies below must CARRY it: a copy that quietly reverted to the
-        # primary face would be the with_taint bug with a different field.
-        self.face = face or identity.PRIMARY_FACE
+        # process face would be the with_taint bug with a different field.
+        self.face = face or paths.PROCESS_FACE
 
     # Constructors named for the call site, so reading bot.py tells you the origin
     # without having to remember which string means what.
