@@ -284,7 +284,14 @@ def _face_gates_or_empty(face):
     face_boot_problem() says so in words. Every face-aware predicate below
     resolves an unknown face through this, so a typo'd face name costs
     capability, never safety.
+
+    None resolves to the face THIS PROCESS runs as, exactly as _is_primary
+    reads it - the two must agree, or `X if _is_primary(face) else
+    _face_gates_or_empty(face)[...]` (the pattern every predicate here uses)
+    would take the else-branch and then look up the wrong face.
     """
+    if face is None:
+        face = paths.PROCESS_FACE
     try:
         return face_gates(face)
     except KeyError:
@@ -303,12 +310,17 @@ def _primary_gates():
 
 
 def _is_primary(face):
-    """None means "the face nobody specified", which is the primary face -
-    every pre-faces call site in the tree is a Benham call site. The predicates
-    below keep their EXACT pre-faces read (module snapshot or live CONTROL,
-    whichever each always used) on this path, and go through the face view only
-    for a named non-primary face, so commit 3 changes no default-face answer."""
-    return face is None or face == PRIMARY_FACE
+    """None means "the face nobody specified", which is the face THIS PROCESS
+    runs as (commit 12; before it, the primary). In a benham process - and in
+    the test process, and every pre-faces deployment - PROCESS_FACE IS the
+    primary, so every pre-faces call site keeps its EXACT pre-faces read
+    (module snapshot or live CONTROL, whichever each always used) and commit 3
+    changes no default-face answer. In a codex process an unqualified call
+    site is a codex call site: resolving None to the primary there would hand
+    a second face the first face's rosters and scopes, which is the exact
+    inheritance rule 1 exists to prevent, arriving through a default argument
+    instead of a config key."""
+    return face == PRIMARY_FACE if face is not None else paths.PROCESS_FACE == PRIMARY_FACE
 
 
 _PRIMARY = _primary_gates()
@@ -447,9 +459,16 @@ def is_guest(user_id, face=None):
     return uid in guests
 
 
-def guest_config():
-    """The raw guest block, for the runtime knobs guest.py owns (caps, model)."""
-    return dict(GUEST)
+def guest_config(face=None):
+    """The raw guest block, for the runtime knobs guest.py owns (caps, model).
+
+    Face-aware like every predicate above it, and for the same reason: guest.py
+    reads its model, caps and cooldowns from this at import, and a codex process
+    importing benham's knobs would run codex's guests on another face's budget.
+    The primary path returns exactly the block it always did.
+    """
+    block = GUEST if _is_primary(face) else _face_gates_or_empty(face)["guest"]
+    return dict(block)
 
 
 
@@ -490,8 +509,8 @@ def initiative_config(face=None):
     Tyler's decision (against the recommendation, consequence stated), and
     this is the one-number-per-face knob that makes it cheap to reverse.
     """
-    if _is_primary(face):
-        face = PRIMARY_FACE
+    if face is None:
+        face = paths.PROCESS_FACE  # same resolution as _is_primary, stated once here
     try:
         block = _face_blocks(CONTROL)[face]
     except KeyError:

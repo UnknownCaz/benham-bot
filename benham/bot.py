@@ -496,11 +496,17 @@ async def on_ready():
     log(f"Logged in as {client.user} (id {client.user.id}) — face: {FACE}")
 
     # --- control plane (identity.py / control.json) ---
-    log(f"Owner(s): {sorted(identity.OWNER_IDS)} — {FACE} takes direction from these only")
+    # THIS face's gates, not the module snapshots - those pin the primary, and
+    # a codex process printing benham's owners and guilds would be the banner
+    # lying about the one thing it exists to state (§3.3's rule: every store
+    # the reader consults needs a true account of itself). For the primary
+    # face the two are the same values, so this line's output is unchanged.
+    _gates = identity.face_gates(FACE)
+    log(f"Owner(s): {sorted(_gates['owner_ids'])} — {FACE} takes direction from these only")
     log(f"Text agent: {'ON (' + agent.MODEL + ')' if agent.ENABLED else 'OFF (relay only)'}"
-        f", agent guilds {sorted(identity.AGENT_GUILDS)} (+ owner DMs always)"
+        f", agent guilds {sorted(_gates['agent_guilds'])} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
-    log(f"Destructive actions allowed in guilds: {sorted(identity.DESTRUCTIVE_GUILDS) or 'NONE'}")
+    log(f"Destructive actions allowed in guilds: {sorted(_gates['destructive_guilds']) or 'NONE'}")
     if identity.guest_enabled():
         # "no tools" was true when guests were pure conversation and became a lie
         # the day server-side search shipped. The distinction that actually holds -
@@ -514,7 +520,7 @@ async def on_ready():
                     else f"UNEXPECTED GUEST GRANTS: {', '.join(_grants)}")
         log(f"Guest chat: ON ({guest.MODEL}, DM only, {_surface}"
             f"{', web search on' if guest.WEB_SEARCH else ''}) — "
-            f"{_named(identity.GUEST_PEOPLE) or 'nobody whitelisted'}, "
+            f"{_named(identity.people_map(identity.guest_config().get('ids'))) or 'nobody whitelisted'}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
     else:
         log("Guest chat: OFF — only owners get a reply")
@@ -543,16 +549,25 @@ async def on_ready():
             log(f"presence setup failed:\n{traceback.format_exc()}")
 
     dump_channels()
-    # The one deliberate exception to "rooms are never created implicitly":
-    # SCRATCH exists so pc.. tasks always have somewhere to land (item 22b).
-    # Created here, once, logged - a known moment in code, not a typo at runtime.
-    try:
-        entry = rooms.ensure(rooms.SCRATCH,
-                             "default room - pc.. tasks land and resume here",
-                             "system")
-        log(f"room '{rooms.SCRATCH}' ready (seq {entry.get('seq', 0)})")
-    except Exception:  # noqa: BLE001 — a broken index must not block startup
-        log(f"scratch room setup failed:\n{traceback.format_exc()}")
+    # Everything from here to the outbox poller splits on the face. The
+    # per-face machinery (outbox dirs, the conversation tick's face filter)
+    # runs in every process; the SHARED-store workers run in the primary
+    # process only, because two processes over one store is the double-fire
+    # class c19 documented - two pollers would DM a reporter twice, and two
+    # exaroton watchdogs would drive one server's power twice. The rooms
+    # lane is primary-only by the machine wall already; its boot step
+    # follows the wall.
+    if FACE == identity.PRIMARY_FACE:
+        # The one deliberate exception to "rooms are never created implicitly":
+        # SCRATCH exists so pc.. tasks always have somewhere to land (item 22b).
+        # Created here, once, logged - a known moment in code, not a typo at runtime.
+        try:
+            entry = rooms.ensure(rooms.SCRATCH,
+                                 "default room - pc.. tasks land and resume here",
+                                 "system")
+            log(f"room '{rooms.SCRATCH}' ready (seq {entry.get('seq', 0)})")
+        except Exception:  # noqa: BLE001 — a broken index must not block startup
+            log(f"scratch room setup failed:\n{traceback.format_exc()}")
     if not poll_outbox.is_running():
         poll_outbox.start()
     if not tick_conversations.is_running():
@@ -560,18 +575,23 @@ async def on_ready():
     # Only when the funnel is on: with no tracker configured every pass would
     # read an empty filing list forever, and a loop that can never do anything
     # is log noise standing in for a feature.
-    if issues.enabled():
+    if issues.enabled() and FACE == identity.PRIMARY_FACE:
         if not tick_loopclose.is_running():
             tick_loopclose.start()
         log(f"Loop-close: ON ({issues.REPO}, every 20 min, max "
             f"{loopclose.MAX_PER_RUN}/pass) - reporters get told when Tyler "
             "closes or declines what they filed")
-    else:
+    elif not issues.enabled():
         log("loop-close: OFF - no intake repo configured")
+    else:
+        log(f"loop-close: OFF here - the {identity.PRIMARY_FACE} process runs it")
     # Register /server to each command guild. The group is added GLOBALLY (tree.add_command), so we
     # copy globals into each guild and sync that guild — guild-scoped syncs appear instantly, and
     # (unlike the old code, which synced the empty guild scope) this actually registers the commands.
-    for gid in COMMAND_GUILDS:
+    # Primary only, like the watchdog below it serves: a second face is not in
+    # these guilds, and its sync attempts would be one failure log per guild
+    # per reconnect, forever.
+    for gid in (COMMAND_GUILDS if FACE == identity.PRIMARY_FACE else ()):
         try:
             gobj = discord.Object(id=gid)
             tree.clear_commands(guild=gobj)       # idempotent across reconnects
@@ -583,12 +603,15 @@ async def on_ready():
     # Started only when there is something to watch. With no exaroton_watch.json the loop
     # would still poll the exaroton API every 30s and hit the credits endpoint every 20th
     # cycle, failing each time against an account it has no token for - log noise standing
-    # in for a watchdog that cannot watch anything.
-    if WATCH["servers"]:
+    # in for a watchdog that cannot watch anything. Primary only: two watchdogs
+    # over one exaroton account would double-drive server power and credits.
+    if WATCH["servers"] and FACE == identity.PRIMARY_FACE:
         if not exaroton_watchdog.is_running():
             exaroton_watchdog.start()
-    else:
+    elif not WATCH["servers"]:
         log("exaroton watchdog: OFF — no servers in config/exaroton_watch.json")
+    else:
+        log(f"exaroton watchdog: OFF here - the {identity.PRIMARY_FACE} process runs it")
 
 
 # Prefix that sends a DM straight to the PC session with no API call. Configurable
