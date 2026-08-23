@@ -220,15 +220,15 @@ class Ctx:
             try:
                 ch = await self.client.fetch_channel(int(cid))
             except discord.NotFound:
-                raise ActionError(f"no channel with id {cid} (or Benham can't see it)")
+                raise ActionError(f"no channel with id {cid} (or this bot can't see it)")
             except discord.Forbidden:
-                raise ActionError(f"Benham lacks access to channel {cid}")
+                raise ActionError(f"this bot lacks access to channel {cid}")
         return ch
 
     def guild(self, gid):
         g = self.client.get_guild(int(gid)) if gid is not None else None
         if g is None:
-            raise ActionError(f"Benham is not in guild {gid}")
+            raise ActionError(f"this bot is not in guild {gid}")
         return g
 
     async def member(self, gid, uid):
@@ -709,7 +709,7 @@ async def _find_user(ctx, p):
 
     guilds = [ctx.guild(p["guild_id"])] if p.get("guild_id") else list(ctx.client.guilds)
     if not guilds:
-        raise ActionError("Benham is not in any server")
+        raise ActionError("this bot is not in any server")
 
     low = needle.lower()
     full_cache = ctx.client.intents.members
@@ -1494,7 +1494,7 @@ async def _dm_user(ctx, p):
         sent = await ch.send(content=content, files=files or None)
     except discord.Forbidden:
         raise ActionError(
-            f"{u} has DMs closed to server members, or shares no server with Benham"
+            f"{u} has DMs closed to server members, or shares no server with this bot"
         )
     out = {"status": "sent", "message_id": sent.id, "to": str(u), "user_id": u.id}
     if names:
@@ -1648,8 +1648,8 @@ async def _add_role(ctx, p):
     # is far more useful than the generic 403 that comes back.
     if role.position >= m.guild.me.top_role.position:
         raise ActionError(
-            f"'{role.name}' sits above Benham's own role - move Benham's role higher "
-            "in Server Settings > Roles first"
+            f"'{role.name}' sits above this bot's own role - move the bot's role "
+            "higher in Server Settings > Roles first"
         )
     if ctx.dry_run:
         perms = sorted(n for n, v in role.permissions if v)
@@ -2001,7 +2001,7 @@ async def _set_channel_permissions(ctx, p):
     # and a mystery.
     if not ch.permissions_for(g.me).manage_permissions:
         raise ActionError(
-            f"Benham lacks Manage Permissions in #{ch.name}, so it cannot change "
+            f"this bot lacks Manage Permissions in #{ch.name}, so it cannot change "
             "overwrites there. Note Discord also refuses to let a bot grant a "
             "permission it does not hold itself."
         )
@@ -2714,7 +2714,7 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         result = await act.handler(ctx, clean)
     except discord.Forbidden as e:
         raise ActionError(
-            f"Discord refused `{name}`: Benham's role lacks the permission for it "
+            f"Discord refused `{name}`: this bot's role lacks the permission for it "
             f"in that server ({e.text or 'Forbidden'})"
         )
     except discord.HTTPException as e:
