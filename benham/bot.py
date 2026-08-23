@@ -489,6 +489,25 @@ def _named(people):
                      for n, i in sorted(people.items(), key=lambda kv: kv[0].lower()))
 
 
+def _pc_access_line(face):
+    """The boot banner's PC line, split on the face rather than on config.
+
+    policy.rule_face_capability refuses pc_task/spawn_in_room for every
+    non-primary face whatever codesession.ENABLED says, so a codex process
+    printing "PC access: ON" would be the banner stating a false thing about
+    itself (§3.3) - the config is real, the lane is walled. Same OFF-here
+    voice as loop-close and the exaroton watchdog. For the primary face the
+    line is byte-identical to what it always printed; test_face_wording pins
+    both halves.
+    """
+    if face != identity.PRIMARY_FACE:
+        return (f"PC access: OFF here (machine wall) - "
+                f"the {identity.PRIMARY_FACE} process runs it")
+    return (f"PC access: {'ON — workdir ' + codesession.WORKDIR if codesession.ENABLED else 'OFF'}"
+            + (f", writes/commands ask (timeout {codesession.PERMISSION_TIMEOUT}s)"
+               if codesession.ENABLED else ""))
+
+
 @client.event
 async def on_ready():
     # The face comes first: with two processes possible, "which bot am I
@@ -536,9 +555,7 @@ async def on_ready():
     # wherever he is - hence a DM rather than a reply in whatever channel started it.
 
     codesession.configure(log, ask_owner_dm)
-    log(f"PC access: {'ON — workdir ' + codesession.WORKDIR if codesession.ENABLED else 'OFF'}"
-        + (f", writes/commands ask (timeout {codesession.PERMISSION_TIMEOUT}s)"
-           if codesession.ENABLED else ""))
+    log(_pc_access_line(FACE))
 
     pres = identity.CONTROL.get("presence", {}) or {}
     if pres:
