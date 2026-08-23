@@ -954,6 +954,48 @@ in policy is what keeps that from becoming a daily *message*. Revisit after a mo
 
 ---
 
+### Stage 7 — The second face (2026-08-22)
+
+**Codex: a second bot identity from the same codebase**, coordinator for the Next Big Novel
+project. Commissioned by Tyler, planned as 13 commits (`docs/plans/PLAN-second-face.md` carries
+the full plan and his answers), built and merged 2026-08-22/23. A *face* is one identity: its
+own token, owner list, guild scopes, guest roster, capability grant table, personas, and state
+root. What survives the build's handoff doc, recorded here because it is law rather than
+scaffolding:
+
+- **The primary face is byte-identical everywhere, by construction.** `state_for(benham)` IS
+  `STATE_DIR`, the legacy launch line carries no marker, absent config fields mean what they
+  always meant. A change that breaks "declaring faces changes nothing for benham" is wrong even
+  if it looks cleaner. Every faces test pins this.
+- **The machine wall stays code** (Tyler, 2026-08-22). `pc_task` and `spawn_in_room` refuse every
+  non-primary face WHATEVER the config says (`policy.rule_face_capability`). A second identity
+  may hold admin over a server, never a shell on his machine; granting it later must cost
+  deleting a rule and its test, not editing a config line.
+- **Tier-3 confinement is composition, not mechanism:** per-face `destructive_guilds` listing
+  exactly one guild gives Codex tier 3 in the server it coordinates and nowhere else.
+- **An unqualified call site answers as the PROCESS face** (2026-08-23, found opening commit 12).
+  Commits 3-4 built face-aware policy and no live CallContext mint site passed a face - the
+  default resolved to the PRIMARY face, so a codex process would have authorized everything as
+  benham: machine wall and grant table dead in the one process they exist for. `BENHAM_FACE` is
+  the mechanism (the CLI, the stores, and conversations already resolved through
+  `paths.PROCESS_FACE`); CallContext and identity's `face=None` now resolve there too, and
+  `tests/test_process_face.py` pins both halves in a real codex subprocess. The shared-store
+  workers (loop-close, exaroton watchdog) run in the primary process only - two pollers over one
+  store is the double-fire class item 19 documented.
+- **Every face needs BOTH personas.** `guest.py`'s missing-file fallback is hardcoded "You are
+  Benham", which for a second face is not a degraded prompt but the wrong CHARACTER answering.
+  `prompts/faces/codex/persona.md` (Tyler-approved, lore grows only from the manuscript) and
+  `guest_persona.md` both exist and are pinned by tests.
+- **Codex's future job carries a known trap:** apply allows FIRST, verify the returned overwrite
+  actually contains them, only then fire any deny. A bot that denies `@everyone` `view_channel`
+  before granting itself an explicit allow locks ITSELF out, unrecoverably from the bot side
+  (the 38-refusal incident, 2026-08-21). And discord.py returns `view_channel` as
+  `read_messages` - grepping payloads for the literal name reports 100% false drift.
+- **One supervisor per face** (`supervise_bot.ps1 -Face <name>`), per-face log, mutex, and pid
+  matching; `bot.py` refuses a launch whose `--face` marker and `BENHAM_FACE` disagree.
+
+---
+
 ## 5. Decisions — settled, do not re-litigate
 
 All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 29 and 30 are the exception in a second sense: 30 is a decision Claude made about what Claude may do, and Tyler ratified it by asking for it in writing.
@@ -993,6 +1035,9 @@ All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 
 | 31 | **The funnel's mouth is code, not judgment** (2026-08-21). The `<<issue:>>` tag asks a model to notice "this is a report" mid-conversation, and it missed twice in two days under two different prompts. A third prompt patch was the same bet at a higher stake, so a deterministic detector reads the guest's own message and parks the same proposal. The tag stays — it is better at *phrasing* — but it is no longer the only thing standing between a report and the floor. **Precision, not recall, is the constraint**: these guests discuss broken video games constantly, so a complaint phrase alone never fires; the message must also name Benham, a project, or a UI surface |
 | 32 | **Guest model: Sonnet 5, window 15** (2026-08-21, Tyler's call). Haiku was cheap and it confabulated under pressure — on 08-20 it told Doom that a message Benham itself had written was fabricated, then backed down when pushed. The five-exchange window is what put the message out of reach in the first place. Paid for in large part by caching the persona, which had never been cached on this path |
 | 33 | **Close-the-loop shipped, and "started" stays unsent** (2026-08-21, Tyler's go-ahead). Amends #28's deferral. GitHub is the source of truth: closing an issue or flipping a label IS the decision, so there is no separate notify step to forget. Terminal outcomes only — `fixed` and `declined` — because conversations.py's TERMINAL STATES ONLY rule comes from the same conversation with the same person: progress is not the message, and a DM on every `approved` flip is the notification stream Doom asked not to get. `declined` is classified BEFORE a plain close, so a rejected request can never be reported as fixed. Runs on the bot's own 20-minute tick rather than as a scheduled Claude task — nothing here needs a model, so it costs no tokens and adds no process |
+| 34 | **The machine wall** (2026-08-22, the second face). `pc_task`/`spawn_in_room` refuse every non-primary face in CODE, whatever any config says. A second identity may hold admin over a server, never a shell on the PC; reversing this means deleting a rule and its test on purpose |
+| 35 | **Codex owns Next Big Novel completely** (2026-08-22, amending the original reduced-capability answer). Tier 3 there and nowhere else, via per-face `destructive_guilds`. Benham leaves that guild only AFTER Codex has demonstrated a real permission edit in it — demonstrated, not declared: a face can be up, authenticated, and still unable to touch the server it owns |
+| 36 | **An unqualified call site answers as the PROCESS face** (2026-08-23). `BENHAM_FACE` is the mechanism everywhere — CLI, stores, conversations, and now CallContext and identity's defaults. Resolving `face=None` to the primary instead would hand every unmarked mint site the unconfined face, which is rule 1's forbidden inheritance arriving through a default argument. In a benham process the two resolutions are the same value, pinned byte-identical |
 
 ### Baseline — clean as of 2026-08-16
 
