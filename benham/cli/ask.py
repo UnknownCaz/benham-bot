@@ -96,10 +96,18 @@ def main(argv):
     ap.add_argument("--why", default=None,
                     help="One line on why you placed yourself there. Shown to him "
                          "next to your question.")
+    ap.add_argument("--nudge-cap", type=int, default=None, metavar="N",
+                    help=f"Cap THIS ask's nudges below the default "
+                         f"({conversations.MAX_NUDGES}); 0 = never nudge, just "
+                         "bank at the deadline. A ceiling promised in prose "
+                         "never reaches the timer (c19) - this one does.")
     ap.add_argument("--queue", action="store_true",
                     help="Print what is already waiting on him and exit. Read this "
                          "BEFORE asking.")
     a = ap.parse_args(argv)
+    if a.nudge_cap is not None and not 0 <= a.nudge_cap <= conversations.MAX_NUDGES:
+        ap.error(f"--nudge-cap must be 0..{conversations.MAX_NUDGES} - it can "
+                 "only lower the pressure on a person, never raise it")
 
     who = _owner()
 
@@ -149,7 +157,8 @@ def main(argv):
         # The routable half of the registration: the `local_` session id, so
         # Raven can deliver the answer INTO the asking session instead of
         # matching cwd and hoping. None when unresolvable - never a guess.
-        asker_session=caller.session_id())
+        asker_session=caller.session_id(),
+        nudge_cap=a.nudge_cap)
 
     # Delivered through the outbox so the RUNNING bot sends it - this process has no
     # Discord connection and should not grow one. advance_conversation's first beat

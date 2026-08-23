@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _testconfig                 # noqa: F401,E402 - must precede every benham import
 
 from benham.core import conversations  # noqa: E402
-from benham.cli import outreach        # noqa: E402
+from benham.cli import ask, outreach   # noqa: E402
 
 _fails = []
 
@@ -108,6 +108,18 @@ try:
 except SystemExit as e:
     _code = e.code
 check("outreach refuses a cap above the global policy (usage error)", _code, 2)
+
+section("...and so does ask - c19's promise was made about a queue ask")
+ask.main(["gentle one?", "--nudge-cap", "0", "--no-wait"])
+_latest = max(conversations.all_conversations(), key=lambda c: c.get("seq", 0))
+check("ask --nudge-cap 0 lands on the record (0, not None - zero-pressure is "
+      "a real setting)", _latest.get("nudge_cap"), 0)
+_code = None
+try:
+    ask.main(["q?", "--nudge-cap", "9", "--no-wait"])
+except SystemExit as e:
+    _code = e.code
+check("ask refuses a cap above the global policy (usage error)", _code, 2)
 
 print()
 if _fails:
