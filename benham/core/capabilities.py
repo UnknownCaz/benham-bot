@@ -2570,6 +2570,146 @@ async def _ban_member(ctx, p):
     return {"status": "banned", "user": str(u), "user_id": u.id, "guild": g.name}
 
 
+@action("purge_guild", identity.DESTRUCTIVE,
+        "Bulk-delete messages across EVERY text channel in a server.",
+        {"guild_id": {"type": "int", "required": True},
+         "older_than_days": {"type": "int", "desc": "Only messages older than this"},
+         "limit": {"type": "int", "desc": "How many to consider PER CHANNEL (default 100)"},
+         "author_id": {"type": "int", "desc": "Only this user's messages"},
+         "contains": {"type": "str", "desc": "Only messages containing this text"}},
+        needs_guild=True)
+async def _purge_guild(ctx, p):
+    """The guild-wide sweep, rebuilt as a real capability (2026-08-26).
+
+    It used to exist as `purge --scope guild` on the legacy outbox verb, which
+    reached ch.purge() with no allowlist, no dry-run and no token. That was
+    retired rather than repointed, because the per-channel twin has no guild
+    scope and silently narrowing the flag would have been worse than removing
+    it. Tyler's call was to build it back properly instead.
+
+    THE PREVIEW IS THE SAFETY MECHANISM HERE, more than on any other action.
+    A per-channel purge names one channel you already chose; this one resolves
+    its own target set, so "N messages across M channels in <guild>" is the only
+    thing standing between the token and a server. It therefore walks every
+    channel for real rather than estimating, and it reports what it CANNOT touch
+    as loudly as what it can - a preview that quietly omitted the channels the
+    bot lacks Manage Messages in would be describing a different action than the
+    one the token fires.
+
+    PARTIAL FAILURE: it CONTINUES, and says so per channel. Not taste - a
+    Forbidden here is routine rather than exceptional (any guild with one locked
+    channel has some), so aborting would make the verb unusable in exactly the
+    servers that have it. The legacy implementation made the same call for the
+    same reason. What makes continuing honest rather than sloppy is that the
+    skipped channels are named in the PREVIEW, before the token: you authorize a
+    known-imperfect sweep, not a total one that quietly fell short.
+
+    Bounded per channel by `limit`, like its sibling. A guild-wide verb with no
+    bound is the unbounded verb this replaced, wearing a token.
+
+    Known gap, stated rather than engineered around: the channel set is resolved
+    again when the token fires, so a channel created between preview and
+    confirmation is swept without having been previewed. Same shape as the
+    sibling, where messages arrive in that window. The confirm TTL bounds it.
+    """
+    g = ctx.guild(p["guild_id"])
+    limit = int(p.get("limit") or 100)
+    author = int(p["author_id"]) if p.get("author_id") else None
+    contains = (p.get("contains") or "").lower()
+    before = None
+    if p.get("older_than_days"):
+        before = datetime.now(timezone.utc) - timedelta(days=int(p["older_than_days"]))
+
+    def match(m):
+        if author and m.author.id != author:
+            return False
+        if contains and contains not in (m.content or "").lower():
+            return False
+        return True
+
+    me = g.me
+    targets, blocked = [], {}
+    for ch in g.text_channels:
+        perms = ch.permissions_for(me)
+        if not perms.read_message_history or not perms.view_channel:
+            blocked[f"#{ch.name}"] = "cannot read history"
+        elif not perms.manage_messages:
+            blocked[f"#{ch.name}"] = "no Manage Messages"
+        else:
+            targets.append(ch)
+
+    if ctx.dry_run:
+        per_channel, total, unreadable = {}, 0, {}
+        oldest = newest = None
+        for ch in targets:
+            try:
+                hits = [m async for m in ch.history(limit=limit, before=before)
+                        if match(m)]
+            except Exception as e:  # noqa: BLE001 - one bad channel must not blind the rest
+                unreadable[f"#{ch.name}"] = str(e)
+                continue
+            if not hits:
+                continue
+            per_channel[f"#{ch.name}"] = len(hits)
+            total += len(hits)
+            lo, hi = hits[-1].created_at, hits[0].created_at
+            oldest = lo if oldest is None or lo < oldest else oldest
+            newest = hi if newest is None or hi > newest else newest
+
+        skipped = dict(blocked, **unreadable)
+        if not total:
+            return {"summary": (f"Nothing matches anywhere in **{g.name}** - "
+                                f"0 messages would be deleted across "
+                                f"{len(targets)} channel(s)."),
+                    "count": 0, "channels": 0,
+                    "detail": _skipped_detail(skipped)}
+        lines = "\n".join(f"  {name}: {n}" for name, n in
+                           sorted(per_channel.items(), key=lambda kv: -kv[1]))
+        span = (f"Span: {oldest:%Y-%m-%d} to {newest:%Y-%m-%d}\n"
+                if oldest and newest else "")
+        return {
+            "summary": (f"Delete **{total} messages** across "
+                        f"**{len(per_channel)} channel(s)** in **{g.name}** "
+                        f"- SERVER-WIDE"),
+            "detail": (f"{span}Per channel:\n{lines}"
+                       + _skipped_detail(skipped)),
+            "count": total,
+            "channels": len(per_channel),
+            "guild": g.name,
+        }
+
+    per_channel, errors, total = {}, dict(blocked), 0
+    for ch in targets:
+        try:
+            deleted = await ch.purge(limit=limit, before=before, check=match,
+                                     bulk=True)
+            per_channel[f"#{ch.name}"] = len(deleted)
+            total += len(deleted)
+        except discord.Forbidden:
+            errors[f"#{ch.name}"] = "missing Manage Messages permission"
+        except Exception as e:  # noqa: BLE001 - record and carry on; see docstring
+            errors[f"#{ch.name}"] = str(e)
+    # Per channel, never one aggregate: "1400 deleted" cannot be checked against
+    # anything, and it hides that four channels refused.
+    return {"status": "purged", "guild": g.name, "deleted": total,
+            "deleted_by_channel": per_channel, "skipped": errors}
+
+
+def _skipped_detail(skipped):
+    """Name the channels this sweep cannot touch, or say plainly that none exist.
+
+    The negative case is written out on purpose. INTENT §3.3: every store the
+    model is expected to discuss needs a true account of itself in front of it,
+    including when the answer is "none" - an absent line reads as "nothing was
+    skipped" and as "nobody checked" identically.
+    """
+    if not skipped:
+        return "\n\nNo channels skipped - the bot can purge every text channel here."
+    lines = "\n".join(f"  {name}: {why}" for name, why in sorted(skipped.items()))
+    return (f"\n\nSKIPPED ({len(skipped)}) - these are NOT part of the sweep:\n"
+            f"{lines}")
+
+
 @action("delete_emoji", identity.DESTRUCTIVE, "Delete a custom emoji.",
         {"guild_id": {"type": "int", "required": True},
          "emoji_id": {"type": "int", "required": True}}, needs_guild=True)

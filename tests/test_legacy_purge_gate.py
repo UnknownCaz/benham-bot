@@ -156,13 +156,18 @@ def main():
         _os.path.abspath(__file__))), "benham", "cli", "purge.py"),
         encoding="utf-8").read()
     check("purge.py enqueues purge_messages", '"purge_messages"' in src, True)
-    # The guild sweep has no gated equivalent, so it must be REFUSED rather than
-    # silently downgraded to a single channel - a flag that quietly means
-    # something smaller than it says is worse than one that is gone.
+    # --scope guild is refused rather than silently downgraded to a single
+    # channel. It came back on 2026-08-26 as its own tier-3 capability taking a
+    # GUILD id, so the old flag - which took a CHANNEL id and inferred the guild
+    # - must NOT be quietly reinterpreted as the new one. A flag that means
+    # something other than it says is worse than one that is gone.
     check("purge.py refuses --scope guild",
           purge_cli.main(["purge", "5552", "--scope", "guild"]), 2)
+    check("...and points at the replacement rather than just saying no",
+          "--guild" in src and "purge_guild" in src, True)
     check("purge.py still accepts --scope channel as a no-op",
-          "--scope guild was retired" in src, True)
+          purge_cli.main(["purge"]) == 2 and "the default; harmless to pass" in src,
+          True)
 
     print()
     if _fails:

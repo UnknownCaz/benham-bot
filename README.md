@@ -76,7 +76,7 @@ Every capability declares one, and `capabilities.run()` enforces it.
 | **read** (18) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
 | **speak** (10) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
 | **manage** (29) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
-| **destructive** (7) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
+| **destructive** (8) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 <!-- /GENERATED:tier-table -->
 
 Run `python benham.py do list` for the full catalogue, `python benham.py do help <action>` for one action's
@@ -174,7 +174,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 <!-- GENERATED:count -->
-`do` covers all 64 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+`do` covers all 65 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
 <!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)
@@ -194,10 +194,15 @@ rather than of the irreversible effect, and `purge --scope guild` could sweep an
 guild the bot could see. Both CLIs now enqueue the registry twins
 (`delete_message`, `purge_messages`), which carry all three gates, and a request
 file naming the old verb is refused with a pointer to its replacement.
-`--scope guild` went with it: the gated twin is per-channel, and a whole-guild
-sweep needs its own tier-3 capability rather than a flag. It had never been
-invoked once in 970 lifetime outbox records. For author/text filters, use
-`do.py purge_messages`.
+`--scope guild` went with it - and came BACK the same day as its own tier-3
+capability, `purge_guild` (Tyler's call). It takes a GUILD id rather than
+inferring one from a channel, is bounded per channel by `limit`, and its
+dry-run states the true blast radius before the token: total, per channel,
+the guild by name, and every channel it CANNOT touch and why. Partial
+failure continues and reports per channel - a Forbidden is routine, so
+aborting would make the verb useless in the servers that have one.
+`python benham.py purge --guild <guild_id> [--days N] [--limit N]`.
+For author/text filters on one channel, use `do.py purge_messages`.
 
 ### CLI - read from Discord
 
