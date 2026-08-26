@@ -283,6 +283,57 @@ else:
 check("flag restored: the token is mandatory again",
       confirm.read_reply("yes, purge that channel.", d3)[0], "needs_token")
 
+# ---- what a real copy-paste actually carries (2026-08-26) ----
+# The prompt prints the token inside backticks, so a LITERAL paste of exactly the
+# string he was asked for arrived as "yes `a1b2c3`" - which found no token,
+# matched no phrase, and did NOTHING AT ALL. The correct answer, typed correctly,
+# silently ignored. Per-word punctuation stripping is what fixes it.
+for _form, _label in [
+        ("yes `{t}`", "backticked (what the prompt itself shows)"),
+        ("yes **{t}**", "bolded"),
+        ("yes {T}", "uppercased"),
+        ("yes ({t})", "parenthesised"),
+        ("yes, purge that channel {t}", "token plus prose")]:
+    check(f"paste form fires: {_label}",
+          confirm.read_reply(_form.format(t=d3.token, T=d3.token.upper()), d3)[0], "yes")
+
+# ---- a MISTYPED token is refused out loud, not silently ----
+# The first version of this only caught a same-length hex slip, which is the least
+# likely typo there is: a dropped char, an extra char or a non-hex char all fell
+# through to silence. That matters because the whole argument for this gate is
+# that a safety prompt people route around is worse than none.
+for _bad, _label in [
+        (d3.token[:-1], "a dropped character"),
+        (d3.token + "0", "an extra character"),
+        (d3.token[:3] + "g" + d3.token[4:], "a non-hex character"),
+        (d3.token[:2] + d3.token[3:] + "f", "a transposed-ish near miss")]:
+    check(f"mistyped token is SPOKEN: {_label}",
+          confirm.read_reply(f"yes {_bad}", d3)[0], "needs_token")
+
+# ---- the flag fails CLOSED on anything that is not a real boolean ----
+# bool(value) was the obvious reading and it fails OPEN: null, 0, "" and [] all
+# coerce to False and silently disable the gate. A fail-open reading inside the
+# one layer whose doctrine is fail-closed is the defect, not the typo that trips
+# it - so only a JSON boolean turns it off, and a malformed value says so at boot.
+_saved_cfg = identity.CONTROL.get("confirm")
+for _value, _want_on in [(None, True), (0, True), ("", True), ([], True),
+                         ("false", True), ("no", True), (1, True),
+                         (True, True), (False, False)]:
+    identity.CONTROL["confirm"] = dict(_saved_cfg or {}, require_token_tier3=_value)
+    check(f"require_token_tier3={_value!r} -> gate on: {_want_on}",
+          confirm.require_token(), _want_on)
+# ...and a malformed value is not merely tolerated, it is reported.
+identity.CONTROL["confirm"] = dict(_saved_cfg or {}, require_token_tier3=None)
+check("a malformed value is reported for the boot banner",
+      bool(confirm.config_problem()), True)
+identity.CONTROL["confirm"] = dict(_saved_cfg or {}, require_token_tier3=False)
+check("an honest false is not reported as malformed", confirm.config_problem(), None)
+if _saved_cfg is None:
+    identity.CONTROL.pop("confirm", None)
+else:
+    identity.CONTROL["confirm"] = _saved_cfg
+
+
 # Absent from config must mean ON. The default is the safety property; a
 # control.json written before this flag existed must not silently opt out.
 _no_cfg = dict(identity.CONTROL)

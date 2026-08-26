@@ -240,8 +240,41 @@ def require_token():
     is one module-level slot shared by every face, so a per-face answer to "does
     this confirmation need its token" would be answering about the wrong object.
     """
+    return config_problem() is not None or _configured_require_token() is not False
+
+
+_MISSING = object()   # "key absent" - distinct from a key present holding null
+
+
+def _configured_require_token():
+    """The raw configured value, or _MISSING when the key is absent.
+
+    A sentinel rather than None because a JSON `null` is PRESENT and malformed,
+    while an absent key is simply the default - and collapsing the two would
+    report no problem for the one value most likely to be a mistake.
+    """
     cfg = identity.CONTROL.get("confirm", {}) or {}
-    return bool(cfg.get("require_token_tier3", True))
+    if "require_token_tier3" not in cfg:
+        return _MISSING
+    return cfg["require_token_tier3"]
+
+
+def config_problem():
+    """A one-line complaint about a malformed flag, or None when it is sane.
+
+    Exists because `bool(value)` was the obvious way to read this and it FAILS
+    OPEN: null, 0, "" and [] all coerce to False and silently disable the gate,
+    while the sloppy-looking string "false" coerces to True and happens to fail
+    safe. A fail-open reading sitting inside the one layer whose whole doctrine
+    is fail-closed is the bug, not the typo that would trip it - so only a real
+    JSON boolean turns this off, and anything else is a config error that keeps
+    the gate ON and says so at boot.
+    """
+    value = _configured_require_token()
+    if value is _MISSING or value is True or value is False:
+        return None
+    return (f"confirm.require_token_tier3 is {value!r}, which is not true/false - "
+            f"the tier-3 token stays REQUIRED. Fix it or delete the key.")
 
 
 def needs_token(pending):
@@ -278,15 +311,21 @@ def read_reply(text, pending=None):
     if not raw:
         return None, None
 
+    # Per-word punctuation stripping, because the prompt renders the token in
+    # backticks and a literal copy-paste brings them along. Without this,
+    # "yes `a1b2c3`" found no token, matched no phrase, and returned SILENCE -
+    # the correct answer, typed correctly, doing nothing at all.
+    words = [_strip_wrapping(w) for w in raw.replace(",", " ").split()]
+    words = [w for w in words if w]
+
     token = None
-    tried_token = False   # token-SHAPED, but no longer (or never) live
-    words = raw.replace(",", " ").split()
     for w in words:
-        if len(w) == 6 and all(c in "0123456789abcdef" for c in w):
-            if get(w):
-                token = w
-                break
-            tried_token = True
+        if _is_token_shaped(w) and get(w):
+            token = w
+            break
+    # Did he TRY to give a token and miss? Used only to decide whether a refusal
+    # is spoken or silent - never to fire anything.
+    tried_token = any(_token_attempt(w, pending) for w in words) and token is None
 
     # Compare against the phrase with any token removed, so "yes a1b2c3" still
     # reads as a plain affirmative.
@@ -329,6 +368,52 @@ def read_reply(text, pending=None):
     if leads_yes and _references(raw, pending):
         return "yes", None
     return None, None
+
+
+def _strip_wrapping(word):
+    """Drop markdown and punctuation clinging to a word's edges.
+
+    The token is shown inside backticks, so a copy-paste of the exact string the
+    prompt asked for arrives as "`a1b2c3`". Bold and quotes get the same
+    treatment. Only the EDGES are stripped, so "don't" survives intact.
+    """
+    return word.strip("`*_~\"'()[]{}<>.,:;!?").strip()
+
+
+def _is_token_shaped(word):
+    """Exactly what park() mints: six lowercase hex characters."""
+    return len(word) == 6 and all(c in "0123456789abcdef" for c in word)
+
+
+def _edit_distance(a, b, cap=3):
+    """Levenshtein, bounded - these are six-character strings."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _token_attempt(word, pending):
+    """Does this word look like a botched attempt at the token?
+
+    Two ways to qualify: it is token-SHAPED (six hex, so it is either a lapsed
+    token or a same-length typo), or it is a near miss of the token actually
+    parked. The second case is the one that matters and the first version of this
+    change did not have it: a dropped character, an extra character or a non-hex
+    slip all failed the shape test, so the ONE typo that got a spoken refusal was
+    the least likely kind. Silence is the wrong answer to someone who did what he
+    was asked and fat-fingered it.
+    """
+    if _is_token_shaped(word):
+        return True
+    if pending is None or not (3 <= len(word) <= 9):
+        return False
+    return _edit_distance(word, pending.token) <= 2
 
 
 def _references(raw, pending):

@@ -62,6 +62,19 @@
     token is answered out loud for the same reason — that is the one new way to fail here, and
     it happens to someone who did exactly what they were asked. Cancelling never got harder — a
     bare "no" still works on every tier, so the safe direction stays the convenient one.</p>
+    <p><strong>When a PC permission prompt is live at the same time.</strong> Both can be
+    waiting in the same DM, and both accept a bare "yes". A reply carrying a live confirm
+    token belongs to the <em>confirmation</em> and is never read as an answer to the PC
+    prompt — without that rule the PC block, which classifies with no pending in hand,
+    stripped the token out and read <code>yes a1b2c3</code> as a plain affirmative, so the
+    token minted for a purge approved a shell command instead. A bare yes or no while both
+    are live answers <strong>neither</strong>: it is ambiguous in a direction that misfiles
+    across a security boundary either way, and both prompts carry buttons, so saying which
+    costs one tap.</p>
+    <p>The token match tolerates what a real copy-paste carries: surrounding backticks,
+    bold markers, trailing punctuation, and any case. The prompt prints the token inside
+    backticks, so a literal paste of exactly what was asked for used to find no token,
+    match no phrase, and do nothing at all.</p>
     <p>The refusal is deliberately <strong>no wider than the set that used to fire</strong>. A
     sentence that merely opens with "yes" and names nothing ("yes, you're totally right") still
     falls through to the agent as ordinary conversation: over a confirm window that can run an

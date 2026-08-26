@@ -526,6 +526,15 @@ async def on_ready():
         f", agent guilds {sorted(_gates['agent_guilds'])} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
     log(f"Destructive actions allowed in guilds: {sorted(_gates['destructive_guilds']) or 'NONE'}")
+    # Every other safety-relevant setting gets a banner line, and this one is a
+    # gate that can be turned OFF from config - so a deployment running without
+    # it must not be indistinguishable in the log from one running with it.
+    log("Tier-3 typed confirmations: token REQUIRED" if confirm.require_token()
+        else "Tier-3 typed confirmations: token NOT required "
+             "(confirm.require_token_tier3 is off) - a yes that NAMES the action fires it")
+    _confirm_cfg_problem = confirm.config_problem()
+    if _confirm_cfg_problem:
+        log(f"WARNING: {_confirm_cfg_problem}")
     if identity.guest_enabled():
         # "no tools" was true when guests were pure conversation and became a lie
         # the day server-side search shipped. The distinction that actually holds -
@@ -1603,8 +1612,36 @@ async def on_message(message):
     # drive the agent could approve a shell command on the actual machine.
     rid = codesession.pending_request() if is_dm else None
     if rid:
-        verdict, _ = confirm.read_reply(text)
-        if verdict in ("yes", "no"):
+        verdict, tok = confirm.read_reply(text)
+        parked = confirm.current()
+        # A live confirm token names the CONFIRMATION, never this. Without this
+        # line the block below ate it: read_reply is called with no pending here,
+        # so the token was stripped out and "yes a1b2c3" classified as a plain bare
+        # affirmative - approving an arbitrary shell command with the token minted
+        # for a purge, while the purge stayed parked and nothing said which of the
+        # two had just been authorized. Making the token the only typed form on
+        # offer is what turned that from a corner case into the main road.
+        if tok is not None:
+            pass                      # falls through to the confirmation block
+        elif parked is not None and verdict in ("yes", "no"):
+            # Both prompts are live and a bare yes/no does not say which. Guessing
+            # is silent misfiling across a security boundary in EITHER direction:
+            # a yes meant for the preview running a shell command, or a yes meant
+            # for the command firing a delete. Both prompts carry buttons, so
+            # disambiguating costs one tap and invents no syntax.
+            await reply_in(
+                message.channel,
+                f"Two things are waiting on you and that doesn't say which — so "
+                f"I have done **neither**.\n"
+                f"• the **PC permission** request\n"
+                f"• the **{parked.action}** preview\n"
+                f"Tap the button on whichever you mean, or reply "
+                f"`yes {parked.token}` for **{parked.action}**.",
+                reference=message)
+            log(f"AMBIGUOUS '{verdict}' - PC request {rid} and {parked.action} "
+                f"(token {parked.token}) both live; answered neither")
+            return
+        elif verdict in ("yes", "no"):
             codesession.answer(rid, verdict == "yes")
             await retire_view(("pc", str(rid)), f"answered '{verdict}' in chat")
             await reply_in(message.channel,
