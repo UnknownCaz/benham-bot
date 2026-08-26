@@ -2136,6 +2136,12 @@ async def tick_loopclose():
             f"{e.get('author')} ({e.get('author_id')})")
 
 
+# Legacy outbox verbs retired 2026-08-26 because they bypassed every tier-3 gate.
+# Mapped to their registry twins so the refusal can name the replacement rather
+# than only saying no - see the guard in poll_outbox.
+_RETIRED_UNGATED = {"purge": "purge_messages", "delete": "delete_message"}
+
+
 @tasks.loop(seconds=2)
 async def poll_outbox():
     try:
@@ -2167,11 +2173,15 @@ async def poll_outbox():
                 raise ValueError(_mis)
 
             # --- capability-registry actions (capabilities.py) ---
-            # The legacy names below (send/dm/speak/edit/delete/history/purge) predate
-            # the registry and keep their own handling; everything added since is
-            # declared once in capabilities.py and dispatched here. The two name sets
-            # are disjoint (send vs send_message, purge vs purge_messages), so an old
-            # request file still routes exactly where it always did.
+            # The legacy names below (send/dm/speak/edit/history) predate the
+            # registry and keep their own handling; everything added since is
+            # declared once in capabilities.py and dispatched here. The two name
+            # sets are disjoint (send vs send_message), so an old request file
+            # still routes exactly where it always did.
+            #
+            # EXCEPT the two destructive ones. `purge` and `delete` were retired
+            # 2026-08-26 and now refuse, because "routes where it always did" was
+            # the problem: where they always went had none of the tier-3 gates.
             if action in capabilities.REGISTRY:
                 act = capabilities.REGISTRY[action]
                 params = {k: v for k, v in req.items()
@@ -2261,6 +2271,28 @@ async def poll_outbox():
                 action_done = True
                 _finish(path, fname, FAILED, result)
                 log(f"refused retired voice action {action!r} from {fname}")
+            elif action in _RETIRED_UNGATED:
+                # RETIRED 2026-08-26 (Tyler's call). These two predate the registry
+                # and reached msg.delete() / ch.purge() with NO policy.authorize, NO
+                # destructive_guilds check, no dry-run and no confirmation - so the
+                # tier-3 guarantee was a property of the verb NAME rather than of the
+                # destructive EFFECT, and `purge --scope guild` could sweep any guild
+                # the bot could see. The registry twins carry all three gates.
+                #
+                # Refused rather than deleted outright, following the voice
+                # precedent above: a stale request file sitting in outbox/ must be
+                # ANSWERED, and this is also the wall - after this, no hand-written
+                # or leftover file can reach the ungated path either.
+                result.update({"status": "failed", "request": req,
+                               "error": f"'{action}' was retired on 2026-08-26 - it "
+                                        f"bypassed the tier-3 gates. Use "
+                                        f"'{_RETIRED_UNGATED[action]}' instead, which "
+                                        f"carries the allowlist, the dry-run and the "
+                                        f"confirmation token."})
+                action_done = True
+                _finish(path, fname, FAILED, result)
+                log(f"refused retired ungated action {action!r} from {fname} "
+                    f"-> use {_RETIRED_UNGATED[action]}")
             elif action == "edit":
                 message_id = int(req["message_id"])
                 content = str(req["content"])
@@ -2277,21 +2309,6 @@ async def poll_outbox():
                 action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Edited message {message_id} in #{getattr(channel, 'name', channel_id)}")
-            elif action == "delete":
-                message_id = int(req["message_id"])
-                msg = await channel.fetch_message(message_id)
-                await msg.delete()
-                result.update(
-                    {
-                        "status": "deleted",
-                        "request": req,
-                        "message_id": message_id,
-                        "channel": str(channel),
-                    }
-                )
-                action_done = True
-                _finish(path, fname, SENT, result)
-                log(f"Deleted message {message_id} in #{getattr(channel, 'name', channel_id)}")
             elif action == "history":
                 limit = int(req.get("limit", 20))
                 msgs = []
@@ -2312,47 +2329,6 @@ async def poll_outbox():
                 action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Fetched {len(msgs)} msg(s) from #{getattr(channel, 'name', channel_id)}")
-            elif action == "purge":
-                # Delete messages older than `older_than_days` (default 7).
-                # scope: "channel" (default) purges just this channel;
-                #        "guild" sweeps every text channel in the guild.
-                days = int(req.get("older_than_days", 7))
-                scope = req.get("scope", "channel")
-                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-                if scope == "guild" and getattr(channel, "guild", None) is not None:
-                    targets = list(channel.guild.text_channels)
-                else:
-                    targets = [channel]
-                per_channel = {}
-                total = 0
-                errors = {}
-                for ch in targets:
-                    try:
-                        # discord.py bulk-deletes messages < 14 days old and
-                        # falls back to individual deletes for older ones.
-                        deleted = await ch.purge(limit=None, before=cutoff, bulk=True)
-                        per_channel[f"#{ch.name}"] = len(deleted)
-                        total += len(deleted)
-                        log(f"Purged {len(deleted)} msg(s) older than {days}d from #{ch.name}")
-                    except discord.Forbidden:
-                        errors[f"#{ch.name}"] = "missing Manage Messages permission"
-                        log(f"PURGE forbidden in #{getattr(ch,'name','?')} (need Manage Messages)")
-                    except Exception as e:  # noqa: BLE001
-                        errors[f"#{ch.name}"] = str(e)
-                        log(f"PURGE error in #{getattr(ch,'name','?')}: {e}")
-                result.update({
-                    "status": "purged",
-                    "request": req,
-                    "scope": scope,
-                    "older_than_days": days,
-                    "cutoff": cutoff.isoformat(),
-                    "deleted_total": total,
-                    "deleted_by_channel": per_channel,
-                    "errors": errors,
-                })
-                action_done = True
-                _finish(path, fname, SENT, result)
-                log(f"Purge complete: {total} msg(s) deleted, errors={errors}")
             else:
                 content = str(req["content"])
                 sent = await channel.send(content)
