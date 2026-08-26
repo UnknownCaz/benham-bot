@@ -540,6 +540,19 @@
     "taints": false,
     "tier": 2
   },
+  "purge_guild": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
   "purge_messages": {
     "always_confirm": false,
     "blocked_when_tainted": false,

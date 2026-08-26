@@ -54,6 +54,7 @@ from benham import paths
 from benham.cli.delete import run_two_step
 from benham.core.outbox import EXIT_OK, console_utf8, parse_ids, usage
 
+CHR_NL = "\n"
 DEFAULT_DAYS = 7
 DEFAULT_LIMIT = 100
 
@@ -77,7 +78,21 @@ def main(argv):
 
     if len(argv) < 2:
         return usage("Usage: python benham.py purge <channel_id> [--days N] "
-                     "[--limit N] [--confirm-token TOK] [--no-wait]")
+                     "[--limit N] [--confirm-token TOK] [--no-wait]" + CHR_NL +
+                     "   or: python benham.py purge --guild <guild_id> "
+                     "[--days N] [--limit N] [--confirm-token TOK]")
+
+    guild_id = None
+    if "--guild" in argv:
+        i = argv.index("--guild")
+        if i + 1 >= len(argv):
+            return usage("--guild needs a guild id")
+        got, err = parse_ids(argv[i + 1:i + 2], ["--guild"])
+        if err:
+            return usage(err)
+        (guild_id,) = got
+        argv = argv[:i] + argv[i + 2:]
+        argv.insert(1, "0")        # keep the positional slot; unused for a guild sweep
 
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
@@ -106,15 +121,37 @@ def main(argv):
         elif flag == "--scope":
             scope = rest.pop(0) if rest else "?"
             if scope == "channel":
-                continue          # the only scope there is now; harmless to pass
+                continue          # the default; harmless to pass
+            # Deliberately NOT reinterpreted. The old form took a CHANNEL id and
+            # inferred the guild from it; the capability takes a guild id. Quietly
+            # treating one as the other is the silent reinterpretation this whole
+            # lane has been removing.
             return usage(
-                "--scope guild was retired on 2026-08-26 along with the ungated "
-                "legacy purge. The gated twin is per-channel; a whole-guild sweep "
-                "needs its own tier-3 capability, which is a decision about blast "
-                "radius rather than a flag. Purge one channel at a time, or raise "
-                "it on the Benham board.")
+                "--scope guild is gone; the guild sweep is now its own tier-3 "
+                "capability and takes a GUILD id, not a channel id. Use: "
+                "python benham.py purge --guild <guild_id> [--days N] [--limit N]")
         else:
             return usage(f"unknown argument {flag!r}")
+
+    if guild_id is not None:
+        print(f"SERVER-WIDE purge: up to {limit} message(s) per channel older "
+              f"than {days} day(s), across EVERY text channel in guild "
+              f"{guild_id}.")
+        print("  This is PERMANENT."
+              + ("" if token else " This call previews only - nothing is deleted."))
+        return run_two_step(
+            "purge_guild",
+            describe=f"guild {guild_id}, older than {days}d, limit {limit}/channel",
+            rerun=lambda t: (f"python benham.py --face {paths.PROCESS_FACE} purge "
+                             f"--guild {guild_id} --days {days} --limit {limit} "
+                             f"--confirm-token {t}"),
+            token=token,
+            no_wait=no_wait,
+            timeout=WAIT_TIMEOUT,
+            guild_id=guild_id,
+            older_than_days=days,
+            limit=limit,
+        )
 
     print(f"Purging up to {limit} message(s) older than {days} day(s) "
           f"from channel {channel_id}.")

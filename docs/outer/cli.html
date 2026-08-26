@@ -111,9 +111,13 @@ python benham.py dm 2739…5952 "hey"</code></pre>
     <em>name</em>, not of the effect. They now enqueue the registry twins
     (<code>delete_message</code>, <code>purge_messages</code>), so the first call previews and
     returns a token and you re-run with <code>--confirm-token</code>. <strong>A preview-only
-    call exits non-zero</strong>, because nothing was deleted. <code>--scope guild</code> is
-    gone: the gated twin is per-channel, and a whole-guild sweep needs its own tier-3
-    capability rather than a flag. For author/text filters use
+    call exits non-zero</strong>, because nothing was deleted. <code>--scope guild</code> is gone,
+    replaced by <code>--guild &lt;guild_id&gt;</code>, which runs the separate tier-3
+    capability <code>purge_guild</code>. It takes a guild id rather than inferring one
+    from a channel, is bounded per channel by <code>--limit</code>, and its preview
+    states the whole blast radius before the token - total, per channel, the guild by
+    name, and every channel it cannot touch, with the reason. Partial failure continues
+    and reports per channel. For author/text filters use
     <code>benham.py do purge_messages</code>.</p>
     <pre><code>python benham.py delete 8093…8612 1531…4876
 #   ...prints the preview and a confirm_token, deletes nothing
