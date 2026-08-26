@@ -183,10 +183,21 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 |---------|--------------|
 | `python benham.py send <channel_id> "msg"` | Send a message to a channel. |
 | `python benham.py draft <target_channel_id> "msg"` | Post a labeled DRAFT to Testing #asd for review, and print the `send.py` command to deliver it for real (review-first flow). |
-| `python benham.py delete <channel_id> <message_id>` | Delete one specific message (its own always; others need Manage Messages). Permanent. |
+| `python benham.py delete <channel_id> <message_id>` | Delete one specific message (its own always; others need Manage Messages). **Permanent, and tier 3 since 2026-08-26:** the first call previews and returns a token, and you re-run with `--confirm-token` to fire it. |
+| `python benham.py purge <channel_id> [--days N] [--limit N]` | Bulk-delete messages older than N days in one channel. Same two-step token as `delete`. |
 
-Bulk delete-by-age is the legacy `purge` outbox action inside `bot.py` (`poll_outbox`); the newer
-`do.py purge_messages` adds author/text filters and goes through the dry-run + confirm gate.
+**Retired 2026-08-26 (Tyler's call):** the legacy `purge` and `delete` outbox
+actions inside `bot.py` (`poll_outbox`) called `ch.purge()` / `msg.delete()`
+directly - no `policy.authorize`, no `destructive_guilds` allowlist, no dry-run
+and no confirmation - so the tier-3 guarantee was a property of the verb NAME
+rather than of the irreversible effect, and `purge --scope guild` could sweep any
+guild the bot could see. Both CLIs now enqueue the registry twins
+(`delete_message`, `purge_messages`), which carry all three gates, and a request
+file naming the old verb is refused with a pointer to its replacement.
+`--scope guild` went with it: the gated twin is per-channel, and a whole-guild
+sweep needs its own tier-3 capability rather than a flag. It had never been
+invoked once in 970 lifetime outbox records. For author/text filters, use
+`do.py purge_messages`.
 
 ### CLI - read from Discord
 

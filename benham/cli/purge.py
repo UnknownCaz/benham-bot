@@ -1,42 +1,64 @@
 """
-purge.py - bulk-delete messages older than N days.
+purge.py - bulk-delete messages in a channel, filtered by age.
 
 Usage:
-    python benham.py purge <channel_id> [--days N] [--scope channel|guild] [--no-wait]
+    python benham.py purge <channel_id> [--days N] [--limit N]
+                          [--confirm-token TOK] [--no-wait]
 
-    --days     default 7. Messages older than this are deleted.
-    --scope    "channel" (default) purges just that channel;
-               "guild" sweeps every text channel in the channel's guild.
-    --no-wait  enqueue and exit without waiting for the result.
+    --days           only messages older than this (default 7).
+    --limit          how many recent messages to consider (default 100).
+    --confirm-token  fire the previewed purge.
+    --no-wait        enqueue and exit without waiting.
 
-Enqueues a {"action":"purge", ...} request into ./outbox. bot.py reports per-channel
-counts and any per-channel errors (a channel it lacks Manage Messages in is recorded
-rather than aborting the sweep) in outbox/sent/<name>_result.json. By default this
-waits for that result and prints those counts and errors - they used to be written
-faithfully and shown to nobody - and exits non-zero when the whole request was
-refused. The wait is generous (5 min) because Discord deletes messages older than
-14 days one at a time; a timeout means still running, not failed.
+TWO STEPS, since 2026-08-26. The first call performs nothing: it walks the same
+set the real purge would and reports the real count, date span and authors, then
+hands back a token. You re-run with `--confirm-token` to actually delete. This is
+what catches a wrong channel id or an `older_than_days` off by 10x.
 
-Deletion is PERMANENT. There is no undo, so the scope and day count are printed back
-before the request is queued. Discord itself refuses to bulk-delete messages older
-than 14 days, so very old messages are removed one at a time and a large sweep takes
-a while.
+WHY THIS CHANGED, and what it cost. Until 2026-08-26 this enqueued a legacy
+`purge` action that bot.py handled in its own branch, calling ch.purge() directly
+with NO policy.authorize, NO destructive_guilds allowlist, no dry-run and no
+confirmation. `--scope guild` swept every text channel in any guild the bot could
+see. It now enqueues the registry twin `purge_messages`, which carries all three
+gates - Tyler's call, after the mandatory-token work on 08-24 made it visible that
+the tier-3 guarantee was a property of the verb NAME rather than of the effect.
 
-This CLI exists because bot.py has supported the purge action for a while but nothing
-could reach it - every other action had a script and this one didn't.
+TWO DELIBERATE DIFFERENCES from the legacy verb, both narrowing:
+
+  --scope guild is GONE and is refused rather than quietly ignored. The guarded
+  twin is per-channel; a whole-guild sweep would need either N separate
+  confirmations or a new guild-wide tier-3 capability, and adding one is a
+  decision about blast radius rather than a routing detail. Nothing measured is
+  lost: across 970 lifetime outbox records the legacy purge was invoked ZERO
+  times, at any scope.
+
+  --limit exists and defaults to 100, because the twin considers a bounded slice
+  of history. The legacy verb was unbounded (limit=None). Pass --limit explicitly
+  for a big sweep; the dry-run tells you what it actually matched before anything
+  is deleted.
+
+The twin also supports author and text filters, which this never had - reach them
+with `python benham.py do purge_messages channel_id=... author_id=... contains=...`.
+
+Deletion is PERMANENT. Discord refuses to bulk-delete messages older than 14 days,
+so very old ones go one at a time and a large sweep takes a while - which is why
+the wait is a generous 5 minutes and a timeout means still running, not failed.
+
+EXIT CODES: a preview-only first call exits NON-ZERO, because nothing was deleted
+and a script reading 0 would believe otherwise. Only a completed purge exits 0.
 """
 
 import sys
 
 from benham import paths
-from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
-                                report_outcome, usage)
+from benham.cli.delete import run_two_step
+from benham.core.outbox import EXIT_OK, console_utf8, parse_ids, usage
 
 DEFAULT_DAYS = 7
-SCOPES = ("channel", "guild")
+DEFAULT_LIMIT = 100
 
-# A guild sweep with years-old messages deletes them one at a time; 60s would
-# report a healthy purge as missing. Same reasoning as do.py's pc_task carve-out.
+# A purge with years-old messages deletes them one at a time; 60s would report a
+# healthy purge as missing. Same reasoning as do.py's pc_task carve-out.
 WAIT_TIMEOUT = 300
 
 
@@ -44,9 +66,18 @@ def main(argv):
     console_utf8()
     no_wait = "--no-wait" in argv
     argv = [a for a in argv if a != "--no-wait"]
+
+    token = None
+    if "--confirm-token" in argv:
+        i = argv.index("--confirm-token")
+        if i + 1 >= len(argv):
+            return usage("--confirm-token needs a token")
+        token = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+
     if len(argv) < 2:
         return usage("Usage: python benham.py purge <channel_id> [--days N] "
-                     "[--scope channel|guild] [--no-wait]")
+                     "[--limit N] [--confirm-token TOK] [--no-wait]")
 
     ids, err = parse_ids(argv[1:2], ["channel_id"])
     if err:
@@ -54,50 +85,54 @@ def main(argv):
     (channel_id,) = ids
 
     days = DEFAULT_DAYS
-    scope = "channel"
+    limit = DEFAULT_LIMIT
     rest = argv[2:]
     while rest:
         flag = rest.pop(0)
-        if flag == "--days":
+        if flag in ("--days", "--limit"):
             if not rest:
-                return usage("--days needs a number")
-            got, err = parse_ids(rest[:1], ["--days"])
+                return usage(f"{flag} needs a number")
+            got, err = parse_ids(rest[:1], [flag])
             if err:
                 return usage(err)
-            (days,) = got
+            (value,) = got
             rest.pop(0)
-            if days < 0:
-                return usage(f"--days must not be negative, got {days}")
+            if value < 0:
+                return usage(f"{flag} must not be negative, got {value}")
+            if flag == "--days":
+                days = value
+            else:
+                limit = value
         elif flag == "--scope":
-            if not rest:
-                return usage(f"--scope needs one of {'|'.join(SCOPES)}")
-            scope = rest.pop(0)
-            if scope not in SCOPES:
-                return usage(f"--scope must be one of {'|'.join(SCOPES)}, got {scope!r}")
+            scope = rest.pop(0) if rest else "?"
+            if scope == "channel":
+                continue          # the only scope there is now; harmless to pass
+            return usage(
+                "--scope guild was retired on 2026-08-26 along with the ungated "
+                "legacy purge. The gated twin is per-channel; a whole-guild sweep "
+                "needs its own tier-3 capability, which is a decision about blast "
+                "radius rather than a flag. Purge one channel at a time, or raise "
+                "it on the Benham board.")
         else:
             return usage(f"unknown argument {flag!r}")
 
-    where = "every text channel in the guild" if scope == "guild" else f"channel {channel_id}"
-    print(f"Purging messages older than {days} day(s) from {where}.")
-    print("  This is PERMANENT - bot.py will report per-channel counts when done.")
+    print(f"Purging up to {limit} message(s) older than {days} day(s) "
+          f"from channel {channel_id}.")
+    print("  This is PERMANENT. The first call previews only.")
 
-    final = enqueue(face=paths.PROCESS_FACE,
-        action="purge",
+    return run_two_step(
+        "purge_messages",
+        describe=f"channel {channel_id}, older than {days}d, limit {limit}",
+        rerun=lambda t: (f"python benham.py --face {paths.PROCESS_FACE} purge "
+                         f"{channel_id} --days {days} --limit {limit} "
+                         f"--confirm-token {t}"),
+        token=token,
+        no_wait=no_wait,
+        timeout=WAIT_TIMEOUT,
         channel_id=channel_id,
         older_than_days=days,
-        scope=scope,
+        limit=limit,
     )
-    print(f"Queued purge request -> {final}")
-    if no_wait:
-        return EXIT_OK
-    code, result = report_outcome(final, timeout=WAIT_TIMEOUT)
-    if code == EXIT_OK and result:
-        print(f"  deleted {result.get('deleted_total', '?')} message(s)")
-        for ch, n in (result.get("deleted_by_channel") or {}).items():
-            print(f"    {ch}: {n}")
-        for ch, err in (result.get("errors") or {}).items():
-            print(f"    {ch}: SKIPPED - {err}")
-    return code
 
 
 if __name__ == "__main__":

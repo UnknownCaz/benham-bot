@@ -45,8 +45,8 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
       <tr><td><code>python benham.py draft</code></td><td>draft a reply for review BEFORE it goes to a friend</td></tr>
       <tr><td><code>python benham.py do</code></td><td>run any registered capability from the shell</td></tr>
       <tr><td><code>python benham.py fetch</code></td><td>pull recent messages from a channel via the bot</td></tr>
-      <tr><td><code>python benham.py delete</code></td><td>ask the bot to delete ONE specific message by id</td></tr>
-      <tr><td><code>python benham.py purge</code></td><td>bulk-delete messages older than N days</td></tr>
+      <tr><td><code>python benham.py delete</code></td><td>delete ONE message by id (previews, then --confirm-token)</td></tr>
+      <tr><td><code>python benham.py purge</code></td><td>bulk-delete a channel by age (previews, then --confirm-token)</td></tr>
       <tr><td><code>python benham.py catchup</code></td><td>invisible, read-only catch-up on one channel</td></tr>
       <tr><td><code>python benham.py read_history</code></td><td>invisible, read-only reader across guilds</td></tr>
       <tr><td><code>python benham.py ask</code></td><td>ask Tyler something and wait for his answer</td></tr>
@@ -70,7 +70,7 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
       <tr><td><code>python benham.py send &lt;channel_id&gt; "msg"</code></td><td>send</td></tr>
       <tr><td><code>python benham.py draft &lt;channel_id&gt; "msg"</code></td><td>review-first send</td></tr>
       <tr><td><code>python benham.py dm &lt;user_id&gt;|--tyler "msg"</code></td><td>DM someone</td></tr>
-      <tr><td><code>python benham.py delete &lt;channel_id&gt; &lt;message_id&gt;</code></td><td>delete one message — permanent</td></tr>
+      <tr><td><code>python benham.py delete &lt;channel_id&gt; &lt;message_id&gt;</code></td><td>delete one message — permanent, needs a confirm token</td></tr>
       <tr><td><code>python benham.py fetch &lt;channel_id&gt; [limit]</code></td><td>history → result file</td></tr>
       <tr><td><code>python benham.py catchup &lt;channel_id&gt; [limit]</code></td><td>invisible read, one channel</td></tr>
       <tr><td><code>benham.py read_history [limit|all]</code></td><td>invisible read, every non-Testing guild</td></tr>
@@ -100,12 +100,24 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
     <pre><code>python benham.py dm --tyler "backup finished, all green"
 python benham.py dm 2739…5952 "hey"</code></pre>
 
-    <h3><code>benham.py delete</code></h3>
-    <p>Args: <code>&lt;channel_id&gt; &lt;message_id&gt;</code>. Deletes ONE specific message.
-    Benham's own messages always work; someone else's needs Manage Messages. Deletion is
-    <strong>permanent</strong>. For bulk delete-by-filter use <code>benham.py do purge_messages</code>
-    (which gets the dry-run + confirm gate).</p>
-    <pre><code>python benham.py delete 8093…8612 1531…4876</code></pre>
+    <h3><code>benham.py delete</code> and <code>benham.py purge</code></h3>
+    <p>Args: <code>&lt;channel_id&gt; &lt;message_id&gt;</code> for <code>delete</code>;
+    <code>&lt;channel_id&gt; [--days N] [--limit N]</code> for <code>purge</code>. Benham's own
+    messages always work; someone else's needs Manage Messages. Deletion is
+    <strong>permanent</strong>.</p>
+    <p class="note"><strong>Two steps since 2026-08-26.</strong> Both were legacy outbox verbs
+    that reached <code>msg.delete()</code> / <code>ch.purge()</code> with no allowlist, no
+    dry-run and no confirmation — the tier-3 guarantee was a property of the verb
+    <em>name</em>, not of the effect. They now enqueue the registry twins
+    (<code>delete_message</code>, <code>purge_messages</code>), so the first call previews and
+    returns a token and you re-run with <code>--confirm-token</code>. <strong>A preview-only
+    call exits non-zero</strong>, because nothing was deleted. <code>--scope guild</code> is
+    gone: the gated twin is per-channel, and a whole-guild sweep needs its own tier-3
+    capability rather than a flag. For author/text filters use
+    <code>benham.py do purge_messages</code>.</p>
+    <pre><code>python benham.py delete 8093…8612 1531…4876
+#   ...prints the preview and a confirm_token, deletes nothing
+python benham.py delete 8093…8612 1531…4876 --confirm-token 80ac01</code></pre>
 
     <h3><code>benham.py fetch</code></h3>
     <p>Args: <code>&lt;channel_id&gt; [limit]</code>, default 20. Pulls the last N messages via
