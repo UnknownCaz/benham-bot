@@ -22,20 +22,26 @@
       <li><strong>Mandatory dry-run.</strong> The first call performs nothing and returns real
       facts: counts, date spans, author breakdowns, who currently holds the role. This is what
       catches a wrong channel id or an <code>older_than_days</code> off by 10×.</li>
-      <li><strong>Explicit confirm, and on tier 3 it must name what it is confirming.</strong>
+      <li><strong>Explicit confirm, and on tier 3 the token is required.</strong>
       In a DM: preview + a token, then an affirmative. On tiers 1–2 a bare "yes" fires. On
-      <strong>tier 3 it does not</strong> — the reply has to reference the action, so
-      "yes, purge that channel" fires and "yes, you're totally right" does not. Naming the token
-      (<code>yes a1b2c3</code>) counts as a reference, since it identifies the action more
-      precisely than any word could. From the CLI: re-run with <code>confirm_token=</code>.</li>
+      <strong>tier 3 it does not</strong> — a typed reply has to carry the 6-hex token
+      (<code>yes a1b2c3</code>), and naming the action is no longer enough. The
+      <strong>Approve button is unaffected</strong>: it holds the token already, so the ordinary
+      path is still one tap. From the CLI: re-run with <code>confirm_token=</code>, which has
+      always been mandatory there.</li>
     </ol>
-    <p class="note"><strong>Changed 2026-08-17, and the history matters.</strong> This page used
-    to claim only an affirmative <em>naming the token</em> fires. That was false when it was
-    written — the token was always optional, and a bare "yes" fired anything parked, on every
-    tier. An audit caught the false claim; Tyler's answer was not to make the token mandatory but
-    to require that the yes <em>name what it is confirming</em>, which is the rule now enforced
-    for tier 3. So the page was wrong, and is now right for a different reason than it originally
-    claimed.</p>
+    <p class="note"><strong>Changed 2026-08-24, and the history matters.</strong> This page
+    originally claimed only an affirmative <em>naming the token</em> fires. That was false when
+    it was written — the token was always optional, and a bare "yes" fired anything parked, on
+    every tier. An audit caught the false claim; Tyler's 2026-08-17 answer was not to make the
+    token mandatory but to require that the yes <em>name what it is confirming</em>. On
+    2026-08-24 he went the rest of the way — <em>"one copy-paste action is worth an irreversible
+    action"</em> — because the naming rule's guarantee is word overlap with ordinary English,
+    over a word set built from channel, user and role names: a purge parked on #general could be
+    fired by "yeah, general seems right", and that set silently grows with every capability
+    added. A token is exact and does not rot. Governed by
+    <code>confirm.require_token_tier3</code> (default on); set it false to fall back to the
+    naming rule.</p>
     <p>Tiers 1–2 still take a bare "yes". What stops a stray "yeah" three messages later
     <em>there</em>:</p>
     <ul>
@@ -49,11 +55,18 @@
       <li><strong>A short clock.</strong> The window is ten minutes on the DM path (below), not
       an hour, so the interval in which a bare "yes" can hit anything is small.</li>
     </ul>
-    <p>On tier 3 all of that still applies, and the reference requirement sits on top of it.
-    The refusal is <strong>spoken, not silent</strong>: an affirmative that names nothing gets
-    told what is missing, because an unexplained no-op on a destructive action is answered by
-    saying yes again, louder. Cancelling never got harder — a bare "no" still works on every
-    tier, so the safe direction stays the convenient one.</p>
+    <p>On tier 3 all of that still applies, and the token requirement sits on top of it.
+    The refusal is <strong>spoken, not silent</strong>: an affirmative arriving without the token
+    is told what is missing and handed the exact string to send, because an unexplained no-op on
+    a destructive action is answered by saying yes again, louder. A <em>mistyped or lapsed</em>
+    token is answered out loud for the same reason — that is the one new way to fail here, and
+    it happens to someone who did exactly what they were asked. Cancelling never got harder — a
+    bare "no" still works on every tier, so the safe direction stays the convenient one.</p>
+    <p>The refusal is deliberately <strong>no wider than the set that used to fire</strong>. A
+    sentence that merely opens with "yes" and names nothing ("yes, you're totally right") still
+    falls through to the agent as ordinary conversation: over a confirm window that can run an
+    hour, that is far likelier to be talk than consent, and nagging it would make the gate
+    something to route around.</p>
     <p>Previews expire: expired = cancelled, silence is never assent. The TTL depends on which
     path parked it — <strong><code>confirm.conversation_ttl_seconds</code> (600 = 10 min) for
     the DM flow</strong>, <code>confirm.ttl_seconds</code> (3600 = 1h) for everything else, per

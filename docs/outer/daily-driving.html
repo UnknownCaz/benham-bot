@@ -27,16 +27,20 @@
     <h2 id="confirm">When it asks to confirm</h2>
     <p>Destructive actions (delete / purge / kick / ban) and role changes always come back as a
     <strong>preview + token</strong> first. For a role change, "yes" fires it. For
-    <strong>delete / purge / kick / ban there is no bare yes</strong> — say what you are
-    confirming ("yes, purge that channel") or name the token. Previews expire — on this DM
+    <strong>delete / purge / kick / ban the token is required</strong> — tap <strong>Approve</strong>
+    (one tap, unchanged) or reply <code>yes a1b2c3</code> with the token from the preview. Saying
+    what you are confirming ("yes, purge that channel") no longer fires it. Previews expire — on this DM
     path that is <code>confirm.conversation_ttl_seconds</code>, <strong>10 minutes</strong>, not
     the hour <code>confirm.ttl_seconds</code> gives the other paths. Expired = cancelled, never
     assumed yes. Anything that is not a recognised yes or no counts as neither, so an ambiguous
     reply never fires anything.</p>
-    <p class="note"><strong>Changed 2026-08-17.</strong> This paragraph used to say a bare "yes"
-    without the token does nothing "on purpose". It <em>did</em> fire, on every tier — the claim
-    was simply wrong. It is true now for tier 3 only, and by a better rule than the one it
-    described: the yes has to name the action, not quote a hex token. See
+    <p class="note"><strong>Changed 2026-08-24.</strong> This paragraph originally said a bare
+    "yes" without the token does nothing "on purpose". It <em>did</em> fire, on every tier — the
+    claim was simply wrong. On 2026-08-17 it became true for tier 3 by a naming rule; on
+    2026-08-24 the token became mandatory, so the original sentence is finally true as written.
+    Why the change: a name is ordinary English and the accepted words are channel and user names,
+    so "yeah, general seems right" could fire a purge parked on #general. The button path never
+    changed and never asks you for a token. See
     <a href="../inner/confirm-flow.html">the confirm flow</a>.</p>
     <p><strong>"Why is it asking approval for a normal send?"</strong> The turn is
     <em>tainted</em> — Benham read something a non-owner wrote: a channel, a nickname, a

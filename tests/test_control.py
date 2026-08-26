@@ -198,10 +198,14 @@ check("'ok' alone IS a yes", confirm.read_reply("ok")[0], "yes")
 verdict, token = confirm.read_reply(f"yes {p.token}")
 check("token-targeted yes parses", (verdict, token), ("yes", p.token))
 
-section("Confirmations — tier 3 needs a yes that names what it is")
-# Tyler's rule, 2026-08-17: "a bare yes should not work it should work with a
-# yes, xyz to confirm thats what the sender is talking about, so 'yes, purge
-# that channel.' would work but, 'yes, your totally right' wouldnt."
+section("Confirmations — tier 3 requires the token")
+# Tyler, 2026-08-24: "one copy-paste action is worth an irreversible action."
+# This supersedes his 2026-08-17 naming rule ("yes, purge that channel" fires,
+# "yes, your totally right" does not), which is kept below as the revert path.
+# The naming rule's guarantee was word overlap with ordinary English, over a word
+# set built from channel/user/role names - so a purge parked on #general could be
+# fired by "yeah, general seems right", and the set grows with every capability
+# added. A token is exact and does not rot.
 #
 # Note every check above passes NO pending, which is the old behaviour and stays
 # exactly as it was. The rule only engages when the caller hands over the action,
@@ -210,23 +214,38 @@ confirm.cancel()
 d3 = confirm.park("purge_messages", {"channel_id": 1},
                   {"channel": "general", "count": 42}, TYLER, "dm")
 
+check("the token fires it", confirm.read_reply(f"yes {d3.token}", d3)[0], "yes")
+check("the token comes back for binding",
+      confirm.read_reply(f"yes {d3.token}", d3)[1], d3.token)
+check("token plus a name still fires",
+      confirm.read_reply(f"yes, purge that channel {d3.token}", d3)[0], "yes")
+
 check("bare 'yes' does NOT fire tier 3",
-      confirm.read_reply("yes", d3)[0], "needs_reference")
-check("his example that SHOULD work",
-      confirm.read_reply("yes, purge that channel.", d3)[0], "yes")
-check("his example that should NOT",
-      confirm.read_reply("yes, your totally right", d3)[0], None)
+      confirm.read_reply("yes", d3)[0], "needs_token")
+check("the OLD rule's example no longer fires",
+      confirm.read_reply("yes, purge that channel.", d3)[0], "needs_token")
+check("naming the target is no longer enough",
+      confirm.read_reply("yes general", d3)[0], "needs_token")
 check("'yes, do it' names nothing",
-      confirm.read_reply("yes, do it", d3)[0], "needs_reference")
-check("naming the target works too",
-      confirm.read_reply("yes general", d3)[0], "yes")
-check("the token is itself a reference",
-      confirm.read_reply(f"yes {d3.token}", d3)[0], "yes")
+      confirm.read_reply("yes, do it", d3)[0], "needs_token")
+# A mistyped or lapsed token is the one new failure this change creates, and the
+# worst possible answer to it is silence - he did exactly what he was asked to.
+check("a wrong/expired token is refused OUT LOUD",
+      confirm.read_reply("yes deadbe", d3)[0], "needs_token")
 check("a reference without a yes is still not a yes",
       confirm.read_reply("purge it", d3)[0], None)
 
-# Cancelling must never get harder than confirming. If "no" needed to name the
-# action too, the safe direction would be the inconvenient one.
+# The refusal is deliberately NOT widened past the set that used to fire. Over a
+# confirm window that can run an hour, a sentence merely opening with "yes" and
+# naming nothing is far likelier to be conversation than consent - so it keeps
+# falling through to the agent exactly as it did before this change.
+check("his example that should NOT, still falls through",
+      confirm.read_reply("yes, your totally right", d3)[0], None)
+check("ordinary agreement does not get nagged",
+      confirm.read_reply("yes that sounds about right to me", d3)[0], None)
+
+# Cancelling must never get harder than confirming. If "no" needed to carry the
+# token too, the safe direction would be the inconvenient one.
 check("bare 'no' still cancels tier 3", confirm.read_reply("no", d3)[0], "no")
 
 # The refusal has to be a distinct verdict rather than a None: the caller says
@@ -235,9 +254,43 @@ check("bare 'no' still cancels tier 3", confirm.read_reply("no", d3)[0], "no")
 check("refusal is distinguishable from ambiguity",
       confirm.read_reply("yes", d3)[0] != confirm.read_reply("hmm", d3)[0], True)
 
-# The prompt must state the rule it will actually enforce.
+# The prompt must state the rule it will actually enforce. Telling him "reply
+# yes" and then refusing a bare yes is how a safety feature becomes a thing
+# people fight with.
 check("tier-3 prompt warns a bare yes will not work",
       "bare \"yes\" will not fire" in confirm.describe(d3), True)
+check("tier-3 prompt hands him the exact string to send",
+      f"yes {d3.token}" in confirm.describe(d3), True)
+
+# ---- the revert path: flag off falls back to the 2026-08-17 naming rule ----
+# It is config rather than a revert commit, so it has to actually work; an
+# escape hatch nothing exercises is an escape hatch that has rusted shut.
+_orig_confirm_cfg = identity.CONTROL.get("confirm")
+identity.CONTROL["confirm"] = dict(_orig_confirm_cfg or {},
+                                   require_token_tier3=False)
+check("flag off: the naming rule fires again",
+      confirm.read_reply("yes, purge that channel.", d3)[0], "yes")
+check("flag off: bare yes is the old refusal",
+      confirm.read_reply("yes", d3)[0], "needs_reference")
+check("flag off: the token still fires",
+      confirm.read_reply(f"yes {d3.token}", d3)[0], "yes")
+check("flag off: prompt goes back to the naming wording",
+      "names what it is" in confirm.describe(d3), True)
+if _orig_confirm_cfg is None:
+    identity.CONTROL.pop("confirm", None)
+else:
+    identity.CONTROL["confirm"] = _orig_confirm_cfg
+check("flag restored: the token is mandatory again",
+      confirm.read_reply("yes, purge that channel.", d3)[0], "needs_token")
+
+# Absent from config must mean ON. The default is the safety property; a
+# control.json written before this flag existed must not silently opt out.
+_no_cfg = dict(identity.CONTROL)
+_no_cfg.pop("confirm", None)
+_saved = identity.CONTROL
+identity.CONTROL = _no_cfg
+check("missing config defaults to mandatory", confirm.require_token(), True)
+identity.CONTROL = _saved
 
 confirm.cancel()
 d2 = confirm.park("add_role", {"user_id": 1, "role": "Streamer"},

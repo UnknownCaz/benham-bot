@@ -190,6 +190,55 @@ async def main():
     check("agent was NOT invoked", len(agent_calls), 0)
     confirm.cancel()
 
+    # Decision 37 (2026-08-24): a TYPED yes on tier 3 must carry the token. The
+    # matcher is proven in test_control.py; what is proven HERE is the WIRING -
+    # that on_message actually consults it before firing, and that a refused yes
+    # leaves the action parked instead of quietly running it. This repo's founding
+    # bug was a gate that was written, tested, and never called.
+    print("\nTyler types a tier-3 yes WITHOUT the token")
+    reset()
+    fired = []
+    _real_fire = bot.fire_confirmed
+
+    async def _spy_fire(pending, channel):
+        fired.append(pending.action)
+
+    bot.fire_confirmed = _spy_fire
+    try:
+        t3 = confirm.park("purge_messages", {"channel_id": 1},
+                          {"channel": "general", "count": 42}, TYLER, "dm")
+        await bot.on_message(_Message(TYLER, "yes, purge that channel"))
+        check("nothing fired", fired, [])
+        check("action is still parked", confirm.get(t3.token) is not None, True)
+        check("he was told why, not left guessing", len(sent), 1)
+        check("the refusal hands him the exact token",
+              t3.token in (sent[0] if sent else ""), True)
+        check("agent was NOT invoked instead", len(agent_calls), 0)
+
+        print("\nTyler types the token")
+        # NOT reset() - that cancels the pending, and this check is worthless
+        # against an action that is no longer parked.
+        agent_calls.clear()
+        sent.clear()
+        await bot.on_message(_Message(TYLER, f"yes {t3.token}"))
+        check("it fires", fired, ["purge_messages"])
+        check("and is consumed, so it cannot fire twice",
+              confirm.get(t3.token), None)
+
+        # Cancelling must never be harder than confirming.
+        print("\nA bare 'no' still cancels a tier-3 action")
+        agent_calls.clear()
+        sent.clear()
+        fired.clear()
+        t3b = confirm.park("delete_channel", {"channel_id": 2},
+                           {"channel": "general"}, TYLER, "dm")
+        await bot.on_message(_Message(TYLER, "no"))
+        check("nothing fired", fired, [])
+        check("nothing left parked", confirm.get(t3b.token), None)
+    finally:
+        bot.fire_confirmed = _real_fire
+        confirm.cancel()
+
     print("\nA stranger tries to approve a blocked PC command")
     reset()
     fut = asyncio.get_running_loop().create_future()

@@ -1617,10 +1617,24 @@ async def on_message(message):
     pending = confirm.current()
     if pending is not None:
         # The pending goes IN so the tier-3 rule can apply: on a destructive action
-        # an affirmative has to name what it is affirming. At most one is ever live,
-        # so get(token) and current() are the same object whenever the token is real.
+        # an affirmative has to carry the token (2026-08-24). At most one is ever
+        # live, so get(token) and current() are the same object whenever the token
+        # is real.
         verdict, token = confirm.read_reply(text, pending)
         target = confirm.get(token) if token else pending
+        if verdict == "needs_token":
+            # The whole rule in the reply, including the exact string to send.
+            # A safety prompt people have to guess at is a safety prompt people
+            # route around, and the route around this one is the CLI.
+            await reply_in(
+                message.channel,
+                f"That reads as a yes, but **{pending.action}** needs its token — no "
+                f"undo on this tier, so a name isn't enough. Reply `yes {pending.token}` "
+                f"or tap **Approve** on the preview. \"no\" cancels.",
+                reference=message)
+            log(f"UNTOKENED yes for {pending.action} (token {pending.token}) "
+                f"by {message.author.id} - asked for the token")
+            return
         if verdict == "needs_reference":
             await reply_in(
                 message.channel,
