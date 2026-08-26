@@ -239,6 +239,57 @@ async def main():
         bot.fire_confirmed = _real_fire
         confirm.cancel()
 
+    # REGRESSION (2026-08-26, found by an adversarial pass on the commit above).
+    # The PC-permission block sits ABOVE the confirm block and classifies with no
+    # pending in hand, so the token was stripped out and "yes <token>" read as a
+    # plain bare affirmative: it APPROVED A SHELL COMMAND using the token minted
+    # for a purge, left the purge parked, and told him neither. Making the token
+    # the only typed form on offer is what put that shape on the main road.
+    print("\nBoth prompts live: 'yes <token>' must reach the CONFIRMATION")
+    reset()
+    fired = []
+    _real_fire = bot.fire_confirmed
+
+    async def _spy_fire(pending, channel):
+        fired.append(pending.action)
+
+    bot.fire_confirmed = _spy_fire
+    try:
+        fut = asyncio.get_running_loop().create_future()
+        bot.codesession._pending["77"] = fut
+        t3 = confirm.park("purge_messages", {"channel_id": 1},
+                          {"channel": "general", "count": 42}, TYLER, "dm")
+        await bot.on_message(_Message(TYLER, f"yes {t3.token}"))
+        check("the SHELL COMMAND was not approved", fut.done(), False)
+        check("the tier-3 action fired instead", fired, ["purge_messages"])
+
+        print("\nBoth prompts live: a bare 'yes' answers NEITHER and says so")
+        agent_calls.clear()
+        sent.clear()
+        fired.clear()
+        t3b = confirm.park("delete_channel", {"channel_id": 2},
+                           {"channel": "general"}, TYLER, "dm")
+        await bot.on_message(_Message(TYLER, "yes"))
+        check("shell command still not approved", fut.done(), False)
+        check("nothing destructive fired", fired, [])
+        check("the confirmation is still parked",
+              confirm.get(t3b.token) is not None, True)
+        check("he was told it was ambiguous", len(sent), 1)
+        check("...and both are named",
+              all(w in sent[0] for w in ("PC permission", "delete_channel")), True)
+
+        print("\nPC request ALONE still takes a bare yes - the old path is untouched")
+        agent_calls.clear()
+        sent.clear()
+        confirm.cancel()
+        await bot.on_message(_Message(TYLER, "yes"))
+        check("shell command approved", fut.done(), True)
+        check("...with a yes", fut.result(), True)
+    finally:
+        bot.fire_confirmed = _real_fire
+        bot.codesession._pending.pop("77", None)
+        confirm.cancel()
+
     print("\nA stranger tries to approve a blocked PC command")
     reset()
     fut = asyncio.get_running_loop().create_future()

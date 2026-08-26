@@ -92,9 +92,12 @@ Three independent gates, in this order:
 2. **Mandatory dry-run.** The first call performs nothing and returns real facts: counts, date
    spans, author breakdowns, who currently holds the role. This is what catches a wrong channel
    id or an `older_than_days` off by 10x.
-3. **Explicit confirm.** In a DM, Benham shows the preview and waits for a narrow affirmative
-   ("yes", "do it") bound to a token. From the CLI, you re-run with `confirm_token=<token>`.
-   There is no inline shortcut in either path.
+3. **Explicit confirm, and on tier 3 the token is mandatory.** In a DM, Benham shows the
+   preview and waits. Tapping **Approve** is one tap and always has been. A *typed* reply
+   on tier 3 must carry the token - `yes a1b2c3`; a bare "yes", or one that merely names
+   the action, is refused out loud and handed the token back. Tiers 1-2 still take a bare
+   affirmative. From the CLI, you re-run with `confirm_token=<token>`. There is no inline
+   shortcut in any path. Governed by `confirm.require_token_tier3` (default on).
 
 **The model cannot confirm its own actions.** A tier-3 tool call returns a preview and halts the
 tool chain. Tyler's "yes" is matched by code in `on_message` *before* the agent is invoked, and

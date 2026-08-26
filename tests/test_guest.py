@@ -541,7 +541,7 @@ class _Pending:
     token = "tok"
 
 
-def deliver(uid, content, attachments=(), embeds=(), reference=None):
+def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True):
     """Run one message through the real on_message, recording what it touched."""
     touched = {"confirm_consume": 0, "codesession_answer": 0, "capabilities_run": 0,
                "guest_respond": 0, "fired": 0, "guest_content": None}
@@ -560,8 +560,13 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None):
         channel.sent.append(text)
     bot.reply_in = _reply_in
 
-    # The three consent sinks, armed and watched.
-    confirm.current = lambda: _Pending()
+    # The three consent sinks, armed and watched. `parked` decides whether a
+    # destructive confirmation is ALSO waiting: armed by default, because the
+    # guest checks below exist to prove a guest's "yes" cannot fire one. The
+    # owner PC control case turns it off, since a bare yes with BOTH a PC
+    # request and a confirmation live is ambiguous by design (2026-08-26) and
+    # answers neither - leaving it armed would test a message nobody sends.
+    confirm.current = (lambda: _Pending()) if parked else (lambda: None)
     confirm.read_reply = lambda t: (("yes", None) if t.strip().lower() == "yes"
                                     else (None, None))
     confirm.get = lambda tok: _Pending()
@@ -630,10 +635,18 @@ enable_guests()
 
 # The control. Without this, every assertion above would also pass if on_message
 # had simply stopped working.
-t, sent = deliver(TYLER, "yes")
+t, sent = deliver(TYLER, "yes", parked=False)
 check("CONTROL: the owner saying 'yes' DOES answer the PC request "
       "(so the path above is genuinely live)",
       t["codesession_answer"], 1)
+
+# ...and with a destructive confirmation ALSO parked, the same word answers
+# neither. Proven end to end in test_owner_gate; asserted here because this
+# harness is the one watching all three consent sinks at once, so it is where
+# "it quietly answered the OTHER one" would show up.
+t, sent = deliver(TYLER, "yes", parked=True)
+check("both prompts live: a bare yes answers NEITHER",
+      (t["codesession_answer"], t["fired"], t["confirm_consume"]), (0, 0, 0))
 
 
 # --------------------------------------------------------------------------
