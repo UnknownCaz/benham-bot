@@ -250,8 +250,11 @@ async def main():
         empty = _system_sent()
         check("with nothing parked, the prompt says so",
               "Nothing is awaiting his confirmation" in empty, True)
-        check("and names the ten-minute expiry, which is what he actually hit",
-              "ten minutes" in empty, True)
+        # Pinned against the LIVE config rather than the words "ten minutes",
+        # which is how this went stale: the prompt asserted a number, decision
+        # #24 changed the config, and nothing tied them together for nine days.
+        check("and names the expiry window the config actually gives him",
+              agent._confirm_window() in empty, True)
         check("and tells it to make a real one rather than announce one",
               "call the tool again to make a real one" in empty, True)
         check("and keeps it background, so it is not a standing topic",
