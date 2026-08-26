@@ -118,7 +118,10 @@ def main(argv):
 
     print(f"Purging up to {limit} message(s) older than {days} day(s) "
           f"from channel {channel_id}.")
-    print("  This is PERMANENT. The first call previews only.")
+    # Only true of the first call - saying "previews only" while redeeming a token
+    # tells someone about to delete something permanently that nothing will happen.
+    print("  This is PERMANENT."
+          + ("" if token else " This call previews only - nothing is deleted."))
 
     return run_two_step(
         "purge_messages",
