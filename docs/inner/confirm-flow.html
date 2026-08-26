@@ -52,8 +52,10 @@
       <li><strong>One at a time.</strong> Parking a new confirmation supersedes the old one
       rather than queueing it, so "yes" is never ambiguous <em>between two destructive
       actions</em> — which is the case that would actually hurt.</li>
-      <li><strong>A short clock.</strong> The window is ten minutes on the DM path (below), not
-      an hour, so the interval in which a bare "yes" can hit anything is small.</li>
+      <li><strong>A clock.</strong> The window is whatever
+      <code>confirm.conversation_ttl_seconds</code> says for the DM path (below) - an hour
+      as shipped, since decision #24 - so it is the weakest of the three guards and the
+      reason tier 3 does not lean on it.</li>
     </ul>
     <p>On tier 3 all of that still applies, and the token requirement sits on top of it.
     The refusal is <strong>spoken, not silent</strong>: an affirmative arriving without the token
@@ -81,10 +83,11 @@
     hour, that is far likelier to be talk than consent, and nagging it would make the gate
     something to route around.</p>
     <p>Previews expire: expired = cancelled, silence is never assent. The TTL depends on which
-    path parked it — <strong><code>confirm.conversation_ttl_seconds</code> (600 = 10 min) for
-    the DM flow</strong>, <code>confirm.ttl_seconds</code> (3600 = 1h) for everything else, per
-    <code>_ttl_for()</code>. The agent parks with origin <code>"dm"</code>, so ten minutes is the
-    number you actually live with; <code>confirm.describe</code> prints the real one. The token
+    path parked it — <strong><code>confirm.conversation_ttl_seconds</code> for the DM
+    flow</strong>, <code>confirm.ttl_seconds</code> for everything else, per
+    <code>_ttl_for()</code>. Both are <strong>3600 (1h)</strong> as shipped: decision #24
+    settled the DM window at an hour on 2026-08-17, and the two now match. The agent parks
+    with origin <code>"dm"</code>, so that is the number you actually live with; <code>confirm.describe</code> prints the real one. The token
     is bound to the parameters captured at preview time — editing the arguments between the two
     calls invalidates it rather than silently running something else.</p>
     <p><strong>Benham cannot successfully tell you a preview is waiting when none is.</strong>

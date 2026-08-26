@@ -25,11 +25,33 @@ from datetime import datetime, timezone
 from benham import paths
 
 
-def bot_pid():
-    """Best-effort: pid of a running `python -m benham.bot`, or None. Uses PowerShell on Windows."""
+def bot_pid(face=None):
+    """Best-effort: pid of THIS face's `python -m benham.bot`, or None.
+
+    Narrowed per face by the launch marker, exactly as supervise_bot.ps1's
+    Get-BotPid does it: the primary face is a benham.bot process carrying NO
+    --face marker (every legacy launch), a named face is one carrying its own.
+
+    FIXED 2026-08-26. The match was a bare '-m benham\\.bot' plus
+    Select-Object -First 1, which also matches '--face codex' - so with two
+    faces up this returned whichever the process snapshot happened to list
+    first, and `--face benham status` was observed reporting the CODEX pid.
+    It failed in the reassuring direction: a DEAD benham read RUNNING for as
+    long as any other face was alive, which is the one direction a health
+    check must never lie in. The supervisor's own comment already described
+    this as the 'same base query' status.py uses - it had been narrowed and
+    status.py never was. Same class as services.json's process_match, found
+    the same night from the other end.
+    """
+    face = face or paths.PROCESS_FACE
+    if face == paths.DEFAULT_FACE:
+        narrow = "$_.CommandLine -notmatch '--face\\s'"
+    else:
+        narrow = ("$_.CommandLine -match '--face\\s+" + re.escape(face) + "(\\s|$)'")
     ps = (
         "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | "
         "Where-Object { $_.CommandLine -match '-m benham\\.bot' } | "
+        f"Where-Object {{ {narrow} }} | "
         "Select-Object -First 1 -ExpandProperty ProcessId"
     )
     try:

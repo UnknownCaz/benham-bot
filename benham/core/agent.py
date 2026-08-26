@@ -305,8 +305,8 @@ it deliberately instead.
         volatile += (
             "\n\n## Nothing is awaiting his confirmation\n"
             "No preview is parked and there is no button in front of him. If he is "
-            "asking about one it expired (ten minutes, on this path) or was never "
-            "made - say so and call the tool again to make a real one. NEVER tell "
+            f"asking about one it expired ({_confirm_window()}, on this path) or was "
+            "never made - say so and call the tool again to make a real one. NEVER tell "
             "him a preview is waiting: the only thing that puts one there is a tool "
             "call returning one, so you would know. Background, not a topic - do "
             "not bring it up unless he does.")
@@ -663,6 +663,25 @@ _CONFIRM_HERE_RE = re.compile(
 _CONFIRM_DENIED_RE = re.compile(
     r"\b(?:expired|no longer|never|nothing|there'?s no|no confirmation|no preview|"
     r"isn'?t|is not|wasn'?t|was not|didn'?t|did not|hasn'?t|has not|would)\b")
+
+
+def _confirm_window():
+    """The DM confirmation window, in words, read from config.
+
+    Spelled out rather than hardcoded because it already drifted once: this
+    prompt said "ten minutes" from the day it was written, decision #24 moved
+    conversation_ttl_seconds 600 -> 3600 on 2026-08-17, and nothing connected
+    the two - so for nine days the model was told a false thing about a store
+    it is explicitly asked to discuss. That is the §3.3 failure with the
+    numbers filled in: where Benham can be asked about a thing it cannot see,
+    it answers anyway, and here it was being handed the wrong answer to give.
+    """
+    seconds = confirm._ttl_for("dm")
+    if seconds % 3600 == 0 and seconds >= 3600:
+        hours = seconds // 3600
+        return "an hour" if hours == 1 else f"{hours} hours"
+    minutes = max(1, seconds // 60)
+    return "a minute" if minutes == 1 else f"{minutes} minutes"
 
 
 def _verify_confirmation_claims(reply, log=None):
