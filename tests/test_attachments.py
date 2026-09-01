@@ -209,8 +209,12 @@ try:
     check("one attachment reported", r["count"], 1)
     check("contents come back inline", a0["text"], TEXT.decode())
     check("not truncated", a0["text_truncated"], False)
+    # realpath both sides: confined_path() realpaths its result, and on macOS
+    # the temp state root sits behind the /var -> /private/var symlink, so a
+    # non-realpathed expectation fails there while the save itself is correct.
     check("saved under downloads/<message_id>/",
-          os.path.dirname(a0["saved_to"]), os.path.join(capabilities.DOWNLOAD_DIR, str(MSG)))
+          os.path.dirname(a0["saved_to"]),
+          os.path.realpath(os.path.join(capabilities.DOWNLOAD_DIR, str(MSG))))
     check("the file really exists", os.path.isfile(a0["saved_to"]), True)
     check("with the right bytes", open(a0["saved_to"], "rb").read(), TEXT)
 
