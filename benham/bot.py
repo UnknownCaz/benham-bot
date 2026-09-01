@@ -47,6 +47,7 @@ from benham.core import confirm
 from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
+from benham.core import health
 from benham.core import ideas
 from benham.core import initiative
 from benham.core import identity
@@ -58,6 +59,7 @@ from benham.core import notify
 from benham.core import outbox
 from benham.core import policy
 from benham.core import rooms
+from benham.core import rotlog
 
 try:
     import audioop  # stdlib in 3.12 (removed in 3.13)
@@ -2463,6 +2465,17 @@ def _launch_face_problem(argv, process_face):
 
 def main():
     console_utf8()
+    # Both gates below are the mac-migration shims (Phase 4) and are OFF by
+    # default: with neither variable set, nothing below binds, opens or
+    # replaces anything - every PC launch byte-identical. They exist for a
+    # face supervised by launchd on a body with no banker-agent, where the
+    # process must own its own log rotation and its own visibility.
+    _log_file = os.environ.get("BENHAM_LOG_FILE", "").strip()
+    if _log_file:
+        # Before configure_logging(), which binds its handler to sys.stdout
+        # at creation time - and before the refusals below, so they land in
+        # the log rather than a stream nothing captures.
+        rotlog.install(_log_file)
     problem = _launch_face_problem(sys.argv[1:], FACE)
     if problem:
         raise SystemExit(problem)
@@ -2476,6 +2489,11 @@ def main():
             "control plane declares.")
     token = os.environ.get(identity.face_gates(FACE)["token_env"])
     configure_logging()
+    _health_port = os.environ.get("BENHAM_HEALTH_PORT", "").strip()
+    if _health_port:
+        # Before client.run(): a taken port must fail HERE, loudly, where a
+        # launchd crash-loop never costs a Discord login (health.py's doc).
+        health.start(int(_health_port), client, FACE, log)
     # log_handler=None stops discord.py installing a handler of its own. Its records
     # still propagate to the root handler set up above, so the gateway diagnostics
     # (connects, RESUMEs, voice 4006s) are kept -- they matter for a process that
