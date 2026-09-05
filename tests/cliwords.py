@@ -269,6 +269,9 @@ def _env(extra=None):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("CLAUDE_CODE_", "BENHAM_"))}
     env["PYTHONIOENCODING"] = "utf-8"
+    # argparse wraps help to the terminal width; pin it so the same words come
+    # out on Windows and macOS (the fixtures were captured at 80).
+    env["COLUMNS"] = "80"
     if extra:
         env.update(extra)
     return env
