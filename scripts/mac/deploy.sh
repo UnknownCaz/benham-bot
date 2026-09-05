@@ -19,7 +19,7 @@
 set -eu
 PIN="${1:?usage: deploy.sh <commit-sha>}"
 DEST="$HOME/benham-bot"
-REPO="git@github.com:UnknownCaz/benham-bot.git"
+REPO="https://github.com/UnknownCaz/benham-bot.git"
 PY=/usr/local/bin/python3
 
 echo "--- clone at $PIN -> $DEST"
