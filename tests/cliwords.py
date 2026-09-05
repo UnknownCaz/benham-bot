@@ -311,7 +311,14 @@ def normalise(text, roots):
                   lambda m: "<ROOT>/" + m.group(1).replace("\\", "/"), text)
     for rx, sub in _RULES:
         text = rx.sub(sub, text)
+    # argparse wraps its `usage:` block differently across Python versions
+    # (3.12 on the PC, 3.14 on the Mac); the WORDS are the contract, the
+    # wrap is not. Continuation lines of a usage block fold into one line.
+    text = _USAGE_BLOCK.sub(lambda m: re.sub(r"\s+", " ", m.group(0)).rstrip() + "\n", text)
     return text
+
+
+_USAGE_BLOCK = re.compile(r"^usage: [^\n]*(?:\n[ \t]+[^\n]*)*\n", re.M)
 
 
 def normalised(case, roots):
