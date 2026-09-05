@@ -124,3 +124,5 @@ build_out.json
 # The pre-move snapshot marker Phase B writes beside a frozen state/ tree (2026-09-05).
 # Machine-specific by nature: it says THIS tree moved, so it is never committed.
 state/MOVED-*.md
+# The initiates lane proof-of-run stamp (Phase B, INTENT 41) - written by the client on the PC.
+state/initiative-heartbeat.local
