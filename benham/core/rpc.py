@@ -269,10 +269,12 @@ def _process_stats():
     import threading
     try:
         import resource
+        import sys as _sys
         ru = resource.getrusage(resource.RUSAGE_SELF)
-        # maxrss is bytes on macOS and kilobytes on Linux; nothing here runs
-        # on Linux today, but the ratio is the honest way to say which.
-        rss = ru.ru_maxrss / (1024 * 1024) if ru.ru_maxrss > 1 << 30 else ru.ru_maxrss / 1024
+        # maxrss is BYTES on macOS and KILOBYTES on Linux (getrusage(2) says so
+        # on each). Decided by platform, not by magnitude: the first cut guessed
+        # from the size and printed 69932 MB for a 70 MB process.
+        rss = ru.ru_maxrss / (1024 * 1024) if _sys.platform == "darwin" else ru.ru_maxrss / 1024
         cpu = ru.ru_utime + ru.ru_stime
     except ImportError:  # Windows: resource does not exist
         rss, cpu = 0.0, time.process_time()
