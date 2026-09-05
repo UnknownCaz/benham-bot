@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "conv"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "usage: benham.py conv [-h] {list,show,close,bank} ...\n\npositional arguments:\n  {list,show,close,bank}\n    list                Conversations, live by default\n    show                One conversation with its event log\n    close               Shut the loop, with an outcome\n    bank                Give up waiting, keep the question\n\noptions:\n  -h, --help            show this help message and exit\n",
+  "stderr": ""
+}

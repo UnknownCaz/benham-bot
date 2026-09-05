@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "do",
+    "help",
+    "send_message"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "\nsend_message  [speak]\n  Post a message to a channel.\n\n  channel_id             int    required  \n  content                str    required  \n  reply_to               int    optional  Message id to reply to\n  silent                 bool   optional  Suppress the push notification\n\n",
+  "stderr": ""
+}

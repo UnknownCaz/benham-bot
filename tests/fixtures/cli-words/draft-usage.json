@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "draft"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py draft <target_channel_id> \"reply text\" [--no-wait]\n"
+}

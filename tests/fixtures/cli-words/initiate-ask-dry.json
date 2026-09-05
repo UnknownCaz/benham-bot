@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "initiate",
+    "ask",
+    "Did the tv-cast fix hold up?",
+    "--dry-run"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "WOULD SEND (the gate allows it):\n  Did the tv-cast fix hold up?\n\nNothing was opened and nothing was logged. Drop --dry-run to send.\n",
+  "stderr": ""
+}

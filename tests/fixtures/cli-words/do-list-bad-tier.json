@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "do",
+    "list",
+    "--tier",
+    "bogus"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "unknown tier 'bogus'; use read | speak | manage | destructive\n"
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "dm",
+    "555000555000555000",
+    "does it work?",
+    "--untracked"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued DM -> <ROOT>/state/outbox/<REQ>.json\ndone: status=sent, message_id=123456789, channel=#asd\n",
+  "stderr": ""
+}

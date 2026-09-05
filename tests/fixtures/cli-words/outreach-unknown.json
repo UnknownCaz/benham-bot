@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "outreach",
+    "nobody",
+    "hi?"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Don't know who 'nobody' is. Reachable: doom, draco\nAdd them under outreach.people in control.json, and ask Tyler first - the skill's rule is allowlist-only with ask-to-add.\n"
+}

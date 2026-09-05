@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "delete",
+    "809357286036078612",
+    "100",
+    "--confirm-token",
+    "abc123"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued delete_message -> <ROOT>/state/outbox/<REQ>.json\n  channel 809357286036078612, message 100\ndone: status=ok\n  {'deleted': 1}\n",
+  "stderr": ""
+}

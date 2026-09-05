@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "purge",
+    "--guild",
+    "736988645562646619",
+    "--limit",
+    "5"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "SERVER-WIDE purge: up to 5 message(s) per channel older than 7 day(s), across EVERY text channel in guild 736988645562646619.\n  This is PERMANENT. This call previews only - nothing is deleted.\nQueued purge_guild -> <ROOT>/state/outbox/<REQ>.json\n  guild 736988645562646619, older than 7d, limit 5/channel\ndone: status=confirmation_required\n\npurge_guild: 1 message in #asd would go\nby doom, <DATE>\n\nNOTHING WAS DELETED. To confirm, re-run with the token:\n  python benham.py --face benham purge --guild 736988645562646619 --days 7 --limit 5 --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

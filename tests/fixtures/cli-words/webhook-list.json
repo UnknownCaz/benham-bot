@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "webhook",
+    "--list"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "default: None\n",
+  "stderr": ""
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "rooms",
+    "--as",
+    "my-session"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "  build    2 unread\n  scratch  quiet\n",
+  "stderr": ""
+}

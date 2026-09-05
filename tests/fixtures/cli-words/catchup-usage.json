@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "catchup"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python -u benham.py catchup <channel_id> [limit]\n"
+}

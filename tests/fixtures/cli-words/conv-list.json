@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "conv",
+    "list"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "  ?  c1    [open    ] -> 273967061619965952  ready to deploy?\n  !  c2    [answered] -> 273967061619965952  sqlite or json?  -> sqlite\n  ?  c3    [open    ] -> 555000555000555000  does the image thing work now?\n",
+  "stderr": ""
+}

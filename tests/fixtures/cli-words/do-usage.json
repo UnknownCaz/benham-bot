@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "do"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "do.py - run any registered capability from the shell.\n\n    python benham.py do list\n    python benham.py do list --tier destructive\n    python benham.py do help send_embed\n    python benham.py do send_message channel_id=809357286036078612 content=\"hey\"\n    python benham.py do purge_messages channel_id=... limit=50\n    python benham.py do purge_messages channel_id=... limit=50 confirm_token=a1b2c3\n\nOne CLI for the whole registry, rather than a file per action. The old pattern -\nsend.py, dm.py, delete.py, each with its own argument parsing - meant a new\ncapability was three edits and usually got only two, which is how `purge` went so\nlong without any CLI at all.\n\nDestructive actions are two calls. The first returns a dry-run with real counts and\na token; the second passes `confirm_token=` to fire exactly what was previewed. The\ntoken is bound to the parameters captured at preview time, so editing the arguments\nbetween the two calls invalidates it rather than silently running something else.\n"
+}

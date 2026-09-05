@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "purge"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py purge <channel_id> [--days N] [--limit N] [--confirm-token TOK] [--no-wait]\n   or: python benham.py purge --guild <guild_id> [--days N] [--limit N] [--confirm-token TOK]\n"
+}

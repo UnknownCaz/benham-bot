@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "issues",
+    "loop",
+    "--dry-run"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "no loops to close - nothing in the tracker has news the reporter has not been told\n",
+  "stderr": ""
+}

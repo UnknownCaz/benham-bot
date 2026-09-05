@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "initiate",
+    "drop",
+    "t1",
+    "resolved itself"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "dropped [t1] did the tv-cast fix hold\n  because: resolved itself\n",
+  "stderr": ""
+}

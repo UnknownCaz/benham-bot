@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "room"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "usage: benham.py room [-h] {read,post,create} ...\nbenham.py room: error: the following arguments are required: cmd\n"
+}

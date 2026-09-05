@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "send",
+    "809357286036078612",
+    "hello there"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued -> <ROOT>/state/outbox/<REQ>.json\ndone: status=sent, message_id=123456789, channel=#asd\n",
+  "stderr": ""
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "purge",
+    "809357286036078612",
+    "--scope",
+    "guild"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "--scope guild is gone; the guild sweep is now its own tier-3 capability and takes a GUILD id, not a channel id. Use: python benham.py purge --guild <guild_id> [--days N] [--limit N]\n"
+}

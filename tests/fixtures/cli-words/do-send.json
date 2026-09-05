@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "do",
+    "send_message",
+    "channel_id=809357286036078612",
+    "content=hi"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued send_message -> <REQ>.json\n{\n  \"status\": \"sent\",\n  \"message_id\": 123456789\n}\n",
+  "stderr": ""
+}

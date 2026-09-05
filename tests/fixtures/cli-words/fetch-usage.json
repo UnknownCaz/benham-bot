@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "fetch"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py fetch <channel_id> [limit] [--no-wait]\n"
+}

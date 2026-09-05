@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "initiate",
+    "threads"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "  [t1] did the tv-cast fix hold\n        why: he mentioned it twice\n        from: board\n        noted <TS>, open\n",
+  "stderr": ""
+}

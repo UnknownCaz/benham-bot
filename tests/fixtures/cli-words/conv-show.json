@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "conv",
+    "show",
+    "c2"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "c2  [answered]  counterparty 273967061619965952\n  purpose : db\n  question: sqlite or json?\n  asked by: session cwd=<CWD> pid <PID>\n  face    : benham\n  ANSWER  : sqlite\n  nudges  : 0   due: None\n  log:\n    <TS>  opened - db [whenever, 1 ahead]\n    <TS>  answered - via reply\n",
+  "stderr": ""
+}

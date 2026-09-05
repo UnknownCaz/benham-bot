@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "send",
+    "809357286036078612",
+    "hello",
+    "there",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued -> <ROOT>/state/outbox/<REQ>.json\n",
+  "stderr": ""
+}

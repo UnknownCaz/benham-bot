@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "rooms"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "  build    2 unread\n  scratch  quiet\n",
+  "stderr": ""
+}

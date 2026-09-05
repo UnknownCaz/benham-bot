@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "room",
+    "create",
+    "build",
+    "x"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued -> <ROOT>/state/outbox/<REQ>.json\ndone: status=ok\n",
+  "stderr": ""
+}

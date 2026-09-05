@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "do",
+    "dm_user",
+    "user_id=404",
+    "content=hi"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "queued dm_user -> <REQ>.json\n{\n  \"processed_at\": \"<TS>\",\n  \"request\": {\n    \"action\": \"dm_user\",\n    \"user_id\": 404,\n    \"content\": \"hi\",\n    \"face\": \"benham\",\n    \"queued_at\": \"<TS>\",\n    \"source\": \"benham.py do dm_user\"\n  },\n  \"status\": \"failed\",\n  \"action\": \"dm_user\",\n  \"error\": \"Forbidden: 403 Forbidden (error code: 50007): Cannot send messages to this user\"\n}\n",
+  "stderr": ""
+}

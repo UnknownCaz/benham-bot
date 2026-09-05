@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "outreach",
+    "273967061619965952",
+    "hi?"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "273967061619965952 is an owner. Outreach never targets Tyler - use `python benham.py ask \"...\"`, which is built for him and joins his queue.\n"
+}

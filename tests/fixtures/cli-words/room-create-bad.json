@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "room",
+    "create",
+    "Bad Name",
+    "x"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "'Bad Name' is not a valid room name - lowercase kebab, max 40 chars.\n",
+  "stderr": ""
+}

@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "delete"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py delete <channel_id> <message_id> [--confirm-token TOK] [--no-wait]\n"
+}

@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "delete",
+    "809357286036078612",
+    "100",
+    "--confirm-token",
+    "zzz"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued delete_message -> <ROOT>/state/outbox/<REQ>.json\n  channel 809357286036078612, message 100\n",
+  "stderr": "REFUSED: ValueError: confirm_token 'zzz' is unknown or expired. Expiry means cancelled\n"
+}

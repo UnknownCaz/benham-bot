@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "conv",
+    "bank",
+    "c1",
+    "not worth chasing"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "c1 banked: not worth chasing  (the question is kept)\n",
+  "stderr": ""
+}

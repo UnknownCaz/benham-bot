@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "fetch",
+    "809357286036078612",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued history request -> <ROOT>/state/outbox/<REQ>.json\n",
+  "stderr": ""
+}

@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "ideas",
+    "--all"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "[<TS>] doom (555000555000555000):\n    a dark mode for the wallboard\n\n1 total, 1 unswept\n",
+  "stderr": ""
+}

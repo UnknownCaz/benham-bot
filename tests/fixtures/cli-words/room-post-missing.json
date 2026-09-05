@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "room",
+    "post",
+    "ghost",
+    "hi"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "no room named 'ghost' - create_room is explicit, never implicit. `python benham.py rooms` lists what exists.\n",
+  "stderr": ""
+}

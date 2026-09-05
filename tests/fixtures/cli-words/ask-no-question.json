@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "ask"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "1 answer(s) came back that nobody has collected:\n  c2: sqlite or json?\n     -> sqlite\n  (act on it, then: python benham.py conv close <id> \"what happened\" --face benham)\n\nusage: benham.py ask [-h] [--purpose PURPOSE] [--project PROJECT]\n                     [--timeout TIMEOUT] [--no-wait]\n                     [--priority {blocking,normal,whenever}] [--why WHY]\n                     [--nudge-cap N] [--queue]\n                     [question]\nbenham.py ask: error: a question is required unless you are just reading the queue (--queue)\n"
+}

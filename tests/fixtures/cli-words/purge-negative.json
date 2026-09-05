@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "purge",
+    "809357286036078612",
+    "--days",
+    "-1"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "--days must not be negative, got -1\n"
+}

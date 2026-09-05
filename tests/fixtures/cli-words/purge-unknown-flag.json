@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "purge",
+    "809357286036078612",
+    "--bogus"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "unknown argument '--bogus'\n"
+}

@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "issues"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "[<TS>] told:fixed     bug      doom\n    zoom skips a frame\n\n1 filing(s), 0 waiting to reach GitHub\n",
+  "stderr": ""
+}

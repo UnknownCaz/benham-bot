@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "room",
+    "post",
+    "build",
+    "note",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued -> <ROOT>/state/outbox/<REQ>.json\n(the bot appends it within ~2s; nothing is woken - v1 rooms are pull-only)\n",
+  "stderr": ""
+}

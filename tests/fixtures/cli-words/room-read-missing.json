@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "room",
+    "read",
+    "ghost"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "cannot read: no room named 'ghost'. Rooms are created explicitly with create_room, never by typo. Known: build, scratch.\n",
+  "stderr": ""
+}

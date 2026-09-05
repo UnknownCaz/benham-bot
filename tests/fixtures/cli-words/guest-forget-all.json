@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "guest",
+    "forget-all"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Forgot every guest conversation\n",
+  "stderr": ""
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "dm",
+    "--tyler",
+    "   "
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "refusing to send an empty message\n"
+}

@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "issues",
+    "retry"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "0 sent, 0 still waiting\n",
+  "stderr": ""
+}
