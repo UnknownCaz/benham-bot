@@ -8,8 +8,15 @@
     * NO face marker and NO BENHAM_FACE: the primary face is MARKERLESS
       (INTENT Stage 7 - state_for(benham) IS state/, so the copied stores are
       visible). A marker here would be the misdelivery the design refuses.
-    * BENHAM_API_BIND: the second listener, on the tailnet INTERFACE address
-      (never 0.0.0.0), same port number as health on a second socket.
+    * ONE loopback socket, 127.0.0.1:8903, serves BOTH the console's liveness
+      probe (a TCP connect; GET /health answers too) and the PC's API - so
+      there is no BENHAM_HEALTH_PORT here. MEASURED 2026-09-05: a listener
+      bound to the Tailscale interface address accepts and then reads ENOTCONN
+      on this Mac (Tailscale.app), stdlib http.server included, so the
+      interface bind the brief asked for is impossible; the tailnet reaches
+      this socket through `tailscale serve --bg --tcp 8903 tcp://127.0.0.1:8903`
+      (tailnet-only by construction, the console's own mechanism; never
+      0.0.0.0). BENHAM_API_HOSTS allows the Host value the PC sends.
     * BENHAM_HOST_NAME: only for the words `benham.py status` prints.
 
   Install: sudo cp scripts/mac/com.caz.benham-bot.plist /Library/LaunchDaemons/
@@ -30,9 +37,9 @@
   <key>WorkingDirectory</key><string>/Users/administrator/benham-bot</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>BENHAM_HEALTH_PORT</key><string>8903</string>
-    <key>BENHAM_API_BIND</key><string>100.76.11.56</string>
+    <key>BENHAM_API_BIND</key><string>127.0.0.1</string>
     <key>BENHAM_API_PORT</key><string>8903</string>
+    <key>BENHAM_API_HOSTS</key><string>100.76.11.56:8903,cazzy-mac:8903</string>
     <key>BENHAM_API_TOKEN_FILE</key><string>/Users/administrator/.config/benham-bot.token</string>
     <key>BENHAM_HOST_NAME</key><string>cazzy-mac</string>
     <key>BENHAM_LOG_FILE</key><string>/Users/administrator/benham-bot/logs/benham.log</string>
