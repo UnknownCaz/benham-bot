@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "guest",
+    "off",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued guest_off -> <ROOT>/state/outbox/<REQ>.json\n  set guest.enabled=false in control.json and restart the bot\n",
+  "stderr": ""
+}

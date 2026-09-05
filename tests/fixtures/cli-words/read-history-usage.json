@@ -4,7 +4,7 @@
     "x"
   ],
   "face": true,
-  "exit": 1,
+  "exit": 2,
   "stdout": "",
-  "stderr": "Traceback (most recent call last):\n  File \"<ROOT>/benham.py\", line 133, in <module>\n    sys.exit(main(sys.argv[1:]))\n             ^^^^^^^^^^^^^^^^^^\n  File \"<ROOT>/benham.py\", line 128, in main\n    runpy.run_module(module, run_name=\"__main__\")\n  File \"<frozen runpy>\", line 229, in run_module\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"<ROOT>/benham/cli/read_history.py\", line 25, in <module>\n    LIMIT = None if _arg in (\"all\", \"0\", \"full\", \"none\") else int(_arg)\n                                                              ^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'x'\n"
+  "stderr": "limit must be an integer or all/0/full/none, got 'x'\n"
 }

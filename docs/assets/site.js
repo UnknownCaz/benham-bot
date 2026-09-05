@@ -7,7 +7,7 @@ const PAGES = {
     { f: "tiers.html",            t: "The four tiers",      k: "capability tier owner gate permissions levels",                        d: "Every capability sits in a tier; the owner gate sits in front." },
     { f: "confirm-flow.html",     t: "Confirmation flow",   k: "destructive token dry-run ttl three gates self-confirm delete purge",  d: "Why the model can never say yes to itself." },
     { f: "taint.html",            t: "The taint model",     k: "tainted turn stranger text approval injection prompt",                 d: "Reading stranger text gates outward actions." },
-    { f: "pc-access.html",        t: "PC access",           k: "codesession claude code pc_task secret-read workdir sandbox",          d: "Read freely, ask before changing." },
+    { f: "pc-access.html",        t: "PC access",           k: "removed phase b codesession pc_task pc.. machine wall",          d: "Read freely, ask before changing." },
     { f: "conversations.html",   t: "Conversations",       k: "ask nudge bank close tell reverse channel binding reply outreach loop collaborator queue slot priority blocking whenever numbered batch uncollected", d: "An ask that outlives the session that made it." },
     { f: "self-record.html",     t: "Answering from record", k: "what_i_did log evidence memory gaslighting covered proof",              d: "What it DID is a matter of record, not memory." },
     { f: "guests.html",           t: "The guest system",    k: "guest invariants capabilities workspace grants friends whitelist",     d: "Three invariants that never bend." },
@@ -23,7 +23,7 @@ const PAGES = {
     { f: "cli.html",              t: "CLI shorthands",            k: "do.py send draft dm delete fetch catchup read_history find_user speak listen status webhook webhooks.json", d: "The full cheat-sheet, grouped." },
     { f: "guest-admin.html",      t: "Guest admin",               k: "add remove guest kill switch caps forget status workspace flip restart", d: "Add, remove, cut off, curate." },
     { f: "tray-restart.html",     t: "Tray, restart & supervision", k: "tray icon scheduled task supervise boot restart stop start",        d: "The tray icon, the Scheduled Task, the boot logs." },
-    { f: "health-logs-cost.html", t: "Health, logs & cost",       k: "status usage inbox watch_pc logs cost spend up",                      d: "Is it up, what's it costing, what's it doing." },
+    { f: "health-logs-cost.html", t: "Health, logs & cost",       k: "status usage inbox restart logs cost spend up cazzy-mac",                      d: "Is it up, what's it costing, what's it doing." },
     { f: "config-reference.html", t: "Config reference",          k: "control.json knobs restart defaults owner_ids destructive_guilds agent_guilds post_guilds", d: "Every knob, and the restart-after-edit rule." }
   ]
 };

@@ -30,6 +30,11 @@ from benham.core import capabilities
 from benham.core import confirm
 from benham.core import identity
 
+# Phase B (INTENT decision 39) deleted pc_task and spawn_in_room. The machine
+# wall and the taint wall stayed in code, so this file registers a TEST-ONLY
+# pc_task with the deleted lane's exact profile to keep proving them.
+_testconfig.walled_pc_task()
+
 TYLER = 273967061619965952
 STRANGER = 999000999000999000
 TESTING = 736988645562646619
@@ -239,64 +244,10 @@ async def main():
         bot.fire_confirmed = _real_fire
         confirm.cancel()
 
-    # REGRESSION (2026-08-26, found by an adversarial pass on the commit above).
-    # The PC-permission block sits ABOVE the confirm block and classifies with no
-    # pending in hand, so the token was stripped out and "yes <token>" read as a
-    # plain bare affirmative: it APPROVED A SHELL COMMAND using the token minted
-    # for a purge, left the purge parked, and told him neither. Making the token
-    # the only typed form on offer is what put that shape on the main road.
-    print("\nBoth prompts live: 'yes <token>' must reach the CONFIRMATION")
-    reset()
-    fired = []
-    _real_fire = bot.fire_confirmed
-
-    async def _spy_fire(pending, channel):
-        fired.append(pending.action)
-
-    bot.fire_confirmed = _spy_fire
-    try:
-        fut = asyncio.get_running_loop().create_future()
-        bot.codesession._pending["77"] = fut
-        t3 = confirm.park("purge_messages", {"channel_id": 1},
-                          {"channel": "general", "count": 42}, TYLER, "dm")
-        await bot.on_message(_Message(TYLER, f"yes {t3.token}"))
-        check("the SHELL COMMAND was not approved", fut.done(), False)
-        check("the tier-3 action fired instead", fired, ["purge_messages"])
-
-        print("\nBoth prompts live: a bare 'yes' answers NEITHER and says so")
-        agent_calls.clear()
-        sent.clear()
-        fired.clear()
-        t3b = confirm.park("delete_channel", {"channel_id": 2},
-                           {"channel": "general"}, TYLER, "dm")
-        await bot.on_message(_Message(TYLER, "yes"))
-        check("shell command still not approved", fut.done(), False)
-        check("nothing destructive fired", fired, [])
-        check("the confirmation is still parked",
-              confirm.get(t3b.token) is not None, True)
-        check("he was told it was ambiguous", len(sent), 1)
-        check("...and both are named",
-              all(w in sent[0] for w in ("PC permission", "delete_channel")), True)
-
-        print("\nPC request ALONE still takes a bare yes - the old path is untouched")
-        agent_calls.clear()
-        sent.clear()
-        confirm.cancel()
-        await bot.on_message(_Message(TYLER, "yes"))
-        check("shell command approved", fut.done(), True)
-        check("...with a yes", fut.result(), True)
-    finally:
-        bot.fire_confirmed = _real_fire
-        bot.codesession._pending.pop("77", None)
-        confirm.cancel()
-
-    print("\nA stranger tries to approve a blocked PC command")
-    reset()
-    fut = asyncio.get_running_loop().create_future()
-    bot.codesession._pending["99"] = fut
-    await bot.on_message(_Message(STRANGER, "yes"))
-    check("PC request still blocked", fut.done(), False)
-    bot.codesession._pending.pop("99", None)
+    # The "both prompts live" regression section (2026-08-26) stood here: the
+    # PC-permission prompt was the second consent sink and it left with the
+    # lane in Phase B (INTENT 39). The token rule it was found against is
+    # still pinned above.
 
     print("\nTyler, for contrast, does reach the agent")
     reset()
@@ -338,47 +289,27 @@ async def main():
     # shortcut is cheap without being harmless - "go to sleep" disconnected the bot.
 
 
-    print("\nThe pc.. prefix - zero API calls is the entire point")
+    print("\nThe pc.. prefix - refused in words, zero API calls (Phase B, INTENT 39)")
     reset()
-    ran, agent_before = [], len(agent_calls)
-    # spawn_in_room is what the pc.. surface calls since item 22b; the zero-API
-    # property being proven here is a property of the SURFACE, not of which
-    # spawn capability sits behind it.
-    real = capabilities.REGISTRY["spawn_in_room"].handler
+    agent_before = len(agent_calls)
+    await bot.on_message(_Message(TYLER, "pc.. count the py files"))
+    check("NO API call was made", len(agent_calls), agent_before)
+    check("the refusal is the pinned sentence", sent[-1], bot.PC_REMOVED_REPLY)
 
-    async def fake_pc(ctx, p):
-        ran.append(p.get("task"))
-        return {"status": "completed", "result": "31 .py files"}
+    reset()
+    await bot.on_message(_Message(TYLER, "PC.. list them"))
+    check("prefix is case-insensitive", sent[-1], bot.PC_REMOVED_REPLY)
 
-    capabilities.REGISTRY["spawn_in_room"].handler = fake_pc
-    try:
-        await bot.on_message(_Message(TYLER, "pc.. count the py files"))
-        check("the task reached the PC session", ran, ["count the py files"])
-        check("NO API call was made", len(agent_calls), agent_before)
-        check("the session's own answer was posted", sent[-1], "31 .py files")
+    # In a guild it must NOT hijack the message - the refusal would be posted
+    # into a server. It falls through to the agent as it always did.
+    reset()
+    await bot.on_message(_Message(TYLER, "pc.. do something",
+                                  guild=testing, mentions=[benham]))
+    check("ignored in a guild (falls through to the agent)", len(agent_calls), 1)
 
-        reset(); ran.clear()
-        await bot.on_message(_Message(TYLER, "PC.. list them"))
-        check("prefix is case-insensitive", ran, ["list them"])
-
-        reset(); ran.clear()
-        await bot.on_message(_Message(TYLER, "pc.."))
-        check("a bare prefix starts no session", ran, [])
-        check("...and says what it wants", "needs something after it" in sent[-1], True)
-
-        # In a guild it must NOT hijack the message - pc_task is DM-only, so the
-        # prefix there would only produce a refusal posted into a server.
-        reset(); ran.clear()
-        await bot.on_message(_Message(TYLER, "pc.. do something",
-                                      guild=testing, mentions=[benham]))
-        check("ignored in a guild (falls through to the agent)", ran, [])
-        check("...and the agent handled it instead", len(agent_calls), 1)
-
-        reset(); ran.clear()
-        await bot.on_message(_Message(TYLER, "pc is short for personal computer"))
-        check("'pc ...' without the dots is NOT the prefix", ran, [])
-    finally:
-        capabilities.REGISTRY["spawn_in_room"].handler = real
+    reset()
+    await bot.on_message(_Message(TYLER, "pc is short for personal computer"))
+    check("'pc ...' without the dots is NOT the prefix", len(agent_calls), 1)
 
 
     print("\nDefence in depth — the capability refuses a stranger on its own")

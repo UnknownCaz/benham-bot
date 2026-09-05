@@ -172,7 +172,8 @@ def seed(clone):
 # --------------------------------------------------------------------------
 
 _NEEDS_TOKEN = {"delete_message", "purge_messages", "purge_guild", "delete_channel",
-                "delete_role", "kick_member", "ban_member", "delete_emoji"}
+                "delete_role", "kick_member", "ban_member", "delete_emoji",
+                "guest_off"}   # always_confirm, tier 2 - same two-step shape
 FAKE_TOKEN = "abc123"
 REFUSED_CHANNEL = 404  # a channel id that "Discord refuses", for the failed/ path
 
@@ -214,6 +215,9 @@ def _answer(req):
                               "error": f"ValueError: confirm_token {req.get('confirm_token')!r} "
                                        "is unknown or expired. Expiry means cancelled"}
         return "sent", {**base, "status": "ok", "action": action, "result": {"deleted": 1}}
+    if action == "restart":
+        return "sent", {**base, "status": "ok", "action": action,
+                        "result": {"status": "restarting", "pid": 4242, "in_seconds": 2}}
     # every other registry capability
     return "sent", {**base, "status": "ok", "action": action,
                     "result": {"status": "sent", "message_id": 123456789}}
@@ -446,6 +450,14 @@ CASES = {
     "usage-missing-log": ["usage", "--log", "nope.log"],
     "webhook-list": ["webhook", "--list"],
     "webhook-nothing": ["webhook"],
+    # --- Phase B verbs (pinned AFTER the build - these words are new)
+    "inbox": ["inbox"],
+    "inbox-dms": ["inbox", "--dms", "--limit", "2"],
+    "inbox-bad-limit": ["inbox", "--limit", "0"],
+    "restart-nowait": ["restart", "--no-wait"],
+    "guest-off-preview": ["guest", "off"],
+    "guest-off-fire": ["guest", "off", "--confirm-token", FAKE_TOKEN],
+    "guest-off-nowait": ["guest", "off", "--no-wait"],
     # --- the invisible readers
     "catchup-usage": ["catchup"],
     "catchup-bad-id": ["catchup", "x"],
@@ -463,25 +475,14 @@ def case_spec(name):
 
 
 class Harness:
-    """One seeded clone (or two, in remote mode) and a fake bot over it."""
+    """LOCAL mode: one seeded clone that IS the bot's tree, a fake bot over it."""
 
-    def __init__(self, remote=None):
-        """`remote` is None for LOCAL, or a callable (mac_clone) -> (env, stop)
-        that starts the server over the Mac clone and returns the env the
-        client needs plus a stop() for teardown."""
+    def __init__(self):
         self.client = make_clone("client")
         seed(self.client)
         self.roots = [self.client]
         self.env = {}
-        self.stop_remote = None
-        if remote is None:
-            self.bot = FakeBot(os.path.join(self.client, "state"))
-        else:
-            self.mac = make_clone("mac")
-            seed(self.mac)
-            self.roots.append(self.mac)
-            self.env, self.stop_remote = remote(self.client, self.mac)
-            self.bot = FakeBot(os.path.join(self.mac, "state"))
+        self.bot = FakeBot(os.path.join(self.client, "state"))
         self.bot.start()
 
     def run(self, name):
@@ -494,38 +495,140 @@ class Harness:
 
     def close(self):
         self.bot.stop.set()
-        if self.stop_remote:
-            self.stop_remote()
         for d in self.roots:
             shutil.rmtree(d, ignore_errors=True)
 
 
-def run_all(names, remote=None, progress=None):
-    """Each case in a FRESH harness (fresh seed), so no case leans on another."""
+def run_all(names, remote=False, progress=None):
+    """Each case against a FRESH seed, so no case leans on another. Local
+    mode builds a harness per case; remote mode keeps one rig and reseeds."""
     results = {}
-    for name in names:
-        h = Harness(remote=remote)
-        try:
-            results[name] = h.run(name)
-        finally:
-            h.close()
-        if progress:
-            progress(name, results[name])
+    rig = RemoteRig() if remote else None
+    try:
+        for name in names:
+            if rig:
+                results[name] = rig.run(name)
+            else:
+                h = Harness()
+                try:
+                    results[name] = h.run(name)
+                finally:
+                    h.close()
+            if progress:
+                progress(name, results[name])
+    finally:
+        if rig:
+            rig.close()
     return results
 
 
-def fixture_path(name):
+# --------------------------------------------------------------------------
+# REMOTE mode: server.py as a real subprocess INSIDE the Mac clone - the
+# clone's own code, the clone's own paths, exactly the Mac's shape. One rig
+# for the whole run (the server holds import-time store paths, so it must
+# outlive the clone); the stores are wiped and reseeded per case.
+# --------------------------------------------------------------------------
+
+_SERVER = r'''
+import asyncio, os, sys, threading, time
+sys.path.insert(0, os.getcwd())
+from benham.core import server
+
+
+class C:
+    def is_ready(self):
+        return True
+
+    def is_closed(self):
+        return False
+
+
+loop = asyncio.new_event_loop()
+threading.Thread(target=loop.run_forever, daemon=True).start()
+srv = server.start("127.0.0.1", 0, C(), "benham", lambda m: None,
+                   loop=loop, host_name="fake-mac", retries=1)
+print("PORT", srv.server_address[1], flush=True)
+while True:
+    time.sleep(3600)
+'''
+
+
+class RemoteRig:
+    """A Mac clone with the real server over it, plus one client clone."""
+
+    def __init__(self):
+        self.mac = make_clone("mac")
+        seed(self.mac)
+        self.client = make_clone("client")
+        seed(self.client)
+        self.roots = [self.client, self.mac]
+        self.token_file = os.path.join(tempfile.mkdtemp(prefix="cliwords-token-"),
+                                       "benham-bot.token")
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", _SERVER], cwd=self.mac, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            env=_env({"BENHAM_FACE": "benham", "BENHAM_API_TOKEN_FILE": self.token_file}))
+        port = None
+        for _ in range(200):
+            line = self.proc.stdout.readline()
+            if not line:
+                break
+            if line.startswith("PORT "):
+                port = int(line.split()[1])
+                break
+        if port is None:
+            raise RuntimeError("the fake Mac server did not report a port")
+        self.env = {"BENHAM_REMOTE_URL": f"http://127.0.0.1:{port}",
+                    "BENHAM_REMOTE_TOKEN_FILE": self.token_file,
+                    "BENHAM_REMOTE_HOST": "fake-mac"}
+        self.bot = FakeBot(os.path.join(self.mac, "state"))
+        self.bot.start()
+
+    def reseed(self):
+        for d in ("state", "logs"):
+            shutil.rmtree(os.path.join(self.mac, d), ignore_errors=True)
+            os.makedirs(os.path.join(self.mac, d), exist_ok=True)
+        seed(self.mac)
+
+    def run(self, name):
+        self.reseed()
+        spec = case_spec(name)
+        out = None
+        for argv in spec["chain"]:
+            out = run_case(self.client, argv, face=spec["face"], env=self.env)
+        out["argv"] = spec["chain"][-1] if len(spec["chain"]) == 1 else spec["chain"]
+        return normalised(out, self.roots)
+
+    def close(self):
+        self.bot.stop.set()
+        self.proc.kill()
+        for d in self.roots:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# Fixtures. <name>.json is the contract in BOTH modes; a <name>.<mode>.json
+# beside it overrides for one mode only - `status` is the case: with no bot
+# host at all it says NOT running (exit 1), through the wire it says RUNNING.
+# --------------------------------------------------------------------------
+
+def fixture_path(name, mode=None):
+    if mode:
+        p = os.path.join(FIXTURES, f"{name}.{mode}.json")
+        if os.path.exists(p):
+            return p
     return os.path.join(FIXTURES, name + ".json")
 
 
-def load_fixture(name):
-    with open(fixture_path(name), encoding="utf-8") as f:
+def load_fixture(name, mode=None):
+    with open(fixture_path(name, mode), encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_fixture(name, case):
+def save_fixture(name, case, mode=None):
     os.makedirs(FIXTURES, exist_ok=True)
-    with open(fixture_path(name), "w", encoding="utf-8") as f:
+    path = os.path.join(FIXTURES, f"{name}.{mode}.json" if mode else name + ".json")
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(case, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
@@ -535,15 +638,18 @@ def main(argv):
         print(__doc__)
         return 2
     only = argv[argv.index("--only") + 1] if "--only" in argv else ""
+    # --remote captures a per-mode override (<name>.remote.json); the plain
+    # capture is the contract for both modes.
+    mode = "remote" if "--remote" in argv else None
     names = [n for n in CASES if only in n]
     t0 = time.time()
 
     def progress(name, case):
-        save_fixture(name, case)
+        save_fixture(name, case, mode)
         print(f"  captured {name:<24} exit {case['exit']}  ({time.time() - t0:.0f}s)")
 
-    run_all(names, progress=progress)
-    print(f"{len(names)} fixture(s) written to {FIXTURES}")
+    run_all(names, remote=bool(mode), progress=progress)
+    print(f"{len(names)} fixture(s) written to {FIXTURES}" + (f" ({mode})" if mode else ""))
     return 0
 
 

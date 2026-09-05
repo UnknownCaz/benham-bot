@@ -8,5 +8,5 @@
   "face": true,
   "exit": 1,
   "stdout": "",
-  "stderr": "Traceback (most recent call last):\n  File \"<ROOT>/benham.py\", line 133, in <module>\n    sys.exit(main(sys.argv[1:]))\n             ^^^^^^^^^^^^^^^^^^\n  File \"<ROOT>/benham.py\", line 128, in main\n    runpy.run_module(module, run_name=\"__main__\")\n  File \"<frozen runpy>\", line 229, in run_module\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"<ROOT>/benham/cli/initiate.py\", line 285, in <module>\n    sys.exit(main(sys.argv[1:]))\n             ^^^^^^^^^^^^^^^^^^\n  File \"<ROOT>/benham/cli/initiate.py\", line 281, in main\n    return a.fn(a)\n           ^^^^^^^\n  File \"<ROOT>/benham/cli/initiate.py\", line 108, in cmd_drop\n    t = initiative.drop_thread(a.id, a.reason)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<ROOT>/benham/core/initiative.py\", line 220, in drop_thread\n    return _mutate_thread(tid, go)\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<ROOT>/benham/core/initiative.py\", line 184, in _mutate_thread\n    raise KeyError(f\"no thread {tid!r}\")\nKeyError: \"no thread 't9'\"\n"
+  "stderr": "cannot drop t9: \"no thread 't9'\"\n"
 }

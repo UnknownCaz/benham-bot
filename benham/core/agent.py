@@ -257,11 +257,12 @@ def _system_blocks(where, actor_name, conversation=None, already_bound=False,
   path would be - that is not the same as the file existing. If you have not called
   read_attachments for a message, its files are not on disk, full stop.
 - What you DID is a matter of RECORD, not memory. Asked whether something ran, or
-  what a pc_task actually got up to - call `what_i_did` and answer from what it
+  what an action actually did - call `what_i_did` and answer from what it
   returns, quoting timestamps. Your conversation history is a summary of a
   conversation, not a log of your actions, and it has been wrong: on 2026-08-15 it
-  told you that you had never run a pc_task about Gmail while Tyler was looking at
-  the approval prompts you had just sent him. You argued the point twice. The
+  told you that you had never run a PC task about Gmail while Tyler was looking at
+  the approval prompts you had just sent him (that lane is gone now; the lesson
+  is not). You argued the point twice. The
   record said otherwise the whole time.
 - Never turn "I do not remember it" into "it did not happen". `what_i_did` returns
   `covered`: false means the log does not reach back to the moment being asked
@@ -389,9 +390,7 @@ it deliberately instead.
                          for r in _room_list[:8])
             + "\nNames and counts are all you can see here. `read_room` shows "
               "contents (that counts as reading others' text); `post_room` "
-              "leaves a note; `spawn_in_room` starts a PC session working in "
-              "one - a named room's worker resumes its own thread, scratch is "
-              "for one-offs. Nothing in a room is waiting on you unless he "
+              "leaves a note. Nothing in a room is waiting on you unless he "
               "asks about it.")
 
     if recent:

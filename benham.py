@@ -46,9 +46,10 @@ COMMANDS = {
     "room":         ("benham.cli.room",         "read / post into / create one room"),
     "status":       ("benham.cli.status",       "quick, read-only health check"),
     "usage":        ("benham.cli.usage",        "token and cost accounting from the logs"),
-    "watch_pc":     ("benham.cli.watch_pc",     "watch, live, what Benham is doing on the PC"),
+    "inbox":        ("benham.cli.inbox",        "the last N messages the bot saw (--dms for DMs only)"),
+    "restart":      ("benham.cli.restart",      "ask the running bot to exit; its supervisor brings it back"),
     "webhook":      ("benham.cli.webhook",      "post via a saved webhook / manage webhooks"),
-    "guest":        ("benham.guest.guest",      "guest chat admin: status | forget <user_id> | forget-all"),
+    "guest":        ("benham.guest.guest",      "guest chat admin: status | forget <user_id> | forget-all | off"),
     "ideas":        ("benham.cli.ideas",        "guest ideas inbox: new since sweep | --all | --sweep"),
     "issues":       ("benham.cli.issues",       "intake tracker: list | loop (close the loop) | retry"),
 }
@@ -125,7 +126,16 @@ def main(argv):
         return 2
     module, _ = COMMANDS[cmd]
     sys.argv = [f"benham.py {cmd}"] + argv[1:]
-    runpy.run_module(module, run_name="__main__")
+    # Phase B (INTENT decision 38): the bot runs on another machine and this
+    # tree is its client. Tailnet down, token wrong, bot down - one line
+    # naming the host, exit 1, never a traceback: Raven and the initiates
+    # lane read these unattended, and a stack trace is a silent failure there.
+    from benham.core.remote import RemoteError
+    try:
+        runpy.run_module(module, run_name="__main__")
+    except RemoteError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     return 0
 
 

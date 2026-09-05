@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "inbox",
+    "--limit",
+    "0"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "usage: benham.py inbox [-h] [--limit LIMIT] [--dms]\nbenham.py inbox: error: --limit must be at least 1\n"
+}

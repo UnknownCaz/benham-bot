@@ -25,6 +25,11 @@ from benham.core import identity
 from benham.core import policy
 from benham.core.policy import CallContext, Origin
 
+# Phase B (INTENT decision 39) deleted pc_task and spawn_in_room. The machine
+# wall and the taint wall stayed in code, so this file registers a TEST-ONLY
+# pc_task with the deleted lane's exact profile to keep proving them.
+_testconfig.walled_pc_task()
+
 TYLER = 273967061619965952
 DOOM = 777000777000777000
 TESTING = 736988645562646619
@@ -316,9 +321,11 @@ for name in sorted(capabilities.REGISTRY):
 # - a guild message that talked the model into calling it would be putting words in
 # his mouth on a record other decisions are then made from. SYSTEM is excluded for
 # the sharper version of the same thing: a timer must never answer on his behalf.
-# spawn_in_room joined 2026-08-18: pc_task's successor (INTENT item 22), and it
-# wears pc_task's exact profile for pc_task's exact reasons - a DM is the only
-# human origin trusted with the machine, and never a tainted one.
+# spawn_in_room joined 2026-08-18 as pc_task's successor and LEFT with it in
+# Phase B (INTENT 39); the pc_task in this matrix is _testconfig's double.
+# restart and guest_off joined 2026-09-05 (INTENT 43, 44): {OWNER_DM,
+# LOCAL_CLI}, because a mention in a room strangers write in must not be able
+# to bounce the process or lock guests out, and a timer must never do either.
 # deliver_unprompted joined 2026-08-20 with the initiative lane, and it is
 # restricted the OTHER way round from the three above: {LOCAL_CLI, SYSTEM}, with
 # every human origin excluded. Not a hardening of something Tyler might want to
@@ -327,8 +334,8 @@ for name in sorted(capabilities.REGISTRY):
 # grant is the two routes that actually drive it: the daily job through the CLI,
 # and any future timer. Every name added to that set is a new way for a message
 # he did not ask for to reach him.
-EXPECTED_RESTRICTED = {"pc_task", "answer_conversation", "spawn_in_room",
-                       "deliver_unprompted"}
+EXPECTED_RESTRICTED = {"pc_task", "answer_conversation", "deliver_unprompted",
+                       "restart", "guest_off"}
 restricted = {n for n, row in matrix.items()
               if not all(row[o] for o in
                          (Origin.OWNER_DM, Origin.OWNER_GUILD, Origin.OWNER_VOICE,
@@ -341,13 +348,8 @@ check("exactly the expected capabilities are origin-restricted",
 # may do while nobody is watching.
 #
 #   set_presence         - cosmetic, applied on login by on_ready.
-#   triage_conversation  - added for stage 3 item 13. A read-only Claude Code
-#                          session investigating a report. SYSTEM-reachable because
-#                          triage that waits for a human to remember is the loop
-#                          this stage exists to close, and safe because the session
-#                          it runs has Read/Glob/Grep and NOTHING else - a non-read
-#                          tool is denied outright rather than asked about, so a
-#                          stranger's report cannot reach a write OR buzz his phone.
+#   (triage_conversation - stage 3 item 13's read-only Claude Code session -
+#                          stood here until Phase B deleted the PC lane, INTENT 39.)
 #   notify_owner         - added for stage 3 item 11. The recipient is ALWAYS the
 #                          owner and cannot be chosen, so the worst an automated
 #                          caller can do is talk to Tyler - and a watchdog noticing
@@ -385,7 +387,7 @@ check("exactly the expected capabilities are origin-restricted",
 #
 # A further name appearing here without a deliberate decision is what this asserts on.
 EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
-                   "notify_owner", "triage_conversation", "deliver_unprompted"}
+                   "notify_owner", "deliver_unprompted"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)
@@ -554,9 +556,6 @@ _pd = policy.authorize(capabilities.REGISTRY["pc_task"],
 check("pc_task refuses from codex even though the config grants it",
       _pd.denied, True)
 check("...and the machine wall names itself", _pd.rule, "face_machine")
-check("spawn_in_room is behind the same wall",
-      policy.authorize(capabilities.REGISTRY["spawn_in_room"],
-                       ctx_for_face(Origin.OWNER_DM, "codex")).rule, "face_machine")
 check("an UNGRANTED capability names the grant rule, not the wall",
       policy.authorize(capabilities.REGISTRY["pin_message"],
                        ctx_for_face(Origin.OWNER_DM, "codex")).rule,

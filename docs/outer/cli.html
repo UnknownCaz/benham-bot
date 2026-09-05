@@ -57,9 +57,10 @@ python benham.py do purge_messages channel_id=8093…8612 limit=20 contains="tes
       <tr><td><code>python benham.py room</code></td><td>read / post into / create one room</td></tr>
       <tr><td><code>python benham.py status</code></td><td>quick, read-only health check</td></tr>
       <tr><td><code>python benham.py usage</code></td><td>token and cost accounting from the logs</td></tr>
-      <tr><td><code>python benham.py watch_pc</code></td><td>watch, live, what Benham is doing on the PC</td></tr>
+      <tr><td><code>python benham.py inbox</code></td><td>the last N messages the bot saw (--dms for DMs only)</td></tr>
+      <tr><td><code>python benham.py restart</code></td><td>ask the running bot to exit; its supervisor brings it back</td></tr>
       <tr><td><code>python benham.py webhook</code></td><td>post via a saved webhook / manage webhooks</td></tr>
-      <tr><td><code>python benham.py guest</code></td><td>guest chat admin: status | forget &lt;user_id&gt; | forget-all</td></tr>
+      <tr><td><code>python benham.py guest</code></td><td>guest chat admin: status | forget &lt;user_id&gt; | forget-all | off</td></tr>
       <tr><td><code>python benham.py ideas</code></td><td>guest ideas inbox: new since sweep | --all | --sweep</td></tr>
       <tr><td><code>python benham.py issues</code></td><td>intake tracker: list | loop (close the loop) | retry</td></tr><!-- /GENERATED:cli-commands -->
     </table>
@@ -257,7 +258,8 @@ python benham.py webhook --list                       # configured webhooks (nev
       <tr><th>command</th><th>does</th></tr>
       <tr><td><code>benham.py status</code></td><td>read-only health check</td></tr>
       <tr><td><code>benham.py usage</code></td><td>what it's actually costing</td></tr>
-      <tr><td><code>benham.py watch_pc</code></td><td>watch a PC session live</td></tr>
+      <tr><td><code>benham.py inbox</code></td><td>the last N messages the bot saw (<code>--dms</code>)</td></tr>
+      <tr><td><code>benham.py restart</code></td><td>the bot exits; launchd brings it back</td></tr>
       <tr><td><code>benham.py guest</code></td><td>guest allowlist / spend / forget</td></tr>
       <tr><td><code>scripts\supervise_bot.bat</code></td><td>hand-run the supervisor — see <a href="tray-restart.html">Tray, restart &amp; supervision</a></td></tr>
     </table>
@@ -284,17 +286,14 @@ python benham.py webhook --list                       # configured webhooks (nev
     output says so — PC sessions actually bill the plan, not per-token.</p>
     <pre><code>python benham.py usage --today</code></pre>
 
-    <h3><code>benham.py watch_pc</code></h3>
+    <h3><code>benham.py inbox</code> / <code>restart</code> (Phase B)</h3>
     <table>
-      <tr><th>flag</th><th>does</th></tr>
-      <tr><td>(none)</td><td>follow the active session live</td></tr>
-      <tr><td><code>--last</code></td><td>replay the most recent session and exit</td></tr>
-      <tr><td><code>--list</code></td><td>list recent sessions</td></tr>
+      <tr><th>command</th><th>does</th></tr>
+      <tr><td><code>inbox [--limit N] [--dms]</code></td><td>the last N messages the bot saw, from its own inbox on cazzy-mac</td></tr>
+      <tr><td><code>restart [--no-wait]</code></td><td>owner-gated restart; waits for the new pid unless told not to</td></tr>
+      <tr><td><code>guest off</code></td><td>the panic button: preview, then <code>--confirm-token</code>; guests refused from the next boot</td></tr>
     </table>
-    <p>Reads the full JSONL transcript Claude Code already writes per session (under
-    <code>~/.claude/projects/&lt;encoded-cwd&gt;/</code>) — nothing was added to the bot to make
-    this observable; the record existed and just had no reader. Strictly read-only: it cannot
-    affect a running session, so watching is always safe mid-task.</p>
+    <p><code>watch_pc</code> is gone with the PC lane (Phase B).</p>
 
     <h3><code>benham.py guest</code></h3>
     <table>
@@ -310,11 +309,11 @@ python benham.py guest forget 1097…1815</code></pre>
     <p>Everything that rides the outbox queue needs the bot up:
     <code>send</code>, <code>draft</code>, <code>dm</code>, <code>delete</code>,
     <code>fetch</code>, and <code>do</code> actions.</p>
-    <p>Standalone — work with the bot down: <code>webhook</code>, <code>status</code>,
-    <code>catchup</code>, <code>read_history</code>, <code>usage</code>,
-    <code>watch_pc</code>, <code>guest</code>, <code>ideas</code>, <code>conv</code>. The invisible readers log in briefly as
-    Benham with an <em>invisible presence</em> — no green dot, and the process contains no
-    send/react/reply code at all, so it cannot post or trigger anything.</p>
+    <p>Since Phase B every verb except <code>webhook</code> talks to the bot on cazzy-mac
+    (<code>config/remote.json</code>); <code>status</code> reads its health port and says NOT
+    running when it cannot. <code>catchup</code> and <code>read_history</code> are plain history
+    reads through the connected bot now - reading history shows nobody anything, and the bot's
+    token no longer lives on the PC.</p>
   </main>
 </div>
 <script src="../assets/site.js"></script>

@@ -34,7 +34,7 @@ python benham.py usage --all       # every log, full history</code></pre>
     <table>
       <tr><th>question</th><th>answer</th></tr>
       <tr><td>what's it seeing right now?</td><td>tail <code>inbox.jsonl</code> — one JSON per message</td></tr>
-      <tr><td>what's it doing on the PC right now?</td><td><code>python benham.py watch_pc</code> (follow live), <code>--last</code> (replay), <code>--list</code></td></tr>
+      <tr><td>what did people say to it while I was away?</td><td><code>python benham.py inbox --dms</code> (the last N, from its inbox on cazzy-mac)</td></tr>
       <tr><td>what did that CLI action actually do?</td><td>its <code>…_result.json</code> in <code>outbox/sent/</code> (failures: <code>outbox/failed/</code>)</td></tr>
       <tr><td>what are guests doing?</td><td><code>python benham.py guest status</code>; searches in <code>guest_searches.jsonl</code></td></tr>
     </table>

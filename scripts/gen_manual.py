@@ -40,7 +40,7 @@ DOCS = os.path.join(paths.ROOT, "docs")
 EXAMPLES = {
     0: ["read_channel", "search_messages", "find_user", "what_i_did"],
     1: ["send_message", "dm_user", "notify_owner", "tell_conversation"],
-    2: ["pin_message", "add_role", "pc_task", "triage_conversation"],
+    2: ["pin_message", "add_role", "guest_off", "restart"],
     3: ["delete_message", "purge_messages", "kick_member", "ban_member"],
 }
 # The base gate per tier. The SYSTEM note is DERIVED and appended below - the

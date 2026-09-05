@@ -45,6 +45,21 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def snapshot(client, face):
+    """The liveness JSON. Shared with server.py's GET /health (Phase B), so
+    the PC's `benham.py status` and the console's probe read one truth."""
+    return {
+        "face": face,
+        "pid": os.getpid(),
+        "uptime_s": int(time.time() - _started),
+        # Plain flags, safe to read off-loop: is_ready() is False
+        # while (re)connecting, is_closed() flips at shutdown. The
+        # port proves the PROCESS; this field says whether Discord
+        # is currently on the other end of it.
+        "gateway_connected": bool(client.is_ready() and not client.is_closed()),
+    }
+
+
 def start(port, client, face, log):
     """Bind 127.0.0.1:<port> and answer liveness JSON from a daemon thread.
 
@@ -55,16 +70,7 @@ def start(port, client, face, log):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = json.dumps({
-                "face": face,
-                "pid": os.getpid(),
-                "uptime_s": int(time.time() - _started),
-                # Plain flags, safe to read off-loop: is_ready() is False
-                # while (re)connecting, is_closed() flips at shutdown. The
-                # port proves the PROCESS; this field says whether Discord
-                # is currently on the other end of it.
-                "gateway_connected": bool(client.is_ready() and not client.is_closed()),
-            }).encode("utf-8")
+            body = json.dumps(snapshot(client, face)).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

@@ -50,6 +50,11 @@ from benham.core import agent
 from benham.core import capabilities
 from benham.core import confirm
 
+# Phase B (INTENT decision 39) deleted pc_task and spawn_in_room. The machine
+# wall and the taint wall stayed in code, so this file registers a TEST-ONLY
+# pc_task with the deleted lane's exact profile to keep proving them.
+_testconfig.walled_pc_task()
+
 TYLER = 273967061619965952
 TESTING = 736988645562646619
 

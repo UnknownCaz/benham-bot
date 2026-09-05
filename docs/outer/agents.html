@@ -17,13 +17,11 @@
     <h2 id="three">The three agents (and a half)</h2>
     <table>
       <tr><th>agent</th><th>file</th><th>model</th><th>can reach</th></tr>
-      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all <!-- GENERATED:count -->65<!-- /GENERATED:count --> capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
+      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all <!-- GENERATED:count -->64<!-- /GENERATED:count --> capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
       <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code></td><td><code>guest.model</code> (claude-haiku-4-5)</td><td><em>No client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only, plus <code>idea..</code> filing. A workspace/tool-loop variant existed until 2026-08-16; see <code>archive/guest-tools/</code>.</td></tr>
-      <tr><td><strong>PC session</strong> — the machine itself</td><td><code>codesession.py</code></td><td>the real Claude Code CLI (your subscription or API key per <code>pc.use_api_key</code>)</td><td>your actual PC, with your own Claude Code skills loaded — reads free, changes ask first</td></tr>
+      <tr><td><strong>PC session</strong> — removed in Phase B (2026-09-05)</td><td><em>gone</em></td><td>—</td><td>nothing; see <a href="../inner/pc-access.html">PC access</a></td></tr>
     </table>
-    <p>The PC session is not a reimplementation — it drives the actual Claude Code CLI through
-    the agent SDK with your settings loaded, so "restart Isle of Berk" works because your
-    <code>exaroton</code> skill is there, not because this repo knows what exaroton is.</p>
+    <p>The PC session drove the real Claude Code CLI on the PC until Phase B deleted the lane outright (INTENT decision 39).</p>
 
     <h2 id="when">Which one fires when</h2>
     <table>
@@ -31,8 +29,7 @@
       <tr><td>a conversation beat comes due</td><td>the tick loop, no model</td><td>One of two autonomous triggers. Every 60s it asks <code>conversations.due()</code> whether an ask needs delivering, nudging or banking, then delivers — it decides nothing, and reaches exactly one outward capability. No model is involved.</td></tr>
       <tr><td>a watched Minecraft server changes state</td><td><code>exaroton_watchdog</code>, no model</td><td>The other one, and the more powerful of the two: a <code>tasks.loop</code> started unconditionally at <code>on_ready</code>. It posts alerts to Discord on its own via <code>send_alert</code>, and with <code>auto_stop_empty</code> it calls <code>exa.stop()</code> — an action on a real server with nobody asked. It posts <em>outside</em> the capability chokepoint, straight to <code>channel.send</code>.</td></tr>
       <tr><td>you DM Benham</td><td>owner agent</td><td>the normal path; owner gate checked first</td></tr>
-      <tr><td>you DM starting <code>pc..</code></td><td>PC session directly</td><td>skips the agent round-trip entirely</td></tr>
-      <tr><td>you ask the agent for something PC-shaped</td><td>owner agent → <code>pc_task</code> → PC session</td><td>blocked in tainted turns; DM-only</td></tr>
+      <tr><td>you DM starting <code>pc..</code></td><td>a one-line refusal, no model</td><td>PC access was removed in Phase B</td></tr>
       <tr><td>you @mention it in a guild</td><td>owner agent</td><td>only in <code>agent_guilds</code>; elsewhere refused</td></tr>
       <tr><td>a whitelisted guest DMs it</td><td>guest agent</td><td>separate memory, separate persona, capped daily</td></tr>
       <tr><td>anyone else DMs or mentions it</td><td>nobody</td><td>seen and logged, never obeyed</td></tr>
@@ -58,10 +55,7 @@
       <pre><code>{"ts": "2026-08-04T03:45:46…", "user_id": 2739…5952, "query": "&lt;search query&gt;", "role": "owner"}</code></pre>
       <p><strong><code>guest_searches.jsonl</code></strong> — same for guests (append-only, hand-moderate it):</p>
       <pre><code>{"ts": "2026-07-30T22:20:12…", "user_id": 1097…1815, "query": "&lt;search query&gt;"}</code></pre>
-      <p><strong>PC sessions</strong> — full Claude Code transcripts as <code>*.jsonl</code>;
-      don't read them raw, use <code>python benham.py watch_pc</code> (follow live), <code>--last</code>
-      (replay), <code>--list</code>. Credential-shaped reads log loud as <code>SECRET-READ</code>
-      in the bot log.</p>
+      <p><strong>PC sessions</strong> — gone with the lane (Phase B); the transcripts that exist under <code>~/.claude/projects/</code> are history.</p>
       <p><strong>Owner/guest conversations</strong> — <code>agent_memory.json</code> /
       <code>guest_memory.json</code>, deliberately separate files so a typo can't merge a guest
       thread into yours.</p>

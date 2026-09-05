@@ -13,7 +13,9 @@ a separate, deliberate step, because content is other writers' text.
 
 import argparse
 
-from benham.core import rooms as store
+from benham.core import remote
+
+store = remote.stores.rooms   # Phase B: the bot's rooms, wherever it runs
 
 
 def main(argv):

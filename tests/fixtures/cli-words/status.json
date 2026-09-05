@@ -3,7 +3,7 @@
     "status"
   ],
   "face": true,
-  "exit": 0,
-  "stdout": "=== benham-bot status ===\nprocess:      RUNNING (pid <PID>)\nguilds:       1 (channels.json written <TS>)\n  - Testing Server (736988645562646619): 1 text, 0 voice\nrefused:      none in the last 24h (outbox/failed)\nlast log (bot.log):\n  [<TS>] Logged in as Benham#2721 (id 1) - face: benham\n  [<TS>] Synced 7 command(s) to Testing Server\n",
+  "exit": 1,
+  "stdout": "=== benham-bot status ===\nprocess:      NOT running\nguilds:       1 (channels.json written <TS>)\n  - Testing Server (736988645562646619): 1 text, 0 voice\nrefused:      none in the last 24h (outbox/failed)\nlast log (bot.log):\n  [<TS>] Logged in as Benham#2721 (id 1) - face: benham\n  [<TS>] Synced 7 command(s) to Testing Server\n",
   "stderr": ""
 }

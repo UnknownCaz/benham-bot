@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "restart",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued restart -> <ROOT>/state/outbox/<REQ>.json\ndone: status=ok\n  bot pid <PID> exits in ~2s; its supervisor brings it back\n",
+  "stderr": ""
+}

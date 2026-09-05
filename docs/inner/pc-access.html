@@ -10,65 +10,33 @@
 <div class="shell">
   <nav id="sidebar"><noscript><a href="../index.html">Home</a></noscript></nav>
   <main>
-    <h1>PC access</h1>
-    <p class="lede">A real Claude Code session on the actual machine — read freely, ask before
-    changing.</p>
+    <h1>PC access - removed</h1>
+    <p class="lede">Deleted in Phase B (2026-09-05, INTENT decision 39): the bot runs on cazzy-mac
+    and has no hands on any machine.</p>
 
-    <h2 id="what">What it does</h2>
-    <p><code>codesession.py</code> drives the real Claude Code CLI through the agent SDK, with
-    your own settings and skills loaded — "restart Isle of Berk" works because <em>your</em>
-    exaroton skill is there, not because this repo knows what exaroton is. Reached via the
-    <code>pc..</code> DM prefix or the <code>pc_task</code> capability.</p>
-    <p><strong>Rooms (2026-08-18, INTENT item 22).</strong> The <code>pc..</code> prefix now
-    routes through <code>spawn_in_room</code>: behaviour is unchanged, but every task lands in
-    the standing <em>scratch</em> room with author, timestamp, and the session id — which is the
-    <code>resume</code> handle. <code>pc.. continue: &lt;task&gt;</code> resumes the scratch
-    worker with its context intact; a <em>named</em> room's worker resumes by default (a room is
-    a thread), and past the handoff bound a continue rolls over to a fresh session that is told
-    the room holds the thread. A spawned session gets a <em>pointer</em> to its room, never room
-    content — it reads the room itself via the CLI, so other writers' text never sits in the
-    instruction seat. Sessions post nothing anywhere by themselves: v1 rooms are pull-only, and
-    the only automatic write is the session's own final message, posted into its room as the
-    report. <code>pc_task</code> remains registered during the transition.</p>
-    <table>
-      <tr><th>tool class</th><th>behaviour</th></tr>
-      <tr><td><code>Read</code>, <code>Glob</code>, <code>Grep</code>, <code>WebFetch</code>, <code>WebSearch</code>, <code>TodoWrite</code>, …</td><td>runs immediately</td></tr>
-      <tr><td>the read-only benham CLI as a whole command — <code>rooms</code>, <code>room read</code>, <code>conv list/show</code>, <code>status</code>, <code>ask --queue</code> (no shell operators)</td><td>runs immediately (2026-08-18 — your workspace allowlist does not reach Benhams-inbox sessions, so the gate carries it)</td></tr>
-      <tr><td>the raw send commands — <code>dm</code>, <code>send</code>, <code>do dm_user</code>, <code>do send_message</code>, anywhere in the command</td><td><strong>refused outright, never asked</strong> — the bounded paths are <code>outreach</code> (one approval, tracked) and <code>tell_conversation</code> (outcome on an existing loop)</td></tr>
-      <tr><td>anything else — writes, edits, shell commands, subagents</td><td>DMs you the <strong>full command</strong> (up to 1200 chars) and <strong>blocks</strong> until you answer</td></tr>
-      <tr><td>no answer within <code>permission_timeout_seconds</code> (300)</td><td><strong>denied</strong> — the session is told no and stops</td></tr>
-    </table>
+    <h2 id="what">What happened</h2>
+    <p>Until Phase B <code>codesession.py</code> drove a real Claude Code session on Tyler's PC,
+    reached through the <code>pc..</code> DM prefix and the <code>pc_task</code> /
+    <code>spawn_in_room</code> capabilities, with a read-freely / ask-before-changing gate that
+    DM'd every write for approval. When the Benham face moved to cazzy-mac, Tyler dropped the
+    lane outright rather than relay it back to the PC - reaffirmed after the costs were named.
+    The code is gone; <code>claude_agent_sdk</code> is needed nowhere.</p>
 
-    <h2 id="why">Why we chose this</h2>
-    <p><strong>The allowlist is of reads, not writes.</strong> Anything unrecognised is treated
-    as a change and asks. When a future Claude Code version adds a tool this file has never
-    heard of, the failure mode is an unnecessary question — not an unreviewed write. Fail
-    closed, in the direction that merely annoys.</p>
-    <p><strong>The full command, because an approval you can't read isn't one.</strong> An
-    early version truncated the approval DM to 80 characters — which would have meant approving
-    commands you couldn't actually see. 1200 now.</p>
-    <p><strong>The workdir is not a sandbox, and secrets are readable — on purpose.</strong>
-    <code>Benhams-inbox/</code> is a starting point; the session can go anywhere. Reads are
-    free, so anyone who can DM Benham could ask it to read <code>environ.env</code>. The chosen
-    defence is not a block but a <em>trail</em>: every read of a credential-shaped path logs
-    loud as <code>SECRET-READ</code>. Two honest reasons: full file access is the feature being
-    bought, and the DM door is already owner-only — the log exists for the day that assumption
-    fails. Hardening to a flat deny is a one-line change to <code>_SECRET_RE</code>'s use,
-    documented in the code for exactly that day.</p>
-    <p><strong>Tightest origins in the registry.</strong> <code>{OWNER_DM, LOCAL_CLI}</code> +
-    <code>blocked_when_tainted</code>: reachable only from a direct DM or the local shell, and
-    not at all once the turn has read what other people wrote — see
-    <a href="taint.html">The taint model</a> for why that's a flat deny, not a confirm.</p>
+    <h2 id="now">What you see now</h2>
+    <ul>
+      <li>A DM starting <code>pc..</code> gets one plain sentence saying PC access was removed -
+      no stack trace, no silence, no model round-trip.</li>
+      <li>The boot banner reads <code>PC access: removed (Phase B, 2026-09-05)</code> for every
+      face.</li>
+      <li>Rooms keep create / list / read / post; the spawn half and the scratch worker are
+      gone. <code>rooms.json</code>'s worker record is inert data.</li>
+      <li>The machine wall (decision 34) stays in code, refusing a capability that no longer
+      exists; the tests keep it proven with a test-only double.</li>
+    </ul>
 
-    <h2 id="paper-trail">Paper trail</h2>
-    <div class="paper-trail">
-      <p>Every session writes a full JSONL transcript (Claude Code's own, under
-      <code>~/.claude/projects/&lt;encoded-cwd&gt;/</code>) — <code>python benham.py watch_pc</code>
-      follows it live; nothing was added to the bot to make this observable, the record
-      existed and just had no reader. Approval requests appear as DMs and as bot-log lines;
-      credential-path reads flag <code>SECRET-READ</code>. Billing per task shows in
-      <code>benham.py usage</code> (estimates; sessions currently bill the subscription).</p>
-    </div>
+    <h2 id="revival">If it is ever wanted back</h2>
+    <p>The PC-side relay in <code>drafts\benham-phase-b\DESIGN.md</code> §2-A restores the lane
+    without touching anything else. It is a deliberate build, not a config edit.</p>
   </main>
 </div>
 <script src="../assets/site.js"></script>

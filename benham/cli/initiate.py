@@ -30,10 +30,35 @@ can only differ by something that genuinely changed in between.
 
 import argparse
 import json
+import os
 import sys
+import types
 
 from benham import paths
-from benham.core import conversations, initiative, outbox, policy
+from benham.core import outbox, remote
+
+# Phase B (INTENT decisions 38, 41): the lane's stores live where the bot runs.
+# The proxies forward there when config/remote.json names a host and are the
+# local modules otherwise. `conversations` is only read for its constants.
+initiative = remote.stores.initiative
+conversations = remote.stores.conversations
+_policy = remote.stores.policy
+
+# The D4 rider: the ledger's proof-of-run for this lane used to be the mtime
+# of initiative-log.md, which the bot now writes on ITS host. This stamp is
+# touched on the PC after every successful call, so the console's lane row
+# keeps reading a file that moves when the lane actually ran.
+HEARTBEAT = os.path.join(paths.STATE_DIR, "initiative-heartbeat.local")
+
+
+def _stamp_heartbeat():
+    try:
+        os.makedirs(os.path.dirname(HEARTBEAT), exist_ok=True)
+        with open(HEARTBEAT, "a", encoding="utf-8"):
+            pass
+        os.utime(HEARTBEAT, None)
+    except OSError:
+        pass   # a stamp that cannot be written must not fail the run it records
 
 
 def _print_lane(state, stream=sys.stdout):
@@ -105,13 +130,23 @@ def cmd_note(a):
 
 
 def cmd_drop(a):
-    t = initiative.drop_thread(a.id, a.reason)
+    try:
+        t = initiative.drop_thread(a.id, a.reason)
+    except (KeyError, ValueError) as e:
+        # One line, not a traceback: this ran headless before Phase B and a
+        # missing thread id printed a stack. The store's message names it.
+        print(f"cannot drop {a.id}: {str(e).strip(chr(39))}", file=sys.stderr)
+        return 1
     print(f"dropped [{t['id']}] {t['text']}\n  because: {a.reason}")
     return 0
 
 
 def cmd_close(a):
-    t = initiative.close_thread(a.id, a.outcome)
+    try:
+        t = initiative.close_thread(a.id, a.outcome)
+    except (KeyError, ValueError) as e:
+        print(f"cannot close {a.id}: {str(e).strip(chr(39))}", file=sys.stderr)
+        return 1
     print(f"closed [{t['id']}] {t['text']}\n  outcome: {a.outcome}")
     return 0
 
@@ -159,14 +194,16 @@ def cmd_ask(a):
     # Ask the REAL gate about the real text, before anything is written down. A
     # refused question should leave no trace in the conversation store - the
     # record of it belongs in the run log, as a `blocked` entry, and nowhere else.
-    owner = sorted(policy.identity.OWNER_IDS)
+    owner = sorted(remote.identity()["owner_ids"])
     if not owner:
         print("no owner is configured in control.json - there is nobody to ask.",
               file=sys.stderr)
         return 2
     probe = {"id": "(dry-run)", "direction": conversations.UNPROMPTED,
              "counterparty": owner[0], "question": a.question}
-    verdict = policy.authorize_unprompted(probe)
+    # The REAL gate, run where the bot runs (its lane state, its clock); the
+    # Decision comes back flattened and is re-shaped so the reads below hold.
+    verdict = types.SimpleNamespace(**_policy.authorize_unprompted(probe))
 
     if not verdict.allowed:
         print(f"REFUSED [{verdict.rule}]\n  {verdict.reason}", file=sys.stderr)
@@ -278,7 +315,10 @@ def main(argv):
     if not getattr(a, "fn", None):
         ap.print_help()
         return 2
-    return a.fn(a)
+    code = a.fn(a)
+    if code == 0:
+        _stamp_heartbeat()
+    return code
 
 
 if __name__ == "__main__":

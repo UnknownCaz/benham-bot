@@ -27,6 +27,7 @@ from benham import paths
 from benham.core import capabilities  # noqa: F401 — imported for its registration side effects
 from benham.core import identity
 from benham.core import outbox
+from benham.core import remote
 
 
 def _print_list(argv):
@@ -109,14 +110,19 @@ def main(argv):
     except capabilities.ActionError as e:
         return outbox.usage(str(e))
 
+    # Phase B: a `path=` names a file on THIS machine and the bot reads files
+    # on ITS machine, so the bytes travel first and the parameter is rewritten
+    # to where they landed (send_file / dm_user's `path` and `paths`).
+    if remote.active():
+        if params.get("path"):
+            params["path"] = remote.upload(str(params["path"]))
+        if isinstance(params.get("paths"), list):
+            params["paths"] = [remote.upload(str(p)) for p in params["paths"]]
+
     path = outbox.enqueue(face=paths.PROCESS_FACE, action=name, **params)
     print(f"queued {name} -> {os.path.basename(path)}")
 
-    # A PC task drives a whole Claude Code session and can pause indefinitely on a
-    # permission DM, so the 60s that suits a Discord call would report a healthy
-    # bot as dead. The request itself is unaffected either way - it stays queued
-    # and the bot still runs it - but the message printed here would be a lie.
-    timeout = 1800 if name == "pc_task" else 60
+    timeout = 60
     result, where = outbox.wait_result(path, timeout=timeout)
     if result is None:
         print(f"no result within {timeout}s. The request is still queued and will "

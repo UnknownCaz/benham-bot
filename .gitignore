@@ -15,6 +15,9 @@ exaroton_watch.json
 # Control plane: owner user ids + guild allowlists. Real IDs stay local; the
 # committed control.json.example documents the shape.
 control.json
+# Phase B client config: where the bot runs and which token file to carry.
+# The committed remote.json.example documents the shape.
+remote.json
 # Agent conversation history — private message content.
 agent_memory.json
 # Guest conversations and their daily counters. Other people's message content and

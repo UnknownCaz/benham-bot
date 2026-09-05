@@ -35,11 +35,16 @@ import sys
 import time
 
 from benham import paths
-from benham.core import caller, conversations, identity, outbox
+from benham.core import caller, outbox, remote
+
+# Phase B (INTENT decision 38): the stores live where the bot runs. These
+# proxies forward to it when config/remote.json names one, and are the local
+# modules otherwise - same calls, same words either way.
+conversations = remote.stores.conversations
 
 
 def _owner():
-    ids = sorted(identity.OWNER_IDS)
+    ids = sorted(remote.identity()["owner_ids"])
     if not ids:
         print("No owner is configured in control.json - there is nobody to ask.",
               file=sys.stderr)

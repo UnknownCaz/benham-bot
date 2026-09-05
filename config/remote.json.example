@@ -1,0 +1,9 @@
+{
+  "_comment": "Phase B (INTENT decision 38): when this tree is a CLIENT of a bot running on another machine, copy this to remote.json (gitignored) and every benham.py verb talks to that bot instead of this tree's state/. Absent = local, the pre-Phase-B shape.",
+  "url": "http://100.76.11.56:8903",
+  "_url": "The bot's API listener: BENHAM_API_BIND:BENHAM_API_PORT in its launchd plist. The tailnet interface address, never a public one.",
+  "token_file": "~/.config/benham-bot.token",
+  "_token_file": "A copy of the token the bot minted on first boot (same path on its host). Every request carries it as X-Benham-Token; a wrong one is 401.",
+  "host": "cazzy-mac",
+  "_host": "Only for the words: 'cannot reach the bot on cazzy-mac'."
+}

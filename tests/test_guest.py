@@ -45,6 +45,11 @@ from benham.core import identity
 from benham.core import policy
 from benham.core.policy import CallContext, Origin
 
+# Phase B (INTENT decision 39) deleted pc_task and spawn_in_room. The machine
+# wall and the taint wall stayed in code, so this file registers a TEST-ONLY
+# pc_task with the deleted lane's exact profile to keep proving them.
+_testconfig.walled_pc_task()
+
 TYLER = 273967061619965952
 DOOM = 777000777000777000
 STRANGER = 999000999000999000
@@ -478,7 +483,6 @@ section("The live path — driving the real bot.on_message")
 os.environ.setdefault("BOT_KEY", "test-token-not-used")
 from benham import bot  # noqa: E402
 
-from benham.core import codesession  # noqa: E402
 from benham.core import confirm  # noqa: E402
 
 
@@ -543,7 +547,7 @@ class _Pending:
 
 def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True):
     """Run one message through the real on_message, recording what it touched."""
-    touched = {"confirm_consume": 0, "codesession_answer": 0, "capabilities_run": 0,
+    touched = {"confirm_consume": 0, "capabilities_run": 0,
                "guest_respond": 0, "fired": 0, "guest_content": None}
 
     msg = _Msg(uid, content)
@@ -560,15 +564,13 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True
         channel.sent.append(text)
     bot.reply_in = _reply_in
 
-    # The three consent sinks, armed and watched. `parked` decides whether a
-    # destructive confirmation is ALSO waiting: armed by default, because the
-    # guest checks below exist to prove a guest's "yes" cannot fire one. The
-    # owner PC control case turns it off, since a bare yes with BOTH a PC
-    # request and a confirmation live is ambiguous by design (2026-08-26) and
-    # answers neither - leaving it armed would test a message nobody sends.
+    # The consent sinks, armed and watched. `parked` decides whether a
+    # destructive confirmation is waiting: armed by default, because the guest
+    # checks below exist to prove a guest's "yes" cannot fire one. (The third
+    # sink, the PC permission prompt, went with the lane in Phase B.)
     confirm.current = (lambda: _Pending()) if parked else (lambda: None)
-    confirm.read_reply = lambda t: (("yes", None) if t.strip().lower() == "yes"
-                                    else (None, None))
+    confirm.read_reply = lambda t, pending=None: (
+        ("yes", None) if t.strip().lower() == "yes" else (None, None))
     confirm.get = lambda tok: _Pending()
 
     def _consume(tok):
@@ -578,12 +580,6 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True
     async def _fire(target, channel):
         touched["fired"] += 1
     bot.fire_confirmed = _fire
-
-    codesession.pending_request = lambda: "req-1"
-
-    def _answer(rid, ok):
-        touched["codesession_answer"] += 1
-    codesession.answer = _answer
 
     async def _run(*a, **kw):
         touched["capabilities_run"] += 1
@@ -608,8 +604,6 @@ jsonio.write_json(guest.USAGE_FILE, {})
 t, sent = deliver(DOOM, "yes")
 check("a guest saying 'yes' does NOT fire a pending confirmation",
       t["confirm_consume"] + t["fired"], 0)
-check("a guest saying 'yes' does NOT answer a pending PC permission request",
-      t["codesession_answer"], 0)
 check("a guest never invokes a capability", t["capabilities_run"], 0)
 check("the guest was answered as conversation instead", t["guest_respond"], 1)
 
@@ -619,7 +613,7 @@ check("...it is treated as ordinary conversation", t["guest_respond"], 1)
 
 t, sent = deliver(STRANGER, "yes")
 check("a stranger fires nothing either",
-      t["confirm_consume"] + t["fired"] + t["codesession_answer"], 0)
+      t["confirm_consume"] + t["fired"], 0)
 check("a stranger is not given a guest reply", t["guest_respond"], 0)
 check("a stranger gets the ordinary refusal",
       any("only take direction" in (s or "") for s in sent), True)
@@ -634,19 +628,13 @@ check("with guest chat off, a listed guest gets the ordinary refusal",
 enable_guests()
 
 # The control. Without this, every assertion above would also pass if on_message
-# had simply stopped working.
-t, sent = deliver(TYLER, "yes", parked=False)
-check("CONTROL: the owner saying 'yes' DOES answer the PC request "
-      "(so the path above is genuinely live)",
-      t["codesession_answer"], 1)
-
-# ...and with a destructive confirmation ALSO parked, the same word answers
-# neither. Proven end to end in test_owner_gate; asserted here because this
-# harness is the one watching all three consent sinks at once, so it is where
-# "it quietly answered the OTHER one" would show up.
+# had simply stopped working. With read_reply stubbed to a plain "yes", the
+# owner's word reaches the confirmation block and FIRES the (stubbed) action -
+# the exact sink a guest's identical word was proven not to reach above.
 t, sent = deliver(TYLER, "yes", parked=True)
-check("both prompts live: a bare yes answers NEITHER",
-      (t["codesession_answer"], t["fired"], t["confirm_consume"]), (0, 0, 0))
+check("CONTROL: the owner's 'yes' DOES reach the confirmation block and fires it "
+      "(so the path above is genuinely live)",
+      (t["fired"], t["confirm_consume"], t["guest_respond"]), (1, 1, 0))
 
 
 # --------------------------------------------------------------------------
