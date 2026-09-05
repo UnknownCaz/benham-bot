@@ -283,13 +283,23 @@ def _sweep_uploads(folder):
 
 
 def start(bind, port, client, face, log, token_path=None, loop=None, host_name=None,
-          retries=12, retry_wait=5.0):
+          retries=12, retry_wait=5.0, extra_hosts=None):
     """Bind <bind>:<port> and serve from a daemon thread. Returns the server.
 
     Retries the bind: under launchd the Tailscale interface can come up after
     us, and an address that does not exist yet is EADDRNOTAVAIL, not a taken
     port. A taken port on the last try raises, loudly, before client.run() -
     health.py's doctrine.
+
+    MEASURED 2026-09-05 on cazzy-mac (Tailscale.app): a Python listener bound
+    to the Tailscale interface address accepts and then reads ENOTCONN on
+    every connection - stdlib http.server and a raw socket alike - so the
+    interface bind the brief asked for is not possible there. The shape that
+    keeps every property (tailnet-only, never 0.0.0.0, the same address:port
+    from the PC) is the console's own: bind LOOPBACK and expose it with
+    `tailscale serve --tcp 8903 tcp://127.0.0.1:8903`. The client still sends
+    Host: 100.76.11.56:8903, so that value must be on the allowlist -
+    `extra_hosts` (BENHAM_API_HOSTS in the plist, comma-separated) carries it.
     """
     token = load_token(token_path or os.environ.get("BENHAM_API_TOKEN_FILE") or None)
     last = None
@@ -311,8 +321,13 @@ def start(bind, port, client, face, log, token_path=None, loop=None, host_name=N
     bound = server.server_address[1]
     server.hosts = {f"{bind}:{bound}", bind, f"127.0.0.1:{bound}", "127.0.0.1",
                     f"localhost:{bound}", "localhost"}
+    for h in (extra_hosts or os.environ.get("BENHAM_API_HOSTS", "")).split(",") if isinstance(
+            extra_hosts or os.environ.get("BENHAM_API_HOSTS", ""), str) else (extra_hosts or []):
+        if h.strip():
+            server.hosts.add(h.strip().lower())
     rpc.set_runtime(client, face, host=host_name,
                     log_file=os.environ.get("BENHAM_LOG_FILE", "").strip() or None)
     threading.Thread(target=server.serve_forever, name="api-port", daemon=True).start()
-    log(f"API: {bind}:{server.server_address[1]} (token-gated, {len(rpc.TABLE)} store ops)")
+    log(f"API: {bind}:{server.server_address[1]} (token-gated, {len(rpc.TABLE)} store ops, "
+        f"hosts {sorted(server.hosts)})")
     return server
