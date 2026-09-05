@@ -120,3 +120,7 @@ state/guest_quiet.json
 # root). Real category/channel ids for a real guild, and nothing reads the file -
 # same class as the diag*.txt scratch output above.
 build_out.json
+
+# The pre-move snapshot marker Phase B writes beside a frozen state/ tree (2026-09-05).
+# Machine-specific by nature: it says THIS tree moved, so it is never committed.
+state/MOVED-*.md
