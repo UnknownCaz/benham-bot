@@ -29,7 +29,6 @@ import glob
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
@@ -71,24 +70,6 @@ def kv(body):
             except ValueError:
                 pass
     return out
-
-
-def process_stats():
-    """Ask PowerShell about the running bot. Returns a dict or None."""
-    ps = (
-        "$p = Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-        "Where-Object { $_.CommandLine -like '*bot.py*' } | Select-Object -First 1; "
-        "if ($p) { $q = Get-Process -Id $p.ProcessId; "
-        "[pscustomobject]@{pid=$p.ProcessId; mb=[math]::Round($q.WorkingSet64/1MB,1); "
-        "cpu=[math]::Round($q.CPU,1); threads=$q.Threads.Count; "
-        "start=$q.StartTime.ToString('o')} | ConvertTo-Json -Compress }"
-    )
-    try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=30)
-        return json.loads(r.stdout.strip()) if r.stdout.strip() else None
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
 
 
 def scan(paths, day=None):
@@ -183,27 +164,6 @@ def bar(label, value, total, width=28):
     return f"  {label:<16} {'#' * fill}{'.' * (width - fill)} {value}"
 
 
-def log_candidates():
-    """Every bot capture worth scanning, live ones and archived ones alike.
-
-    supervise.log is on the list because it is where the lines actually go now:
-    under the benham-bot logon task, the supervisor captures bot.py's stream, and
-    boot*.out stopped being written (the newest one here predates weeks of real
-    traffic). Before this line existed, the default pick was that stale boot file
-    and --today reported a running bot as all zeros.
-    """
-    cands = []
-    # A set: after the Stage 5 move LOG_DIR and LOGS_DIR are the same directory,
-    # and globbing it twice would double-count every capture.
-    for d in {_paths.LOG_DIR, LOGS_DIR}:
-        cands += glob.glob(os.path.join(d, "*.out"))
-        cands += glob.glob(os.path.join(d, "bot*.log"))
-    sup = os.path.join(_paths.LOG_DIR, "supervise.log")
-    if os.path.isfile(sup):
-        cands.append(sup)
-    return cands
-
-
 def main(argv):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -215,23 +175,23 @@ def main(argv):
     ap.add_argument("--today", action="store_true", help="only today's lines")
     args = ap.parse_args(argv)
 
-    if args.log:
-        paths = [args.log]
-    elif args.all:
-        paths = sorted(log_candidates())
-    else:
-        cands = sorted(log_candidates(), key=os.path.getmtime)
-        paths = [cands[-1]] if cands else []
-    if not paths:
+    # Phase B: the logs live where the bot runs, so the scan runs there
+    # (rpc.usage_report calls scan() above on ITS files) and only the numbers
+    # travel. Locally - no remote configured - the same function reads this
+    # tree. The UTC day filter lives with it: local date here once zeroed the
+    # report every evening, when the bot is busiest.
+    from benham.core import remote
+    rep = remote.stores.rpc.usage_report(log=args.log, all=args.all, today=args.today)
+    if not rep.get("sources"):
         print("No bot logs found.", file=sys.stderr)
         return 1
-
-    # UTC, because the log stamps are UTC ([2026-08-04 03:45:46Z]). Local date
-    # here meant every line written after 00:00 UTC - early evening in Tyler's
-    # timezone, exactly when the bot is busiest - failed the "today" filter and
-    # the report zeroed out while the bot was demonstrably chatting.
+    s = dict(rep["scan"])
+    for k in ("agent_models", "pc_tools", "actions", "actors", "denied", "pc_perm"):
+        s[k] = collections.Counter(s.get(k) or {})
+    s["denied_actions"] = collections.defaultdict(
+        collections.Counter, {k: collections.Counter(v) for k, v in (s.get("denied_actions") or {}).items()})
     day = time.strftime("%Y-%m-%d", time.gmtime()) if args.today else None
-    s = scan(paths, day)
+    paths = rep["sources"]
 
     print("=" * 60)
     print(" BENHAM RUNTIME USAGE")
@@ -240,7 +200,7 @@ def main(argv):
           + (f" (+{len(paths)-4} more)" if len(paths) > 4 else ""))
     print(f" scope : {day or 'all time in these files'}  ({s['lines']} lines)")
 
-    proc = process_stats()
+    proc = rep.get("process")
     print("\n-- process --")
     if proc:
         up = ""
@@ -274,15 +234,8 @@ def main(argv):
     print("\n-- Voice brain (billed: API credits) --")
     print(f"  calls {s['brain_calls']} | in {s['brain_in']:,} | out {s['brain_out']:,}")
 
-    print("\n-- PC sessions (billed: Max plan, NOT per-token) --")
-    print(f"  tasks {s['pc_tasks']} | reported ${s['pc_cost']:.4f} equivalent")
-    if s["pc_tools"]:
-        tot = sum(s["pc_tools"].values())
-        print(f"  {tot} tool rounds, ~${s['pc_cost']/tot:.3f} equivalent each"
-              if tot else "")
-        for t, n in s["pc_tools"].most_common(6):
-            print(bar(t, n, tot))
-
+    # The PC-sessions section is gone with the lane (Phase B, INTENT 39); the
+    # scan still counts the old log lines so an archived capture reads whole.
     print("\n-- capabilities used --")
     if s["actions"]:
         tot = sum(s["actions"].values())
@@ -298,8 +251,6 @@ def main(argv):
     for rule, c in s["denied"].most_common():
         which = ", ".join(f"{n} x{k}" for n, k in s["denied_actions"][rule].most_common())
         print(f"    {rule}: {c}  ({which})")
-    if s["pc_perm"]:
-        print(f"  PC approvals: {dict(s['pc_perm'])}")
     if s["secret_reads"]:
         print(f"  !! SECRET-READ events: {s['secret_reads']}")
 
@@ -308,7 +259,6 @@ def main(argv):
     print(f"  text agent ({model}): ${a:.4f}")
     print(f"  voice brain          : ${b:.4f}")
     print(f"  TOTAL billed to API  : ${a + b:.4f}")
-    print(f"  (PC's ${s['pc_cost']:.2f} is NOT included - that is plan usage, not a charge)")
     print()
     return 0
 

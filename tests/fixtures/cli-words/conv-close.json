@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "conv",
+    "close",
+    "c1",
+    "fixed in a1b2c3"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "c1 closed: fixed in a1b2c3\n(this records the decision - it does NOT tell them. Use --tell, or the loop is only shut from your side.)\n",
+  "stderr": ""
+}

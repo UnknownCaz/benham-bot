@@ -112,8 +112,12 @@ def main():
 
     # Tainted input must not be able to reach the PC. This is the one wall that
     # keeps a stranger's message out of a shell.
-    check("pc_task is blocked when tainted",
-          capabilities.REGISTRY["pc_task"].blocked_when_tainted, True)
+    # Phase B (INTENT 39) deleted the machine lane. Nothing LIVE may reach a
+    # machine now; a blocked_when_tainted capability reappearing here is a
+    # deliberate act that must be argued, not a flag that drifted.
+    check("NOTHING registered reaches the machine (blocked_when_tainted is empty)",
+          sorted(n for n, a in capabilities.REGISTRY.items() if a.blocked_when_tainted),
+          [])
 
     # Reading anything a human wrote has to mark the turn, or the wall above
     # has nothing to act on.

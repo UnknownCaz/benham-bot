@@ -55,7 +55,7 @@ import subprocess
 import sys
 
 from benham import bot
-from benham.core import capabilities, codesession, identity, issues
+from benham.core import capabilities, identity, issues
 
 _fails = []
 
@@ -100,34 +100,30 @@ check("no ActionError or summary string hardcodes the primary face's name",
       _offenders, [])
 
 
-# --- 2. the banner's PC line splits on the face -----------------------------
-# The module attributes are the seam codesession itself exposes; each test
-# file is its own process, so poking them leaks nowhere.
+# --- 2. the banner's PC line: one honest sentence, every face ---------------
+# Phase B (INTENT decision 39) deleted the lane outright. The line must not
+# claim a lane exists ANYWHERE - the old "OFF here (machine wall) - the
+# benham process runs it" would - and the pc.. DM reply is pinned here
+# because it is the sentence Tyler reads on his phone.
 
-codesession.ENABLED = True
-codesession.WORKDIR = r"C:\somewhere"
-codesession.PERMISSION_TIMEOUT = 120
-
-check("primary + enabled: byte-identical to the pre-faces line",
-      bot._pc_access_line(identity.PRIMARY_FACE),
-      "PC access: ON — workdir C:\\somewhere, writes/commands ask (timeout 120s)")
-
-# The live bug's exact shape: config says ON, the process is not the primary.
-check("non-primary + enabled: the wall is stated, config notwithstanding",
-      bot._pc_access_line("codex"),
-      "PC access: OFF here (machine wall) - the benham process runs it")
-
-codesession.ENABLED = False
-check("primary + disabled: byte-identical to the pre-faces line",
-      bot._pc_access_line(identity.PRIMARY_FACE), "PC access: OFF")
+check("primary: the removed line",
+      bot._pc_access_line(identity.PRIMARY_FACE), bot.PC_REMOVED_LINE)
+check("non-primary: the SAME line - no other process 'runs it' any more",
+      bot._pc_access_line("codex"), bot.PC_REMOVED_LINE)
+check("the line says removed, never OFF-here",
+      "removed" in bot.PC_REMOVED_LINE and "OFF" not in bot.PC_REMOVED_LINE, True)
+check("the pc.. reply names Phase B and the Mac",
+      "Phase B" in bot.PC_REMOVED_REPLY and "cazzy-mac" in bot.PC_REMOVED_REPLY, True)
+check("...with plain hyphens, never an em-dash (Tyler reads it)",
+      "\u2014" in bot.PC_REMOVED_REPLY, False)
 
 
 # --- 3. registry descriptions: the model is never told the wrong name -------
 # Live, not AST: REGISTRY is what agent.py actually compiles into tool
-# definitions, so scanning it catches any construction of the string. The one
-# exemption is the "Benhams-inbox" folder name in pc_task's summary - a real
-# directory on disk, the same path from every face, and pc_task is
-# machine-walled to the primary anyway.
+# definitions, so scanning it catches any construction of the string. The
+# "Benhams-inbox" exemption below is historical - it was pc_task's workdir
+# and pc_task is gone (Phase B) - and stays only so the scan's rule reads the
+# same; nothing in the registry carries the string any more.
 
 _desc_offenders = []
 for _name, _act in sorted(capabilities.REGISTRY.items()):

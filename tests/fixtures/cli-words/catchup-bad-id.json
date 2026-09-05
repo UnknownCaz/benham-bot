@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "catchup",
+    "x"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "channel_id must be an integer, got 'x'\n"
+}

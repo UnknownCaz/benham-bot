@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "initiate",
+    "close",
+    "t1",
+    "he answered"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "closed [t1] did the tv-cast fix hold\n  outcome: he answered\n",
+  "stderr": ""
+}

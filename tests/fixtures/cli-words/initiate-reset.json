@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "initiate",
+    "reset"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "lane reset at <TS> - the lapse count starts again from here.\n",
+  "stderr": ""
+}

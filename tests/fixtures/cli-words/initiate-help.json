@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "initiate"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "usage: benham.py initiate [-h]\n                          {status,threads,note,drop,close,ask,silent,sweep,reset,log}\n                          ...\n\nClaude reaching out to Tyler first. Silence is the default.\n\npositional arguments:\n  {status,threads,note,drop,close,ask,silent,sweep,reset,log}\n    status              may a question go out right now, and why not\n    threads             the open loops Claude is holding\n    note                hold a new open loop for a later run\n    drop                decide an open loop is not worth asking\n    close               an open loop resolved\n    ask                 send ONE question, if the gate allows it\n    silent              log a run that decided to say nothing\n    sweep               lapse expired questions, reconcile threads\n    reset               clear the dormant state (human only)\n    log                 the human-readable run log\n\noptions:\n  -h, --help            show this help message and exit\n",
+  "stderr": ""
+}

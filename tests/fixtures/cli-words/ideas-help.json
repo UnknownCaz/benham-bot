@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "ideas",
+    "--help"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "ideas.py CLI - read (and sweep) the guest ideas inbox.\n\n    python benham.py ideas            # ideas filed since the last sweep\n    python benham.py ideas --all      # the whole inbox\n    python benham.py ideas --sweep    # show the new ones AND mark them seen\n\nRead-only except for the sweep cursor; the inbox itself is only ever appended\nto by the bot. The sweep is for Claude sessions: show what's new, triage the\ngood ones onto project Corkboard boards as reported speech, mark them seen.\n",
+  "stderr": ""
+}

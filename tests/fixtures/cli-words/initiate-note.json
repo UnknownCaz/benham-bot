@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "initiate",
+    "note",
+    "the wallboard tile",
+    "--why",
+    "he asked twice",
+    "--source",
+    "board"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "holding [t2] the wallboard tile\n",
+  "stderr": ""
+}

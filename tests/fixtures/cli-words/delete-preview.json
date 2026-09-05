@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "delete",
+    "809357286036078612",
+    "100"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued delete_message -> <ROOT>/state/outbox/<REQ>.json\n  channel 809357286036078612, message 100\ndone: status=confirmation_required\n\ndelete_message: 1 message in #asd would go\nby doom, <DATE>\n\nNOTHING WAS DELETED. To confirm, re-run with the token:\n  python benham.py --face benham delete 809357286036078612 100 --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

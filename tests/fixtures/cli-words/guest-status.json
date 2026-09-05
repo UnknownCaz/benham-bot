@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "guest",
+    "status"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "=== guest chat ===\nenabled:   True (mode='chat')\nallowlist: [555000555000555000, 555000555000555001]\nmodel:     claude-sonnet-5  max_tokens=500\ncaps:      100/guest/day, 400/day global, 3.0s cooldown\ntoday (<DATE>): global 0/400\nconversations stored: 1\n",
+  "stderr": ""
+}

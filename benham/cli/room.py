@@ -20,8 +20,9 @@ audit moment. Nothing is woken by a post - v1 is pull-only (decision #27).
 import argparse
 
 from benham import paths
-from benham.core import outbox
-from benham.core import rooms as store
+from benham.core import outbox, remote
+
+store = remote.stores.rooms   # Phase B: the bot's rooms, wherever it runs
 
 
 def main(argv):

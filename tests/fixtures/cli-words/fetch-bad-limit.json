@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "fetch",
+    "809357286036078612",
+    "x"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "limit must be an integer, got 'x'\n"
+}

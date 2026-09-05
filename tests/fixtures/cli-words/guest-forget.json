@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "guest",
+    "forget",
+    "555000555000555000"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Forgot conversation for 555000555000555000\n",
+  "stderr": ""
+}

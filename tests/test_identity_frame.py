@@ -52,7 +52,6 @@ from benham.core import agent
 from benham.guest import guest
 
 os.environ.setdefault("BOT_KEY", "test-token-not-used")
-from benham.core import codesession  # noqa: E402
 
 _fails = []
 
@@ -145,11 +144,8 @@ def main():
     check("it still forbids pretending to be human",
           "pretend to be human" in low, True)
 
-    section("The PC surface")
-    # codesession appends persona.md under its own heading, so the identity
-    # sentence here is phrased "running as Benham" rather than "You are Benham".
-    frame("codesession._APPEND_PROMPT", codesession._APPEND_PROMPT.replace(
-        "You are running as Benham", "You are Benham"))
+    # "The PC surface" (codesession._APPEND_PROMPT) stood here; the lane was
+    # deleted in Phase B (INTENT 39).
 
     section("The fallbacks - the copy nobody re-reads")
     fallback_guest = guest_prompt(missing)

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "fetch",
+    "809357286036078612",
+    "5"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued history request -> <ROOT>/state/outbox/<REQ>.json\ndone: status=fetched, channel=#asd\n[<TS>] doom: hello there\n[<TS>] Benham#2721: sure\n",
+  "stderr": ""
+}

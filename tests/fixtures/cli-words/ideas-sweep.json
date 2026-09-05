@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "ideas",
+    "--sweep"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "[<TS>] doom (555000555000555000):\n    a dark mode for the wallboard\n\nswept - 1 idea(s) marked seen (1 total on file)\n",
+  "stderr": ""
+}

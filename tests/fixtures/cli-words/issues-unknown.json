@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "issues",
+    "bogus"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "unknown subcommand 'bogus' - try --help\n"
+}

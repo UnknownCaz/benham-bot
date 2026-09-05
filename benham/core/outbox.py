@@ -109,12 +109,38 @@ def enqueue(face=None, **fields):
             "acts on it, so a caller meaning one face can never silently reach "
             "another. Pass face=paths.DEFAULT_FACE to mean Benham."
         )
+    # Phase B (INTENT decision 38): when this tree is a CLIENT of a bot on
+    # another machine, the request travels over the wire and the bot's own
+    # enqueue writes the file - so the envelope below is stamped by the same
+    # code either way. `source` is stamped HERE, before the hop, because it
+    # names who asked and the answer lives in this process's argv.
+    from benham.core import remote
+    if remote.active():
+        req = dict(fields)
+        req.setdefault("source", " ".join(sys.argv[:2]).strip() or "unknown")
+        return remote.enqueue(face, req)
+    return enqueue_local(face, **fields)
+
+
+def enqueue_local(face, _source=None, **fields):
+    """The file write itself - what enqueue() does when this tree IS the bot's.
+
+    server.py calls this one directly: a request that arrived over the wire
+    must land in THIS process's outbox whatever config/remote.json says here,
+    or a bot whose tree carried a client config would forward its own
+    requests to itself forever. `_source` is the caller's own stamp (the PC
+    argv); it is applied LAST so the envelope's key order - fields, face,
+    queued_at, source - is the same whichever machine wrote the file. do.py
+    prints a failed request's envelope verbatim, so the order is words.
+    """
+    if not face:
+        raise ValueError("enqueue_local() requires face= (see enqueue)")
     box = outbox_dir(face)  # validates the name; a traversal is unrepresentable
     os.makedirs(box, exist_ok=True)
     req = dict(fields)
     req["face"] = face
     req.setdefault("queued_at", datetime.now(timezone.utc).isoformat())
-    req.setdefault("source", " ".join(sys.argv[:2]).strip() or "unknown")
+    req.setdefault("source", _source or " ".join(sys.argv[:2]).strip() or "unknown")
 
     name = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     tmp = os.path.join(box, name + ".json.tmp")
@@ -154,6 +180,9 @@ def wait_result(req_path, timeout=60):
     request that Discord refuses lands in outbox/failed with the error, and a
     caller that never looks there walks away believing it succeeded.
     """
+    from benham.core import remote
+    if remote.active():
+        return remote.wait_result(req_path, timeout=timeout)
     # The request's own directory says which face's outbox to watch - derived
     # from the path rather than from the module constant, so a result is found
     # beside its request whichever face carried it.

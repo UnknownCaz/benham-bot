@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "dm"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py dm <user_id|--tyler> \"message text\" [--untracked] [--no-wait]\n"
+}

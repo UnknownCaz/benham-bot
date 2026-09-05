@@ -11,7 +11,9 @@ good ones onto project Corkboard boards as reported speech, mark them seen.
 
 import sys
 
-from benham.core import ideas
+from benham.core import remote
+
+ideas = remote.stores.ideas   # Phase B: the bot's inbox, wherever it runs
 
 
 def _print(entries):
@@ -31,7 +33,7 @@ def _main(argv):
         return 0
     if flag == "--all":
         entries, total = ideas.new_since_sweep()
-        _print(ideas._entries())
+        _print(ideas.entries())
         print(f"\n{total} total, {len(entries)} unswept")
         return 0
     new, total = ideas.new_since_sweep()

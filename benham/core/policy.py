@@ -393,9 +393,12 @@ def rule_face_capability(action, ctx):
     Two checks, and the first is not config:
 
     * The machine wall. The capabilities marked blocked_when_tainted -
-      pc_task and spawn_in_room, the ones whose whole job is starting a
+      pc_task and spawn_in_room, the ones whose whole job was starting a
       session on Tyler's machine - are PRIMARY-FACE ONLY, whatever any config
-      says. Tyler's call (2026-08-22, confirming the plan's flagged
+      says. Phase B (INTENT decision 39) DELETED those capabilities; the wall
+      stays, deliberately, refusing a capability that no longer exists - so
+      re-adding one is still a deliberate act of deleting a rule and its test
+      (test_policy builds an unregistered walled action to keep it honest). Tyler's call (2026-08-22, confirming the plan's flagged
       assumption): a second identity may hold admin over a server, never a
       shell on his machine. Written as a DENY in code rather than an omission
       in a grant table, so granting it later is a deliberate act of deleting

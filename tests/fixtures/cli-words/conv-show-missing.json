@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "conv",
+    "show",
+    "c99"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "",
+  "stderr": "no conversation 'c99'\n"
+}

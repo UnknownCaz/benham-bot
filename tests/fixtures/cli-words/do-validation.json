@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "do",
+    "send_message",
+    "content=hi"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "send_message needs `channel_id`:\n"
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "initiate",
+    "threads",
+    "--all",
+    "--json"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "[\n  {\n    \"id\": \"t1\",\n    \"text\": \"did the tv-cast fix hold\",\n    \"why\": \"he mentioned it twice\",\n    \"source\": \"board\",\n    \"noted_at\": \"<TS>\",\n    \"not_before\": null,\n    \"state\": \"open\",\n    \"conv_id\": null,\n    \"asked_at\": null,\n    \"closed_at\": null,\n    \"outcome\": null\n  }\n]\n",
+  "stderr": ""
+}

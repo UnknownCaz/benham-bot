@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "send"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py send <channel_id> \"message text\" [--no-wait]\n"
+}

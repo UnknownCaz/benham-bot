@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "do",
+    "help",
+    "bogus"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "unknown action 'bogus' — try `python benham.py do list`\n"
+}

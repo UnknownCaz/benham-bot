@@ -133,46 +133,8 @@ def main():
         check("its filter param is not called 'action' (the outbox envelope owns that)",
               "action" not in (act.params or {}), True)
 
-        section("An approval prompt says WHY, not only WHAT")
-        # Tyler's requirement, 2026-08-16: "context must be included to clarify use
-        # case ... I prefer knowing exactly what I'm confirming before I confirm it."
-        from benham.core import codesession
-        codesession._task_ctx.update(
-            task="keep an eye out for a takeout email",
-            narration="Firefox was already running so the flag was ignored. Restarting it.",
-            asks=1)
-        why = codesession._why_block()
-        check("the session's own reasoning is quoted", "**Why:** Firefox was already" in why, True)
-        check("the originating task is quoted", "takeout email" in why, True)
-        check("a single ask is not labelled with a count", "Request" in why, False)
-
-        codesession._task_ctx["asks"] = 8
-        why = codesession._why_block()
-        check("the eighth ask says so - the runaway signal no single command carries",
-              "_Request 8 for this task._" in why, True)
-
-        # Repeated narration is marked, not reprinted. A session can fire several
-        # tool calls without narrating between them; the first version repeated the
-        # same 400 characters under four different commands, which reads as a claim
-        # that they share a reason. Found in the first real test, 2026-08-16.
-        codesession._task_ctx.update(
-            task="run the suite",
-            narration="Board read - suite was green as of the last refactor pass.",
-            asks=2, last_why=None)
-        first = codesession._why_block()
-        check("the first ask prints the reasoning",
-              "Board read" in first and "same reasoning" not in first, True)
-        codesession._task_ctx["asks"] = 3
-        second = codesession._why_block()
-        check("an unchanged reason is marked, not repeated verbatim",
-              "same reasoning as the last ask" in second and "Board read" not in second, True)
-        codesession._task_ctx.update(narration="Now running the loop.", asks=4)
-        third = codesession._why_block()
-        check("...and new reasoning prints again", "Now running the loop." in third, True)
-
-        codesession._task_ctx.update(task=None, narration=None, asks=0, last_why=None)
-        check("nothing to say means nothing added, not an empty heading",
-              codesession._why_block(), "")
+        # The "approval prompt says WHY" section stood here; codesession and
+        # its _why_block left with the PC lane in Phase B (INTENT 39).
 
         section("A capability may not shadow an outbox envelope key")
         try:

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "initiate",
+    "note",
+    "a bare thread"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "holding [t2] a bare thread\n",
+  "stderr": "  (no --why given - a later run has only these words to judge by, and will drop it if it cannot see why it matters)\n"
+}

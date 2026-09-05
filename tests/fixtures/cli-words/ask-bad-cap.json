@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "ask",
+    "q?",
+    "--nudge-cap",
+    "9"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "usage: benham.py ask [-h] [--purpose PURPOSE] [--project PROJECT]\n                     [--timeout TIMEOUT] [--no-wait]\n                     [--priority {blocking,normal,whenever}] [--why WHY]\n                     [--nudge-cap N] [--queue]\n                     [question]\nbenham.py ask: error: --nudge-cap must be 0..2 - it can only lower the pressure on a person, never raise it\n"
+}

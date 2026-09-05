@@ -18,7 +18,8 @@
     <table>
       <tr><th>you want</th><th>do</th></tr>
       <tr><td>Discord stuff — read, send, manage, anything</td><td>DM it in plain language. "what's going on in #general" reads it; "post X in #general" posts it.</td></tr>
-      <tr><td>something on the PC</td><td>DM starting with <code>pc..</code> (straight to a Claude Code session, no agent round-trip) — or just ask normally and the agent delegates via <code>pc_task</code></td></tr>
+      <tr><td>something on the PC</td><td><strong>not any more</strong> (Phase B, 2026-09-05): PC access was removed; a <code>pc..</code> DM says so in one line. Start a session at the keyboard.</td></tr>
+      <tr><td>bounce the bot / lock guests out from your phone</td><td>"restart" / "guest off" in a DM - owner-only; guest off previews and asks first</td></tr>
       <tr><td>drive it from a guild channel</td><td>@mention it — only works in guilds on <code>agent_guilds</code> (currently Testing only)</td></tr>
       <tr><td>talk without it acting</td><td>just talk; it won't act unless asked</td></tr>
       <tr><td>current info from the web</td><td>just ask — it searches when actually needed. The trade: <strong>a turn that searched is tainted</strong> (a web page is text a stranger wrote), so "search then post it" will ask you to confirm the post, and <code>pc_task</code> is blocked until a fresh message.</td></tr>
@@ -55,7 +56,7 @@
       <tr><td><code>destructive_guilds</code></td><td>that guild isn't on the tier-3 allowlist in <code>control.json</code> — edit by hand + restart; no confirmation can unlock it</td></tr>
       <tr><td>posting allowlist / <code>post_guilds</code></td><td>hard scope cap on where Benham may put content; edit <code>control.json</code> + restart</td></tr>
       <tr><td><code>agent_guilds</code></td><td>you mentioned it in a guild not on the agent list — DM instead</td></tr>
-      <tr><td>"already read content other people wrote"</td><td>tainted turn; <code>pc_task</code> is flat-blocked then — send a fresh message</td></tr>
+      <tr><td>"already read content other people wrote"</td><td>tainted turn; outward actions ask first — send a fresh message</td></tr>
       <tr><td>unknown origin / no call context</td><td>a code-path bug — that's a "bug Claude about it" one</td></tr>
     </table>
 

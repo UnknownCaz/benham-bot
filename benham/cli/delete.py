@@ -39,12 +39,14 @@ ACTION = "delete_message"
 
 
 def run_two_step(action, describe, rerun, token=None, no_wait=False,
-                 timeout=60, **params):
-    """Enqueue a tier-3 registry action, printing the preview or firing it.
+                 timeout=60, nothing="NOTHING WAS DELETED.", **params):
+    """Enqueue a confirm-gated registry action, printing the preview or firing it.
 
     Shared by delete.py and purge.py because the dance is identical and the one
     thing neither may do is fire without a token - keeping it in one place means
-    a future third caller cannot quietly get that wrong.
+    a future third caller cannot quietly get that wrong. `guest off` (Phase B)
+    is that third caller: tier 2 always_confirm, the same dance, its own
+    `nothing` line because nothing there is a deletion.
     """
     extra = {"confirm_token": token} if token else {}
     final = enqueue(face=paths.PROCESS_FACE, action=action, **params, **extra)
@@ -62,7 +64,7 @@ def run_two_step(action, describe, rerun, token=None, no_wait=False,
         if preview.get("detail"):
             print(preview["detail"])
         print()
-        print("NOTHING WAS DELETED. To confirm, re-run with the token:")
+        print(f"{nothing} To confirm, re-run with the token:")
         print(f"  {rerun(result['confirm_token'])}")
         print(f"  (expires in {result.get('expires_in_seconds', '?')}s; "
               f"expired means cancelled, never assumed yes)")

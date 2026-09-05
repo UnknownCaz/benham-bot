@@ -31,7 +31,11 @@ import argparse
 import sys
 
 from benham import paths
-from benham.core import conversations as C
+from benham.core import remote
+
+# Phase B: reads and writes go to the bot's store wherever it runs; the
+# constants and face_of are the local module's own (pure), via the proxy.
+C = remote.stores.conversations
 
 _STATE_MARK = {
     C.OPEN: "?", C.NUDGED: "??", C.ANSWERED: "!",

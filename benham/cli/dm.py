@@ -35,7 +35,7 @@ get past is a guard people route around in worse ways.
 import sys
 
 from benham import paths
-from benham.core import identity
+from benham.core import remote
 from benham.core.outbox import (EXIT_OK, console_utf8, enqueue, parse_ids,
                                 report_outcome, usage)
 
@@ -59,7 +59,7 @@ def _refuse_untracked_question(user_id, content):
     """The refusal text, or None if this send is fine as a raw dm."""
     if not asks_something(content):
         return None
-    if not identity.is_guest(user_id):
+    if int(user_id) not in set(remote.identity()["guest_ids"]):
         return None          # Tyler has the ask queue; strangers are not asked things
     return (
         f"refusing: this DM asks {user_id} a question, and a raw dm opens no\n"

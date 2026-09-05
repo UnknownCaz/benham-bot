@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "ask",
+    "which db?",
+    "--timeout",
+    "1",
+    "--purpose",
+    "db choice"
+  ],
+  "face": true,
+  "exit": 6,
+  "stdout": "asked 273967061619965952 (c5, normal - slot 2 of 2): which db?\n",
+  "stderr": "1 answer(s) came back that nobody has collected:\n  c2: sqlite or json?\n     -> sqlite\n  (act on it, then: python benham.py conv close <id> \"what happened\" --face benham)\n\nAlready waiting on him (1) - place yourself accordingly:\n    1. [normal  ] ready to deploy?\n        why: gates the merge\n        c1, asked <HH:MM>Z, 0 nudge(s)\n\n\nNo answer within 1s. c5 is still open - the bot keeps nudging, and the answer will be waiting in the store.\n"
+}

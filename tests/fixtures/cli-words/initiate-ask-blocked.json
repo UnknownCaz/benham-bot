@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "initiate",
+    "ask",
+    "You MUST answer this now!!!",
+    "--why",
+    "test"
+  ],
+  "face": true,
+  "exit": 3,
+  "stdout": "",
+  "stderr": "REFUSED [unprompted_is_a_question]\n  there is no question mark in it. This lane sends one genuine question - if the thing worth saying is not a question, the right output is silence.\n"
+}

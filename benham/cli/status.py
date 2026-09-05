@@ -1,10 +1,17 @@
-"""status.py — quick, READ-ONLY health check for benham-bot.
+"""status.py - quick, READ-ONLY health check for benham-bot.
 
 Answers "is Benham up and what is it doing" without touching Discord:
-  - is a benham.bot process running (pid)?
+  - is the bot process up, and is its gateway connected?
   - which guilds/channels does it see (from channels.json, written each boot)?
   - recent refusals from outbox/failed (last 24h)
   - last login / command-sync lines from the newest log file
+
+Phase B (INTENT decision 38): the bot runs on cazzy-mac, so every one of those
+facts is read from the bot's own host - GET /health for the process and the
+gateway, a status snapshot for the rest - instead of from this machine's
+process table and this tree's files. Exit 0 means the bot is up AND its
+gateway is connected (RAVEN.md's "exit 0 = running"); anything less is 1.
+Unreachable prints one line naming the host, never a traceback.
 
 The refusals section is the net under every fire-and-forget enqueue: a caller
 that passed --no-wait, or an enqueue made from inside the bot itself (loopclose
@@ -14,135 +21,43 @@ place all of those surface without reading the bot log.
 Prints a short report and exits. Never prints tokens. Run:  python benham.py status
 """
 
-import os
-import re
-import sys
-import json
-import glob
-import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 
-from benham import paths
+from benham.core import remote
 
 
-def bot_pid(face=None):
-    """Best-effort: pid of THIS face's `python -m benham.bot`, or None.
-
-    Narrowed per face by the launch marker, exactly as supervise_bot.ps1's
-    Get-BotPid does it: the primary face is a benham.bot process carrying NO
-    --face marker (every legacy launch), a named face is one carrying its own.
-
-    FIXED 2026-08-26. The match was a bare '-m benham\\.bot' plus
-    Select-Object -First 1, which also matches '--face codex' - so with two
-    faces up this returned whichever the process snapshot happened to list
-    first, and `--face benham status` was observed reporting the CODEX pid.
-    It failed in the reassuring direction: a DEAD benham read RUNNING for as
-    long as any other face was alive, which is the one direction a health
-    check must never lie in. The supervisor's own comment already described
-    this as the 'same base query' status.py uses - it had been narrowed and
-    status.py never was. Same class as services.json's process_match, found
-    the same night from the other end.
-    """
-    face = face or paths.PROCESS_FACE
-    if face == paths.DEFAULT_FACE:
-        narrow = "$_.CommandLine -notmatch '--face\\s'"
-    else:
-        narrow = ("$_.CommandLine -match '--face\\s+" + re.escape(face) + "(\\s|$)'")
-    ps = (
-        "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | "
-        "Where-Object { $_.CommandLine -match '-m benham\\.bot' } | "
-        f"Where-Object {{ {narrow} }} | "
-        "Select-Object -First 1 -ExpandProperty ProcessId"
-    )
+def _iso(s):
     try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
-            capture_output=True, text=True, timeout=25,
-        )
-        s = out.stdout.strip()
-        return int(s) if s.isdigit() else None
-    except Exception:  # noqa: BLE001
+        return datetime.fromisoformat(s)
+    except (TypeError, ValueError):
         return None
-
-
-def load_json(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def mtime(path):
-    try:
-        return datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def recent_failures(within_hours=24, limit=10):
-    """Newest outbox/failed results inside the window: [(when_utc, action, error)].
-
-    Reads the *_result.json files bot.py writes when it refuses a request, newest
-    first. `action` falls back to "send" because a bare send request carries no
-    action key (bot.py defaults it), and errors are truncated to keep the report
-    one line per failure - the full text is in the file the line names implicitly.
-    """
-    folder = os.path.join(paths.STATE_DIR, "outbox", "failed")
-    if not os.path.isdir(folder):
-        return []
-    cutoff = datetime.now(timezone.utc).timestamp() - within_hours * 3600
-    results = [os.path.join(folder, fn) for fn in os.listdir(folder)
-               if fn.endswith("_result.json")]
-    results.sort(key=os.path.getmtime, reverse=True)
-    out = []
-    for path in results:
-        if os.path.getmtime(path) < cutoff:
-            break  # sorted newest-first, so everything after this is older
-        res = load_json(path) or {}
-        req = res.get("request") or {}
-        action = res.get("action") or req.get("action") or "send"
-        error = str(res.get("error") or "(no error recorded)")
-        if len(error) > 120:
-            error = error[:117] + "..."
-        when = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
-        out.append((when, action, error))
-        if len(out) >= limit:
-            break
-    return out
-
-
-def newest_log_tail(patterns=("restart_run.log", "bot.log", "supervise.log"), keep=("Logged in as", "Synced")):
-    logs = [os.path.join(paths.LOG_DIR, p) for p in patterns if os.path.exists(os.path.join(paths.LOG_DIR, p))]
-    # Rotated-out captures live in ROOT/logs; live ones in LOG_DIR. A set, because
-    # after the Stage 5 move those are the same directory.
-    for d in {paths.LOG_DIR, os.path.join(paths.ROOT, "logs")}:
-        logs += [p for p in glob.glob(os.path.join(d, "*.log")) if p not in logs]
-    logs += [p for p in glob.glob(os.path.join(paths.LOG_DIR, "boot*.out")) if p not in logs]
-    if not logs:
-        return None, []
-    newest = max(logs, key=lambda p: os.path.getmtime(p))
-    lines = []
-    try:
-        with open(newest, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if any(k in line for k in keep):
-                    lines.append(line.rstrip())
-    except Exception:  # noqa: BLE001
-        pass
-    return os.path.basename(newest), lines[-6:]
 
 
 def main():
     print("=== benham-bot status ===")
 
-    pid = bot_pid()
-    print(f"process:      {'RUNNING (pid ' + str(pid) + ')' if pid else 'NOT running'}")
+    try:
+        snap = remote.stores.rpc.status_snapshot()
+    except remote.RemoteError as e:
+        # The words a caller reads unattended: the same NOT running line the
+        # process-table check used to print, with the reason after it.
+        print(f"process:      NOT running ({e})")
+        return 1
 
-    ch = load_json(os.path.join(paths.STATE_DIR, "channels.json"))
-    ch_mt = mtime(os.path.join(paths.STATE_DIR, "channels.json"))
+    up = bool(snap.get("pid")) and snap.get("gateway_connected") is True
+    host = snap.get("host") or remote.host() if remote.active() else "this machine"
+    if snap.get("pid") and up:
+        print(f"process:      RUNNING (pid {snap['pid']} on {host}, gateway connected)")
+    elif snap.get("pid"):
+        print(f"process:      RUNNING (pid {snap['pid']} on {host}) but gateway NOT connected")
+    else:
+        print("process:      NOT running")
+
+    ch = snap.get("channels")
+    ch_mt = _iso(snap.get("channels_written"))
     if ch:
-        print(f"guilds:       {len(ch)} (channels.json written {ch_mt:%Y-%m-%d %H:%M}Z)")
+        when = f"{ch_mt:%Y-%m-%d %H:%M}Z" if ch_mt else "?"
+        print(f"guilds:       {len(ch)} (channels.json written {when})")
         for g in ch:
             tc = len(g.get("text_channels", []))
             vc = len(g.get("voice_channels", []))
@@ -150,15 +65,17 @@ def main():
     else:
         print("guilds:       channels.json not found (bot hasn't booted here yet)")
 
-    failures = recent_failures()
+    failures = snap.get("failures") or []
     if failures:
         print(f"refused (outbox/failed, last 24h): {len(failures)}")
-        for when, action, error in failures:
-            print(f"  {when:%Y-%m-%d %H:%M}Z  {action:<16} {error}")
+        for f in failures:
+            when = _iso(f.get("when"))
+            stamp = f"{when:%Y-%m-%d %H:%M}Z" if when else "?"
+            print(f"  {stamp}  {f.get('action', 'send'):<16} {f.get('error', '')}")
     else:
         print("refused:      none in the last 24h (outbox/failed)")
 
-    logname, tail = newest_log_tail()
+    logname, tail = snap.get("log_name"), snap.get("log_tail") or []
     if logname:
         print(f"last log ({logname}):")
         for line in tail:
@@ -166,7 +83,7 @@ def main():
     else:
         print("last log:     none found")
 
-    return 0 if pid else 1
+    return 0 if up else 1
 
 
 if __name__ == "__main__":

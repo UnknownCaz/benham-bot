@@ -310,6 +310,22 @@
     "taints": true,
     "tier": 0
   },
+  "guest_off": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [
+      "local_cli",
+      "owner_dm"
+    ],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "guest_quiet": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -498,22 +514,6 @@
     "taints": false,
     "tier": 1
   },
-  "pc_task": {
-    "always_confirm": false,
-    "blocked_when_tainted": true,
-    "destructive": false,
-    "guest": false,
-    "needs_confirm": false,
-    "needs_guild": false,
-    "origins": [
-      "local_cli",
-      "owner_dm"
-    ],
-    "outward": false,
-    "posts": false,
-    "taints": true,
-    "tier": 2
-  },
   "pin_message": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -631,6 +631,22 @@
     "taints": true,
     "tier": 2
   },
+  "restart": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [
+      "local_cli",
+      "owner_dm"
+    ],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "search_messages": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -741,22 +757,6 @@
     "taints": false,
     "tier": 2
   },
-  "spawn_in_room": {
-    "always_confirm": false,
-    "blocked_when_tainted": true,
-    "destructive": false,
-    "guest": false,
-    "needs_confirm": false,
-    "needs_guild": false,
-    "origins": [
-      "local_cli",
-      "owner_dm"
-    ],
-    "outward": false,
-    "posts": false,
-    "taints": true,
-    "tier": 2
-  },
   "tell_conversation": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -785,25 +785,6 @@
     "needs_guild": true,
     "origins": [],
     "outward": true,
-    "posts": false,
-    "taints": true,
-    "tier": 2
-  },
-  "triage_conversation": {
-    "always_confirm": false,
-    "blocked_when_tainted": false,
-    "destructive": false,
-    "guest": false,
-    "needs_confirm": false,
-    "needs_guild": false,
-    "origins": [
-      "local_cli",
-      "owner_dm",
-      "owner_guild",
-      "owner_voice",
-      "system"
-    ],
-    "outward": false,
     "posts": false,
     "taints": true,
     "tier": 2

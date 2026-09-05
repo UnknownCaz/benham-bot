@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "outreach",
+    "doom",
+    "--list"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "",
+  "stderr": "Already waiting on 555000555000555000 (1):\n  1. does the image thing work now?  (c3, 0 nudge(s))\n\n"
+}

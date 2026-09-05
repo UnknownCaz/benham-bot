@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "do",
+    "send_message",
+    "channel_id"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "expected key=value, got 'channel_id'\n"
+}

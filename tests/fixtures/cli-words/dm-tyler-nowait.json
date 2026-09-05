@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "dm",
+    "--tyler",
+    "phase b test",
+    "--no-wait"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued DM -> <ROOT>/state/outbox/<REQ>.json\n",
+  "stderr": ""
+}

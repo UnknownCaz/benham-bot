@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "initiate",
+    "sweep"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "nothing to sweep\n",
+  "stderr": ""
+}

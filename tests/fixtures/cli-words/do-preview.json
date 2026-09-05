@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "do",
+    "delete_message",
+    "channel_id=809357286036078612",
+    "message_id=100"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued delete_message -> <REQ>.json\n\n--- DRY RUN, nothing has happened ---\ndelete_message: 1 message in #asd would go\n\nby doom, <DATE>\n\nTo run it for real, repeat the command with:\n  confirm_token=abc123\n(expires in <N>s)\n\n",
+  "stderr": ""
+}

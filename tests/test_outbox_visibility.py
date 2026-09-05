@@ -39,7 +39,7 @@ from benham import paths
 from benham.core import outbox     # noqa: E402
 from benham.cli import send        # noqa: E402
 from benham.cli import dm          # noqa: E402
-from benham.cli import status      # noqa: E402
+from benham.core import rpc        # noqa: E402
 
 _fails = []
 
@@ -169,10 +169,14 @@ section("no enqueuing CLI is blind unless deliberately exempt")
 # The exempt files enqueue signals whose outcome is tracked elsewhere by design:
 # ask/outreach/initiate advance a conversation the 60s tick re-delivers if lost,
 # and conv --tell documents queued-not-sent with `conv show` as its verification.
-# do.py waits through wait_result directly (it prints the full result itself).
+# do.py waits through wait_result directly (it prints the full result itself),
+# and so does read_history.py since Phase B - one history read per channel,
+# each reported in place (SKIPPED on a refusal), which report_outcome's
+# one-line verdict cannot express.
 _CLI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "benham", "cli")
-_EXEMPT = {"ask.py", "conv.py", "initiate.py", "outreach.py", "do.py"}
+_EXEMPT = {"ask.py", "conv.py", "initiate.py", "outreach.py", "do.py",
+           "read_history.py"}
 for _path in sorted(glob.glob(os.path.join(_CLI_DIR, "*.py"))):
     _name = os.path.basename(_path)
     with open(_path, encoding="utf-8") as _f:
@@ -181,11 +185,14 @@ for _path in sorted(glob.glob(os.path.join(_CLI_DIR, "*.py"))):
         continue
     check(f"{_name} waits and reports by default",
           "report_outcome" in _src, True)
-with open(os.path.join(_CLI_DIR, "do.py"), encoding="utf-8") as _f:
-    check("do.py still waits (through the shared helper)",
-          "wait_result" in _f.read(), True)
+for _exempt in ("do.py", "read_history.py"):
+    with open(os.path.join(_CLI_DIR, _exempt), encoding="utf-8") as _f:
+        check(f"{_exempt} still waits (through the shared helper)",
+              "wait_result" in _f.read(), True)
 
-section("status.recent_failures - the net under --no-wait and bot-internal enqueues")
+section("rpc._recent_failures - the net under --no-wait and bot-internal enqueues")
+# Moved from status.py to rpc.py in Phase B: it reads the outbox, and the
+# outbox is on the bot's host now, so `benham.py status` asks the bot.
 _failed_dir = os.path.join(outbox.OUTBOX, "failed")
 os.makedirs(_failed_dir, exist_ok=True)
 # Age out everything the earlier checks filed, so this section owns its fixture.
@@ -198,11 +205,11 @@ with open(_fresh, "w", encoding="utf-8") as _f:
     json.dump({"status": "failed", "error": "x" * 200,
                "request": {"action": "set_channel_permissions"}}, _f)
 
-_rows = status.recent_failures(within_hours=24)
+_rows = rpc._recent_failures(within_hours=24)
 check("one fresh failure is listed", len(_rows), 1)
 check("...the 48h-old ones aged out",
       all("aaaaaaaa" in os.path.basename(_fresh) for _ in _rows), True)
-_when, _action, _error = _rows[0]
+_when, _action, _error = _rows[0]["when"], _rows[0]["action"], _rows[0]["error"]
 check("the action is read from the archived request", _action,
       "set_channel_permissions")
 check("a 200-char error is truncated to one report line", len(_error) <= 120, True)
@@ -210,9 +217,9 @@ check("a 200-char error is truncated to one report line", len(_error) <= 120, Tr
 _bare = os.path.join(_failed_dir, "20260821_130000_bbbbbbbb_20260821_130001_result.json")
 with open(_bare, "w", encoding="utf-8") as _f:
     json.dump({"status": "failed", "error": "boom", "request": {"channel_id": 1}}, _f)
-_rows = status.recent_failures(within_hours=24)
+_rows = rpc._recent_failures(within_hours=24)
 check("a bare send request (no action key) reports as 'send'",
-      _rows[0][1] if _rows else None, "send")
+      _rows[0]["action"] if _rows else None, "send")
 check("newest first", len(_rows), 2)
 
 print()

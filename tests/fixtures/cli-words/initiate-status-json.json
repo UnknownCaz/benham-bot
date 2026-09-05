@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "initiate",
+    "status",
+    "--json"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "{\n  \"outstanding\": [],\n  \"last_delivered_at\": null,\n  \"hours_since_last\": null,\n  \"min_gap_hours\": 48,\n  \"consecutive_lapses\": 0,\n  \"dormant\": false,\n  \"open_threads\": 1,\n  \"runs_logged\": 1,\n  \"may_ask\": true,\n  \"why_not\": null\n}\n",
+  "stderr": ""
+}

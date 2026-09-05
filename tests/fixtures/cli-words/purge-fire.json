@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "purge",
+    "809357286036078612",
+    "--days",
+    "3",
+    "--confirm-token",
+    "abc123"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Purging up to 100 message(s) older than 3 day(s) from channel 809357286036078612.\n  This is PERMANENT.\nQueued purge_messages -> <ROOT>/state/outbox/<REQ>.json\n  channel 809357286036078612, older than 3d, limit 100\ndone: status=ok\n  {'deleted': 1}\n",
+  "stderr": ""
+}

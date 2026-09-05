@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "usage",
+    "--today"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "============================================================\n BENHAM RUNTIME USAGE\n============================================================\n source: bot.log\n scope : <DATE>  (<N> lines)\n\n-- process --\n  bot is not running\n\n-- Discord text agent (billed: API credits) --\n  no calls recorded (usage logging was added <DATE>; earlier runs have none)\n\n-- Voice brain (billed: API credits) --\n  calls 0 | in 0 | out 0\n\n-- capabilities used --\n  none\n\n-- policy --\n  proposed 0 | confirmed 0 | denied 0\n\n-- estimated API spend (list price, direct-API paths only) --\n  text agent (claude-sonnet-5): $0.0000\n  voice brain          : $0.0000\n  TOTAL billed to API  : $0.0000\n\n",
+  "stderr": ""
+}

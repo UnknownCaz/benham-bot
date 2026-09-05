@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "ideas"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "[<TS>] doom (555000555000555000):\n    a dark mode for the wallboard\n\n1 new since last sweep (1 total) - --sweep to mark seen once triaged\n",
+  "stderr": ""
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "room",
+    "create",
+    "storyizier",
+    "Doom's story bot work"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued -> <ROOT>/state/outbox/<REQ>.json\ndone: status=ok\n",
+  "stderr": ""
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "dm",
+    "404",
+    "hello"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued DM -> <ROOT>/state/outbox/<REQ>.json\n",
+  "stderr": "REFUSED: Forbidden: 403 Forbidden (error code: 50007): Cannot send messages to this user\n"
+}

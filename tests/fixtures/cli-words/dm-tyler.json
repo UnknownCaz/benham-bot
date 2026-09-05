@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "dm",
+    "--tyler",
+    "phase b test"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued DM -> <ROOT>/state/outbox/<REQ>.json\ndone: status=sent, message_id=123456789, channel=#asd\n",
+  "stderr": ""
+}

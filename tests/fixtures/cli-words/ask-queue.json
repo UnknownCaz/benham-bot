@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "ask",
+    "--queue"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "    1. [normal  ] ready to deploy?\n        why: gates the merge\n        c1, asked <HH:MM>Z, 0 nudge(s)\n",
+  "stderr": "1 answer(s) came back that nobody has collected:\n  c2: sqlite or json?\n     -> sqlite\n  (act on it, then: python benham.py conv close <id> \"what happened\" --face benham)\n\n"
+}

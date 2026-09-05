@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "status"
+  ],
+  "face": false,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "every benham.py command names which face it acts as: add `--face benham` for the usual bot (or set BENHAM_FACE). With two faces, which identity speaks is said, never guessed.\n"
+}

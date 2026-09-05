@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "initiate",
+    "status"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "lane: CLEAR - a question may go out now.\n  last question: never\n  open threads: 1   runs logged: 1\n",
+  "stderr": ""
+}

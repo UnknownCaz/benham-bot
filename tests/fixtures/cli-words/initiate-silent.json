@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "initiate",
+    "silent",
+    "boards quiet",
+    "--read",
+    "Benham board"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "logged a silent run at <TS>\n",
+  "stderr": ""
+}

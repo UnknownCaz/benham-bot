@@ -17,13 +17,15 @@ GitHub was unreachable. Nothing is lost while it waits; this just delivers it.
 
 import sys
 
-from benham.core import issues
-from benham.core import loopclose
-from benham.core import outbox
+from benham.core import outbox, remote
+
+# Phase B: the tracker and the loop-close lane run where the bot runs.
+issues = remote.stores.issues
+loopclose = remote.stores.loopclose
 
 
 def _list():
-    entries = issues._entries()
+    entries = issues.entries()
     if not entries:
         print("(no filings yet)")
         return 0

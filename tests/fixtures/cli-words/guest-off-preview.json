@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "guest",
+    "off"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued guest_off -> <ROOT>/state/outbox/<REQ>.json\n  set guest.enabled=false in control.json and restart the bot\ndone: status=confirmation_required\n\nguest_off: 1 message in #asd would go\nby doom, <DATE>\n\nNOTHING CHANGED YET - guest chat is still on. To confirm, re-run with the token:\n  python benham.py --face benham guest off --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

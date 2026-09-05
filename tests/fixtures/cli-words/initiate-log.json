@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "initiate",
+    "log"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "# Claude's initiative log\n\nEvery time the daily job woke up, what it decided, and why. **Silence is the\ndesigned output** - a long run of `silent` entries is this working, not this\nbroken. What tells the two apart is the `read:` line: a silent entry that names\nwhat it looked at was a run that happened and chose not to speak.\n\n`blocked` means the job wanted to ask and policy.authorize_unprompted refused.\nThat is not a bug either, but several in a row means the job's taste has drifted\nand the prompt is worth re-reading.\n\nNewest entries are at the bottom. Nothing here is ever rewritten.\n\n\n## <TS> - silent\nread: Benham board\n\nboards quiet, nothing worth asking\n\n",
+  "stderr": ""
+}

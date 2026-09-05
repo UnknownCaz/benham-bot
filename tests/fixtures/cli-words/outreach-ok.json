@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "outreach",
+    "draco",
+    "does the image thing work now?",
+    "--project",
+    "storyizier"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "asked 555000555000555001 (c5): does the image thing work now?\nthe bot delivers and nudges it on its own; read it later with: python benham.py conv show c5\n",
+  "stderr": ""
+}

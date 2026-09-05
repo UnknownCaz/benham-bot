@@ -106,6 +106,7 @@ from benham.core import identity, policy, capabilities
 # The mint shapes below are EXACTLY bot.py's live ones: no face= anywhere.
 loc = policy.CallContext.local(TYLER)
 dm = policy.CallContext.owner_dm(TYLER, 42)
+_testconfig.walled_pc_task()   # the lane is gone (Phase B); the wall is not
 wall = policy.authorize(capabilities.REGISTRY["pc_task"], loc)
 granted = policy.authorize(capabilities.REGISTRY["send_message"], dm)
 ungranted = policy.authorize(capabilities.REGISTRY["create_channel"], dm)

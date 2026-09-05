@@ -118,34 +118,8 @@ def main():
     check("SYSTEM can notify", policy.Origin.SYSTEM in act.origins, True)
     check("...but a guest cannot", policy.Origin.GUEST_DM in act.origins, False)
 
-    section("Item 13: triage is read-only, and that is its whole safety story")
-    from benham.core import codesession
-    tri = capabilities.REGISTRY["triage_conversation"]
-    # pc_task sits behind blocked_when_tainted because it can WRITE. Triage cannot,
-    # so the wall is not crossed - it is unnecessary. That distinction is the design.
-    check("triage is NOT blocked when tainted", tri.blocked_when_tainted, False)
-    check("...but it DOES taint, since it reads what the report points at",
-          tri.taints, True)
-    check("pc_task's wall is untouched",
-          capabilities.REGISTRY["pc_task"].blocked_when_tainted, True)
-
-    # The zero-approval guarantee: in read-only mode a non-read tool is refused
-    # outright, never asked about. Otherwise a stranger's bug report could make
-    # Tyler's phone buzz, which turns triage into a way to pester him.
-    async def probe(tool):
-        codesession._read_only[0] = True
-        try:
-            return await codesession._can_use_tool(tool, {"command": "ls"}, None)
-        finally:
-            codesession._read_only[0] = False
-
-    allowed = asyncio.run(probe("Read"))
-    refused = asyncio.run(probe("Bash"))
-    check("reads run free", type(allowed).__name__, "PermissionResultAllow")
-    check("a write/run is DENIED, not asked", type(refused).__name__,
-          "PermissionResultDeny")
-    check("...and the denial tells it not to find another route",
-          "another way" in str(getattr(refused, "message", "")), True)
+    # Item 13 triage_conversation (a read-only Claude Code session) left with
+    # the PC lane in Phase B (INTENT 39); its section stood here.
 
     print()
     if _fails:

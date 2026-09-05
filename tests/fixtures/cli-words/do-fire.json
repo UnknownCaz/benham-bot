@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "do",
+    "delete_message",
+    "channel_id=809357286036078612",
+    "message_id=100",
+    "confirm_token=abc123"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued delete_message -> <REQ>.json\n{\n  \"deleted\": 1\n}\n",
+  "stderr": ""
+}

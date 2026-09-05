@@ -135,3 +135,38 @@ paths.CONFIG_DIR = _fixture_dir
 # store that leaks is a store that leaks into a temp dir nobody reads.
 paths.STATE_DIR = os.path.join(_fixture_dir, "state")
 os.makedirs(paths.STATE_DIR, exist_ok=True)
+
+
+def walled_pc_task():
+    """Register a TEST-ONLY `pc_task` wearing the deleted lane's exact profile.
+
+    Phase B (INTENT decision 39) deleted pc_task, spawn_in_room and
+    codesession outright. The RULES they were the consumers of - the machine
+    wall (rule_face_capability, decision 34) and the taint wall
+    (rule_blocked_when_tainted) - stayed in code on purpose, and a rule with
+    no capability to exercise it is a rule the suite cannot see break. So the
+    tests that pinned those walls against pc_task register this double and
+    keep pinning. Its handler refuses; nothing here reaches a machine.
+
+    Idempotent. Never called by production code; test_registry asserts that
+    the LIVE registry holds no blocked_when_tainted capability at all.
+    """
+    from benham.core import capabilities, identity, policy
+    if "pc_task" in capabilities.REGISTRY:
+        return capabilities.REGISTRY["pc_task"]
+
+    async def _gone(ctx, p):
+        raise capabilities.ActionError(
+            "pc_task is a test double - the PC lane was deleted in Phase B")
+
+    act = capabilities.Action(
+        "pc_task", identity.MANAGE,
+        "TEST DOUBLE of the machine lane deleted in Phase B (INTENT 39), "
+        "registered by tests so the machine wall and the taint wall stay proven.",
+        {"task": {"type": "str", "required": True,
+                  "desc": "What to do, in plain language"}},
+        _gone, False, taints=True,
+        origins={policy.Origin.OWNER_DM, policy.Origin.LOCAL_CLI},
+        blocked_when_tainted=True)
+    capabilities.REGISTRY["pc_task"] = act
+    return act

@@ -38,7 +38,9 @@ import os
 import sys
 
 from benham import paths
-from benham.core import caller, conversations, identity, outbox
+from benham.core import caller, outbox, remote
+
+conversations = remote.stores.conversations   # Phase B: the bot's store, wherever it runs
 
 
 def _allowed():
@@ -54,15 +56,15 @@ def _allowed():
     Falling back to the guest whitelist rather than to nobody keeps this usable on
     a fresh clone, and that whitelist is already curated by hand.
     """
-    cfg = identity.CONTROL.get("outreach") or {}
-    people = cfg.get("people") or {}
+    who = remote.identity()   # the SERVING face's config, not this tree's copy
+    people = who.get("outreach_people")
     if people:
         return {str(k).strip().lower(): int(v) for k, v in people.items()}
     # Real names now, when the guest list carries them. This line used to fake a
     # name map out of bare ids (`{str(i): int(i)}`) because there was nothing else
     # to use - identity.people_map does that same fallback centrally, so the fake
     # is gone and `outreach doom "..."` works off the guest list alone.
-    return {k.lower(): v for k, v in identity.GUEST_PEOPLE.items()}
+    return {k.lower(): v for k, v in who["guest_people"].items()}
 
 
 def resolve_target(arg):
@@ -88,7 +90,7 @@ def resolve_target(arg):
 
     # Owner check FIRST, and on the resolved id rather than on the argument, so it
     # holds even if an owner id were ever put in outreach.people by mistake.
-    if identity.is_owner(uid):
+    if uid in set(remote.identity()["owner_ids"]):
         print(f"{uid} is an owner. Outreach never targets Tyler - use "
               "`python benham.py ask \"...\"`, which is built for him and joins "
               "his queue.", file=sys.stderr)

@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "guest",
+    "bogus"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "Usage: python benham.py guest [status | forget <user_id> | forget-all | off]\n",
+  "stderr": ""
+}

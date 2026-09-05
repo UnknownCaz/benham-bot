@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "purge",
+    "809357286036078612",
+    "--days",
+    "3"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Purging up to 100 message(s) older than 3 day(s) from channel 809357286036078612.\n  This is PERMANENT. This call previews only - nothing is deleted.\nQueued purge_messages -> <ROOT>/state/outbox/<REQ>.json\n  channel 809357286036078612, older than 3d, limit 100\ndone: status=confirmation_required\n\npurge_messages: 1 message in #asd would go\nby doom, <DATE>\n\nNOTHING WAS DELETED. To confirm, re-run with the token:\n  python benham.py --face benham purge 809357286036078612 --days 3 --limit 100 --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

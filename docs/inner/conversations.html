@@ -239,11 +239,12 @@ he answers   "2: yeah drop it"  → live slot 2 is READY TO DEPLOY</code></pre>
     Read/Glob/Grep — <strong>a non-read tool is denied outright rather than asked about</strong>.
     That guarantee does double duty: a stranger's bug report cannot reach a write, and it cannot
     make Tyler's phone buzz either. Triage that pesters him is triage he turns off.</p>
-    <p>This is why <code>triage_conversation</code> is <em>not</em> behind
-    <code>blocked_when_tainted</code> while <code>pc_task</code> is.
-    <a href="taint.html">The taint wall</a> exists because <code>pc_task</code> can write; triage
-    cannot, so the wall is not bypassed — it is unnecessary. Tyler replying "fix it" from a DM
-    remains the only thing that moves work across it.</p>
+    <p>That was why <code>triage_conversation</code> was <em>not</em> behind
+    <code>blocked_when_tainted</code> while <code>pc_task</code> was: <a href="taint.html">the
+    taint wall</a> existed because <code>pc_task</code> could write, and triage could not.
+    <strong>Both left with the PC lane in Phase B (2026-09-05, INTENT decision 39)</strong> - a
+    report is still recorded on its conversation; investigating it is a session Tyler starts at
+    the keyboard.</p>
     <p>A diagnosis is stored on the conversation and the state stays <strong>open</strong>. "We
     think it is X" is not something anyone should be told is resolved.</p>
 

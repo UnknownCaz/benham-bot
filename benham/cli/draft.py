@@ -36,11 +36,17 @@ REVIEW_CHANNEL_ID = 809357286036078612
 
 def resolve_channel(channel_id):
     """Return (guild_name, channel_name) for a channel id from channels.json, or (None, None)."""
-    try:
-        with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None, None
+    from benham.core import remote
+    if remote.active():
+        # Phase B: channels.json is written by the bot on ITS host; the copy
+        # in this tree is frozen history.
+        data = remote.stores.rpc.status_snapshot().get("channels") or []
+    else:
+        try:
+            with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None, None
     for guild in data:
         for ch in guild.get("text_channels", []):
             if ch.get("id") == channel_id:

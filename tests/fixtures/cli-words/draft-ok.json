@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "draft",
+    "809357286036078612",
+    "yo, sounds good"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Draft queued to Testing #asd -> <ROOT>/state/outbox/<REQ>.json\n  target: #asd in Testing Server\n  review it in Discord, then to send for real run:\n    python benham.py send 809357286036078612 \"yo, sounds good\" --face benham\ndone: status=sent, message_id=123456789, channel=#asd\n",
+  "stderr": ""
+}

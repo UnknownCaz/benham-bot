@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "ask",
+    "which db?",
+    "--no-wait",
+    "--priority",
+    "whenever",
+    "--why",
+    "no rush",
+    "--project",
+    "benham"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "asked 273967061619965952 (c5, whenever - slot 2 of 2): which db?\nnot waiting - read it later with: python benham.py conv show c5 --face benham\n",
+  "stderr": "1 answer(s) came back that nobody has collected:\n  c2: sqlite or json?\n     -> sqlite\n  (act on it, then: python benham.py conv close <id> \"what happened\" --face benham)\n\nAlready waiting on him (1) - place yourself accordingly:\n    1. [normal  ] ready to deploy?\n        why: gates the merge\n        c1, asked <HH:MM>Z, 0 nudge(s)\n\n"
+}

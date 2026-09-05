@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "read_history",
+    "x"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "limit must be an integer or all/0/full/none, got 'x'\n"
+}

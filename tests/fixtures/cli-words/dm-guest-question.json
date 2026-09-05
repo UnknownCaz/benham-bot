@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "dm",
+    "555000555000555000",
+    "does it work?"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "refusing: this DM asks 555000555000555000 a question, and a raw dm opens no\nconversation - nothing would track that an answer is owed, and their\nreply would bind to nothing. That is exactly how Draco got asked the\nsame six questions twice on <DATE>.\n\nUse:  python benham.py outreach <who> \"your question\" --face benham\n\nIf this really is not a question being put to them (a quote, a URL, an\naside that happens to contain '?'), pass --untracked and it goes as-is.\n"
+}

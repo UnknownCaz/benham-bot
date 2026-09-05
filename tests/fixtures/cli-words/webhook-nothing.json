@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "webhook"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Nothing to send. Provide a message (or --title for an embed).\n"
+}

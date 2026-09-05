@@ -620,35 +620,62 @@ def _main(argv):
     except (AttributeError, ValueError):
         pass
     cmd = argv[1] if len(argv) > 1 else "status"
+    # Phase B: the guest stores and switches live where the bot runs. These
+    # forward there when config/remote.json names a host, else run here.
+    from benham.core import remote
+    stores = remote.stores
 
     if cmd == "status":
+        g = stores.rpc.guest_status()
         print("=== guest chat ===")
-        print(f"enabled:   {identity.guest_enabled()} "
-              f"(mode={identity.guest_config().get('mode', 'chat')!r})")
-        print(f"allowlist: "
-              f"{sorted(identity.people_map(identity.guest_config().get('ids')).values()) or '(empty)'}")
-        print(f"model:     {MODEL}  max_tokens={MAX_TOKENS}")
-        print(f"caps:      {DAILY_CAP}/guest/day, {GLOBAL_CAP}/day global, "
-              f"{COOLDOWN}s cooldown")
-        u = _usage()
-        print(f"today ({u['date']}): global {u.get('global', 0)}/{GLOBAL_CAP}")
+        print(f"enabled:   {g['enabled']} (mode={g['mode']!r})")
+        print(f"allowlist: {g['allowlist'] or '(empty)'}")
+        print(f"model:     {g['model']}  max_tokens={g['max_tokens']}")
+        print(f"caps:      {g['daily_cap']}/guest/day, {g['global_cap']}/day global, "
+              f"{g['cooldown']}s cooldown")
+        u = g["usage"]
+        print(f"today ({u['date']}): global {u.get('global', 0)}/{g['global_cap']}")
         for uid, n in sorted(u.get("users", {}).items()):
-            print(f"  {uid}: {n}/{DAILY_CAP}")
-        mem = jsonio.read_json(MEMORY_FILE, default={})
-        print(f"conversations stored: {len(mem)}")
+            print(f"  {uid}: {n}/{g['daily_cap']}")
+        print(f"conversations stored: {g['conversations_stored']}")
         return 0
 
     if cmd == "forget" and len(argv) > 2:
-        forget(argv[2])
+        stores.guest.forget(argv[2])
         print(f"Forgot conversation for {argv[2]}")
         return 0
 
     if cmd == "forget-all":
-        forget()
+        stores.guest.forget()
         print("Forgot every guest conversation")
         return 0
 
-    print("Usage: python benham.py guest [status | forget <user_id> | forget-all]")
+    if cmd == "off":
+        # INTENT decision 43: the panic button, owner-gated through the
+        # registry like everything else. Two steps (preview, then the token),
+        # the shape delete.py has - the bot restarts on the second call and
+        # guests are refused from the next boot. Turning them back ON stays a
+        # control.json edit at the keyboard, on purpose.
+        from benham.cli.delete import run_two_step
+        rest = list(argv[2:])
+        no_wait = "--no-wait" in rest
+        rest = [a for a in rest if a != "--no-wait"]
+        token = None
+        if "--confirm-token" in rest:
+            i = rest.index("--confirm-token")
+            if i + 1 >= len(rest):
+                print("--confirm-token needs a token", file=_s.stderr)
+                return 2
+            token = rest[i + 1]
+        return run_two_step(
+            "guest_off",
+            describe="set guest.enabled=false in control.json and restart the bot",
+            rerun=lambda t: (f"python benham.py --face {paths.PROCESS_FACE} guest off "
+                             f"--confirm-token {t}"),
+            token=token, no_wait=no_wait,
+            nothing="NOTHING CHANGED YET - guest chat is still on.")
+
+    print("Usage: python benham.py guest [status | forget <user_id> | forget-all | off]")
     return 2
 
 

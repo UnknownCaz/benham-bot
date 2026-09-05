@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "initiate",
+    "drop",
+    "t9",
+    "x"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "",
+  "stderr": "cannot drop t9: \"no thread 't9'\"\n"
+}

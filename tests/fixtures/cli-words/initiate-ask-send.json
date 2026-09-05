@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "initiate",
+    "ask",
+    "Did the tv-cast fix hold up?",
+    "--thread",
+    "t1",
+    "--why",
+    "two mentions"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "queued [c5] for delivery to 273967061619965952:\n  Did the tv-cast fix hold up?\n\nThe bot sends it within ~2s. It will NOT be nudged, and if he never answers, it lapses quietly.\n",
+  "stderr": ""
+}
