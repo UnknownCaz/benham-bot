@@ -5,5 +5,5 @@
   "face": true,
   "exit": 2,
   "stdout": "",
-  "stderr": "usage: benham.py outreach [-h] [--purpose PURPOSE] [--project PROJECT]\n                          [--nudge-cap N] [--list]\n                          who [question]\nbenham.py outreach: error: the following arguments are required: who\n"
+  "stderr": "usage: benham.py outreach [-h] [--purpose PURPOSE] [--project PROJECT] [--nudge-cap N] [--list] who [question]\nbenham.py outreach: error: the following arguments are required: who\n"
 }
