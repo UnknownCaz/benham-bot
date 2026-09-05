@@ -67,7 +67,10 @@ _COPY = ("benham", "benham.py", "prompts", "requirements.txt")
 def make_clone(tag):
     """A scratch copy of the repo at <tmp>/cliwords-<tag>-<rand>/. The name
     carries 'cliwords' so normalise() can find and replace it."""
-    base = tempfile.mkdtemp(prefix=f"cliwords-{tag}-")
+    # realpath: on macOS the temp dir is /var/... and os.getcwd() inside the
+    # clone says /private/var/..., so a path the server prints would miss the
+    # <ROOT> replacement - the exact symlink test_attachments met (1f06f4a).
+    base = os.path.realpath(tempfile.mkdtemp(prefix=f"cliwords-{tag}-"))
     for name in _COPY:
         src = os.path.join(ROOT, name)
         dst = os.path.join(base, name)
