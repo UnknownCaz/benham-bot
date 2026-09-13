@@ -1091,6 +1091,19 @@ async def _advance_conversation(ctx, p):
         raise ActionError(f"no conversation {p['id']!r}")
     if conv.get("state") not in conversations.LIVE_STATES:
         raise ActionError(f"{conv['id']} is {conv['state']} - nobody is being waited on")
+    # No beat exists for a conversation that does not chase - see
+    # conversations.chases(). The tick never hands one over; this is for a caller
+    # that names one by hand. Without it, an unprompted question already on his
+    # screen (c34, 2026-09-12, carrying a due_at stamped before the rule existed)
+    # would have been sent the "still after this one" line that lane exists never
+    # to send, and an undelivered one could have been marked delivered off a batch
+    # message that never showed it, with policy.authorize_unprompted never asked.
+    if not conversations.chases(conv):
+        raise ActionError(
+            f"{conv['id']} is {conv.get('direction')} - it never chases, so there is "
+            "no beat to advance it to"
+            + ("; deliver_unprompted is the one way it goes out"
+               if conv.get("direction") == conversations.UNPROMPTED else ""))
 
     who = int(conv["counterparty"])
     user = await ctx.user(who)

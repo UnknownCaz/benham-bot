@@ -42,6 +42,15 @@ _STATE_MARK = {
     C.CLOSED: "x", C.BANKED: "-",
 }
 
+# What `show` prints in place of a count and a due time for a conversation that
+# never chases (conversations.chases). A time there reads as a deadline, and c34
+# (2026-09-12) printed one for a question nothing was ever going to nudge.
+_NEVER_CHASES = {
+    C.UNPROMPTED: "unprompted: Claude asked on its own, so it never chases - "
+                  "left unanswered, it lapses silently",
+    C.OWED: "owed: the next move is ours, not theirs",
+}
+
 
 def _line(c):
     mark = _STATE_MARK.get(c.get("state"), " ")
@@ -123,8 +132,13 @@ def main(argv):
             print(f"  ANSWER  : {c['answer']}")
         if c.get("outcome"):
             print(f"  outcome : {c['outcome']}")
-        cap = f" (cap {c['nudge_cap']})" if c.get("nudge_cap") is not None else ""
-        print(f"  nudges  : {c.get('nudges', 0)}{cap}   due: {c.get('due_at')}")
+        if C.chases(c):
+            cap = f" (cap {c['nudge_cap']})" if c.get("nudge_cap") is not None else ""
+            print(f"  nudges  : {c.get('nudges', 0)}{cap}   due: {c.get('due_at')}")
+        else:
+            # No due time, even when an older record carries one - see _NEVER_CHASES.
+            print("  nudges  : never - "
+                  + _NEVER_CHASES.get(c.get("direction"), "it never chases"))
         print("  log:")
         for e in c.get("log", []):
             print(f"    {e['ts'][:19]}  {e['event']}"
