@@ -1115,6 +1115,45 @@ participant before the build, not after it.
 
 ## 7. Known bugs
 
+### 2026-09-12 — c34: a deadline nothing would keep, and the outage that could have eaten a real one
+
+Raven's 12:08Z and 16:07Z wakes found c34 open with `nudges: 0`, eleven hours after `conv show`
+said its first nudge was due, and a gateway login at 11:05Z inside the same pid between them. Its
+hypothesis - nudge timers kept in memory do not survive a reconnect - arrived filed as a
+hypothesis, which is why it was measured rather than patched.
+
+**The timer was fine.** `tick_conversations` is a `discord.ext.tasks` loop that `on_ready` starts
+behind an `is_running()` guard. The 11:05Z login was a full re-identify after a DNS outage on the
+Mac had held the gateway down since 08:40Z, and the Mac log shows the whole boot banner running a
+second time - the guard left the loop alone. Pid 77923 has been up since the 09-05 cutover and
+nudged c33 on schedule on 09-07 (delivered 02:14:04Z, nudged 02:29:57Z); no log since the cutover
+holds a tick failure.
+
+**c34 was never owed a nudge.** It was UNPROMPTED - stage 6, decision 29 - and `due()` skips that
+direction by design. Its `due_at` was `delivered_at + 15m`, stamped by `mark_delivered` for every
+direction and printed by `conv show` as a deadline. **The pattern, one more costume: a field
+making a claim nothing was going to honour** - item 19's shape, read this time by the courier
+rather than by the code. `conversations.chases()` now owns the rule. No deadline is written for a
+conversation that does not chase; none is ever due, whatever an older record says; `nudge()` and
+`defer()` will not put one back; `advance_conversation` refuses one named by hand, where it would
+otherwise have sent the exact "still after this one" line that lane exists never to send; and
+`conv show` prints `nudges : never` instead of a time.
+
+**What the question did find, one step to the side.** A beat due while Discord is unreachable
+raised a network error out of `capabilities.run`, and the tick's catch-all - written for a person
+whose DMs are closed - banked the question: nudge budget unspent, nothing sent, and a ten-minute
+grace window that closes long before a real outage does. It never happened (no `could not
+deliver` record in either store), and on 09-12 only because the one open conversation was one the
+tick never touches. Discord being unreachable is not a person refusing, so that beat now stays due
+and the next tick retries it; a refusal still banks. Bare `OSError` is deliberately not counted as
+unreachable: once a nudge has been sent, all that is left to fail is a local write, and a full
+disk read as a network blip would resend the same nudge every minute.
+
+`tests/test_conversation_tick.py` runs the real `on_ready` twice against the real loop object and
+watches due nudges fire before the reconnect, after it, through an outage, and after a stopped
+loop is started again. Against the unfixed tree its timer and reconnect checks pass and its outage
+and wording checks fail - the diagnosis, in test form.
+
 ### 2026-08-21 — the guest brain called a real message a fabrication, and the "no tools" absolute struck twice more
 
 Two findings from reading all 315 historical guest DMs in one pass. Both are the
