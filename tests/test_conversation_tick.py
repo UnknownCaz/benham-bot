@@ -1,0 +1,296 @@
+"""
+test_conversation_tick.py - the nudge timer, driven the way the gateway drives it.
+
+Written for c34 (2026-09-12). The courier found an open conversation reading
+`nudges: 0` eleven hours after `conv show` said its first nudge was due, saw a
+fresh gateway login inside the same pid between two of its wakes, and asked
+whether nudge timers survive a reconnect. It filed that as a hypothesis, and it
+was the right question. Both halves of the answer came back "not here":
+
+  THE TIMER. tick_conversations is a discord.ext.tasks loop that on_ready starts
+  behind an is_running() guard. A reconnect that re-identifies fires on_ready
+  again - the Mac's log carries the whole boot banner a second time at 11:05:00Z
+  - and the guard leaves the running loop alone. The same process had nudged c33
+  on schedule five days earlier. But nothing in the suite had ever run that path,
+  so "the guard handles it" was a reading of the code, not a fact. This file runs
+  the REAL on_ready, twice, against the REAL loop object, and watches due nudges
+  fire on both sides of it - and after a stopped loop is started again.
+
+  THE DEADLINE. c34 was an UNPROMPTED question, which never chases by design
+  (INTENT stage 6, decision 29). Its due_at was a stamp mark_delivered wrote for
+  every direction. conversations.chases() owns that rule now, and the last
+  section here pins the words `conv show` prints instead of a time.
+
+Everything runs against _testconfig's scratch state and a stand-in for the
+gateway client: no Discord connection, no real store.
+
+    python test_conversation_tick.py
+"""
+
+# Runnable from anywhere: tests/ is sys.path[0] when run directly, so put the
+# repo root there too - that is where the benham package lives.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _testconfig  # noqa: F401,E402 - fixture config + scratch state; must precede benham imports
+
+import asyncio
+import contextlib
+import io
+import sys
+from datetime import timedelta
+
+from benham import bot
+from benham.cli import conv as conv_cli
+from benham.core import conversations as C
+from benham.core import identity
+
+# Invented and belonging to nobody: a real person's id in an assertion is a
+# machine-specific test, and the tracked tree carries none.
+COLLAB = 777000777000777000
+OWNER = sorted(identity.OWNER_IDS)[0]
+
+# The loop is 60 seconds in production. Nothing under test depends on the number,
+# and a test that waits a real minute per beat is a test nobody runs.
+FAST = 0.05
+
+_fails = []
+SENT = []   # (uid, content) for every send that landed. Never cleared: the c34
+            # checks at the end read the whole run.
+LOGS = []   # everything bot.log() was handed, so a check can read the log the way
+            # a person reading benham.log would
+
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}")
+    if not ok:
+        print(f"        got {got!r}, want {want!r}")
+        _fails.append(label)
+
+
+def section(title):
+    print(f"\n{title}")
+
+
+class _Msg:
+    """What channel.send returns: a message with an id. The nudge path reads .id
+    off it to make the nudge repliable, so a stub returning None would hide that."""
+    _seq = [9000]
+
+    def __init__(self, content):
+        _Msg._seq[0] += 1
+        self.id = _Msg._seq[0]
+        self.content = content
+
+
+class _DM:
+    """One channel per user, kept across beats."""
+    _by_uid = {}
+
+    def __init__(self, uid):
+        self.uid = uid
+
+    @classmethod
+    def of(cls, uid):
+        return cls._by_uid.setdefault(int(uid), cls(int(uid)))
+
+    async def send(self, content=None, **kw):
+        SENT.append((self.uid, content))
+        return _Msg(content)
+
+
+class _User:
+    def __init__(self, uid):
+        self.id = int(uid)
+        self.dm_channel = _DM.of(uid)
+
+    async def create_dm(self):
+        return self.dm_channel
+
+
+class _Me:
+    id = 424242424242424242
+
+    def __str__(self):
+        return "Benham#0000"
+
+
+class _Gateway:
+    """The slice of discord.Client that on_ready and the loops it starts touch.
+
+    Kept to exactly that slice on purpose: anything else they reach for raises
+    AttributeError here rather than being quietly satisfied. The ask queue's
+    delivery bugs lived for a day behind a stub that said yes to everything.
+    """
+    user = _Me()
+    guilds = []
+
+    async def wait_until_ready(self):
+        # poll_outbox's before_loop awaits this. The real one returns once READY
+        # has arrived, and on_ready running at all means it has.
+        return None
+
+    def get_user(self, uid):
+        return _User(uid)
+
+    async def fetch_user(self, uid):
+        return _User(uid)
+
+    async def change_presence(self, **kw):
+        pass
+
+
+def make_due(cid):
+    """Wind a deadline back so the next beat is genuinely due - the same move
+    test_conversations makes, because a beat runs through capabilities.run and
+    takes no clock."""
+    C._mutate(cid, lambda cv: cv.__setitem__(
+        "due_at", C._iso(C._now() - timedelta(seconds=1))))
+
+
+def ask(question):
+    """An ask already on its counterparty's screen, with its deadline passed."""
+    cid = C.open_conversation(COLLAB, "tick test", question)["id"]
+    C.mark_delivered(cid)
+    make_due(cid)
+    return cid
+
+
+def nudges(cid):
+    return int(C.get(cid).get("nudges", 0))
+
+
+def nudge_messages(question):
+    return [c for _, c in SENT
+            if c and c.startswith("still after this one") and question in c]
+
+
+async def settle(pred, timeout=5.0):
+    """Poll until pred() holds or the timeout passes; returns whether it held.
+
+    Polling rather than sleeping a fixed number of beats: the loop runs on the
+    event loop's clock, and a fixed sleep either wastes seconds or flakes."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while loop.time() < end:
+        if pred():
+            return True
+        await asyncio.sleep(0.02)
+    return bool(pred())
+
+
+async def scenario():
+    tick = bot.tick_conversations
+
+    section("First READY: on_ready starts the tick, and a due nudge fires")
+    a1 = ask("did the fix land?")
+    # c34 exactly as it sits on disk: unprompted, delivered, and carrying a due_at
+    # stamped before chases() existed - long past.
+    un = C.open_conversation(OWNER, "curious", "how did the test go?",
+                             direction=C.UNPROMPTED, priority=C.WHENEVER)["id"]
+    C.mark_delivered(un)
+    C._mutate(un, lambda cv: cv.__setitem__(
+        "due_at", C._iso(C._now() - timedelta(hours=11))))
+
+    await bot.on_ready()
+    first = tick.get_task()
+    check("the tick is running after the first READY", tick.is_running(), True)
+    check("a due nudge fires from the live loop",
+          await settle(lambda: nudges(a1) == 1), True)
+
+    section("READY again, as a gateway reconnect sends it: no restart, no second loop")
+    try:
+        await bot.on_ready()
+        survived = True
+    except RuntimeError:  # Loop.start() on a loop that is already running
+        survived = False
+    check("on_ready survives a second READY", survived, True)
+    check("...and the loop running is the SAME task as before",
+          tick.get_task() is first and tick.is_running(), True)
+    make_due(a1)
+    check("a nudge that comes due after the reconnect fires",
+          await settle(lambda: nudges(a1) == 2), True)
+    await asyncio.sleep(FAST * 6)
+    check("...exactly once per beat - two nudges, two messages",
+          len(nudge_messages("did the fix land?")), 2)
+
+    section("A tick that stopped is started again by the next READY")
+    tick.cancel()
+    check("the loop can be stopped", await settle(lambda: not tick.is_running()), True)
+    a2 = ask("and the second fix?")
+    await asyncio.sleep(FAST * 6)
+    check("a stopped loop fires nothing - so this file is watching the real loop",
+          nudges(a2), 0)
+    await bot.on_ready()
+    check("the next READY starts a fresh one",
+          tick.is_running() and tick.get_task() is not first, True)
+    check("...and the beat that came due meanwhile fires",
+          await settle(lambda: nudges(a2) == 1), True)
+
+    section("c34's shape: the unprompted question was never chased through any of it")
+    check("nothing was ever sent to the owner",
+          [c for uid, c in SENT if uid == OWNER], [])
+    check("its record still reads zero nudges", nudges(un), 0)
+    check("...and it is still open - the tick did not bank it either",
+          C.get(un)["state"], C.OPEN)
+    check("the tick never logged a beat for it",
+          any(f"conversation {un}" in line for line in LOGS), False)
+    return a1, un
+
+
+def words(a1, un):
+    section("`conv show` prints no due time for a question that never chases")
+
+    def show(cid):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = conv_cli.main(["show", cid])
+        return rc, out.getvalue()
+
+    rc, text = show(un)
+    check("conv show runs on it", rc, 0)
+    check("it says the question never chases",
+          "  nudges  : never - unprompted: Claude asked on its own, so it never chases"
+          in text, True)
+    check("...and prints no due time at all - not even the stale one on its record",
+          "due:" in text, False)
+    rc, text = show(a1)
+    check("an ask still prints its count and its deadline, word for word",
+          f"  nudges  : 2   due: {C.get(a1)['due_at']}\n" in text, True)
+
+
+def main():
+    real_client, real_log = bot.client, bot.log
+    bot.client = _Gateway()
+    bot.log = LOGS.append
+    bot.tick_conversations.change_interval(seconds=FAST)
+    C.forget()
+
+    async def run():
+        try:
+            return await scenario()
+        finally:
+            # on_ready started both loops. asyncio.run would cancel them at
+            # shutdown regardless; stopping them here keeps the teardown in view.
+            bot.tick_conversations.cancel()
+            bot.poll_outbox.cancel()
+            await asyncio.sleep(FAST * 2)
+
+    try:
+        a1, un = asyncio.run(run())
+        words(a1, un)
+    finally:
+        bot.tick_conversations.change_interval(seconds=60)
+        bot.client, bot.log = real_client, real_log
+        C.forget()
+
+    if _fails:
+        print("\nlast log lines, for the failure above:")
+        for line in LOGS[-15:]:
+            print(f"    {line}")
+    print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
+    return 1 if _fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

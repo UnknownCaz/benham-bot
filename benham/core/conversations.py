@@ -145,6 +145,30 @@ def nudge_cap_of(conv):
     if cap is None:
         return MAX_NUDGES
     return max(0, min(int(cap), MAX_NUDGES))
+
+
+def chases(conv):
+    """Does this conversation run on a clock at all? Takes a conv dict.
+
+    Only an ASKING one does. OWED is a debt on OUR side, and UNPROMPTED must never
+    chase (see the direction notes above), so neither has a nudge, a bank, or a
+    deadline. Every clock question in this module - due_at, beat_due(), due(),
+    nudge(), defer() - asks this first, so the rule is stated once.
+
+    It became one place because of c34 (2026-09-12). mark_delivered stamped
+    due_at on every direction, and due() skipped the unprompted ones exactly as
+    designed - so an unprompted question sat on disk reading `nudges: 0, due:
+    04:43Z` with nothing that would ever act on it. Eleven hours later, with a
+    gateway reconnect in the log between, the courier reasonably filed that as a
+    nudge timer that had died. The timer was fine: the same process had nudged
+    c33 on schedule five days earlier. The deadline was a claim with nothing
+    behind it, and a record that does not carry one cannot be read as one missed.
+
+    A record with no direction predates directions, and every one of those asked.
+    """
+    return conv.get("direction", ASKING) == ASKING
+
+
 # An away signal ("brb", visibly mid-game) may only ever EXTEND a wait, and by at
 # most this much. Never shortens: a person who said they were busy has given you
 # information about when to ask again, not permission to ask sooner.
@@ -301,7 +325,9 @@ def open_conversation(counterparty, purpose, question, project=None, origin=None
             "face": str(face or paths.PROCESS_FACE),
             "state": OPEN,
             "opened_at": _iso(now),
-            "due_at": _iso(now + NUDGE_AFTER),
+            # A deadline only where something will keep it - see chases().
+            "due_at": (_iso(now + NUDGE_AFTER) if chases({"direction": direction})
+                       else None),
             "nudges": 0,
             "ask_message_ids": [],
             # Whether this question has ever been put in front of the person, as
@@ -392,7 +418,9 @@ def mark_delivered(cid, now=None):
 
     def go(conv):
         conv["delivered_at"] = _iso(now)
-        conv["due_at"] = _iso(now + NUDGE_AFTER)
+        # The clock starts only for a conversation that has one. c34's false
+        # deadline was written on this line - see chases().
+        conv["due_at"] = _iso(now + NUDGE_AFTER) if chases(conv) else None
         _event(conv, "delivered")
     return _mutate(cid, go)
 
@@ -480,7 +508,14 @@ def beat_due(conv, now=None):
 
     Nothing should ever nudge someone about a question whose deadline has not
     arrived. Stating that here means it holds however the caller got here.
+
+    Nor about one that never had a deadline to arrive: a conversation that does
+    not chase is never due, whatever its record says. c34 still carries a due_at
+    written before chases() existed, and advance_conversation named by hand would
+    otherwise have nudged it.
     """
+    if not chases(conv):
+        return False
     now = now or _now()
     deadline = _parse(conv.get("due_at"))
     return bool(deadline) and now >= deadline
@@ -840,8 +875,8 @@ def due(now=None):
             continue
         # An OWED conversation has no deadline on the other person - the deadline
         # is on US, and nothing here should ever nudge someone about a thing we
-        # have not done yet.
-        if c.get("direction", ASKING) != ASKING:
+        # have not done yet. An UNPROMPTED one never chases at all. See chases().
+        if not chases(c):
             continue
         # Only the carrying face's tick advances a conversation - the store is
         # shared, and without this line both faces' ticks would nudge the same
@@ -878,6 +913,9 @@ def nudge(cid, now=None):
     def go(conv):
         if conv.get("state") not in LIVE_STATES:
             raise ValueError(f"{cid} is {conv.get('state')}, not waiting on anyone")
+        if not chases(conv):
+            raise ValueError(f"{cid} is {conv.get('direction')} - it never chases, "
+                             "so there is nothing to nudge")
         cap = nudge_cap_of(conv)
         if int(conv.get("nudges", 0)) >= cap:
             raise ValueError(f"{cid} has already had its {cap} nudge(s) - bank it")
@@ -903,6 +941,11 @@ def defer(cid, minutes, reason, now=None):
     def go(conv):
         if conv.get("state") not in LIVE_STATES:
             raise ValueError(f"{cid} is {conv.get('state')}, not waiting on anyone")
+        if not chases(conv):
+            # Nothing to push out - and writing a target here would put back the
+            # very deadline chases() exists to keep off the record.
+            _event(conv, "defer-ignored", f"{reason} (never chases - no deadline to move)")
+            return
         current = _parse(conv.get("due_at"))
         if current and target <= current:
             _event(conv, "defer-ignored", f"{reason} (would not extend)")

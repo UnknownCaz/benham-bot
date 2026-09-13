@@ -847,6 +847,72 @@ def main():
               len(C.all_conversations(counterparty=DOOM)) > len(C.queue_for(DOOM)), True)
         C.forget()
 
+        section("A question that never chases carries no deadline (c34, 2026-09-12)")
+        # An unprompted question was stamped with due_at at delivery like every
+        # other, due() skipped it as designed, and eleven hours later the record
+        # read `nudges: 0, due: 04:43Z` - which the courier filed, reasonably, as a
+        # dead nudge timer. The timer was fine; the deadline was the false part.
+        C.forget()
+        sent.clear()
+        ask = C.open_conversation(TYLER, "which way", "A or B?", now=NOW)
+        un = C.open_conversation(TYLER, "curious", "how did the test go?",
+                                 direction=C.UNPROMPTED, priority=C.WHENEVER, now=NOW)
+        owed = C.open_conversation(DOOM, "report", "the lore button 404s",
+                                   direction=C.OWED, now=NOW)
+        check("only an ask chases",
+              [C.chases(x) for x in (ask, un, owed)], [True, False, False])
+        check("...and a record older than directions was an ask",
+              C.chases({"id": "c1"}), True)
+        check("an ask still opens with a deadline", ask["due_at"],
+              C._iso(NOW + C.NUDGE_AFTER))
+        check("an unprompted question opens without one", un["due_at"], None)
+        check("...and so does a report we owe", owed["due_at"], None)
+        C.mark_delivered(un["id"], now=NOW)
+        check("delivering it starts no clock", C.get(un["id"])["due_at"], None)
+        C.mark_delivered(ask["id"], now=NOW)
+        check("delivering an ask still does", C.get(ask["id"])["due_at"],
+              C._iso(NOW + C.NUDGE_AFTER))
+        C.defer(un["id"], 30, "brb", now=NOW)
+        check("a defer writes it no deadline either", C.get(un["id"])["due_at"], None)
+
+        # The record c34 actually carries, written before the fix: delivered, with a
+        # deadline eleven hours gone.
+        C._mutate(un["id"], lambda cv: cv.__setitem__(
+            "due_at", C._iso(NOW - timedelta(hours=11))))
+        later = NOW + timedelta(hours=1)
+        check("an old deadline on it is never due",
+              C.beat_due(C.get(un["id"]), now=later), False)
+        check("...so the tick is only ever handed the ask",
+              [c["id"] for c, _ in C.due(now=later)], [ask["id"]])
+        try:
+            C.nudge(un["id"], now=later)
+            nudged = True
+        except ValueError:
+            nudged = False
+        check("nudge() refuses it outright", nudged, False)
+        try:
+            asyncio.run(advance(un["id"]))
+            advanced = True
+        except Exception:  # noqa: BLE001
+            advanced = False
+        check("advance_conversation named by hand refuses it", advanced, False)
+        check("...and sends nothing - not the 'still after this one' it would have",
+              sent, [])
+        # Undelivered, with a delivered ask in the same person's queue: beat zero
+        # would have marked it delivered off a batch message that never showed it.
+        fresh = C.open_conversation(TYLER, "curious", "and the other thing?",
+                                    direction=C.UNPROMPTED, priority=C.WHENEVER,
+                                    now=NOW)
+        try:
+            asyncio.run(advance(fresh["id"]))
+            advanced = True
+        except Exception:  # noqa: BLE001
+            advanced = False
+        check("an undelivered one cannot go out through it either", advanced, False)
+        check("...and is not marked delivered", C.was_delivered(C.get(fresh["id"])), False)
+        check("...and nothing was sent", sent, [])
+        C.forget()
+
         section("It outlives the process that opened it")
         kept = C.open_conversation(DOOM, "next thing", "and the party vote?", now=NOW)
         cid = kept["id"]
