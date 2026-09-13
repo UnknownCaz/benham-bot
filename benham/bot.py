@@ -35,6 +35,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -1753,6 +1754,31 @@ async def on_message(message):
     await react(message, "✅")
 
 
+# What a failed beat means when Discord could not be reached, as opposed to the
+# person refusing it (a closed DM, an unknown user). Mostly the set discord.ext.tasks
+# itself retries its own loops on; DiscordServerError is a 5xx that outlived
+# discord.py's own retries. Deliberately NOT bare OSError, which tasks does retry:
+# once a nudge has gone out, all that is left to fail is a local store write, and a
+# full disk read as a network blip would resend that nudge every minute.
+# ConnectionError is the network-shaped slice of OSError, and one a file write never
+# raises.
+_UNREACHABLE = (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError,
+                discord.GatewayNotFound, discord.ConnectionClosed,
+                discord.DiscordServerError)
+
+
+def _discord_unreachable(exc):
+    """Did this beat fail because Discord could not be reached? Takes the exception.
+
+    capabilities.run hands every discord.HTTPException back as an ActionError
+    raised inside its handler, so a 5xx arrives wearing a refusal's type with the
+    original one link down the chain. One link and no further: a refusal raised
+    while some earlier network error was being handled is still a refusal.
+    """
+    return any(isinstance(e, _UNREACHABLE)
+               for e in (exc, exc.__cause__, exc.__context__) if e is not None)
+
+
 @tasks.loop(seconds=60)
 async def tick_conversations():
     """Fire the nudges and banks that have come due.
@@ -1783,10 +1809,30 @@ async def tick_conversations():
             log(f"conversation {conv['id']}: {res.get('status')} "
                 f"(counterparty {conv['counterparty']})")
         except Exception as e:  # noqa: BLE001 - one bad conversation, not all of them
+            if _discord_unreachable(e):
+                # Discord, not the person - so not the case the banking rule below
+                # was written for. The ask and the nudge both send before they record
+                # anything, so a beat that failed here left its conversation exactly
+                # as due as it was, and the next tick is the retry: the same beat,
+                # arriving late. Banking it instead spent nothing, sent nothing, and
+                # opened a ten-minute grace window that closes long before a real
+                # outage does - on 2026-09-12 the Mac's gateway was down 08:40-11:05Z
+                # on DNS, and a question due inside that window would have banked
+                # without a word. (A bank records before it reports to the owner, so
+                # if THAT send is what failed, the bank stands and only the quiet
+                # report is lost - which the line below says.)
+                state = (conversations.get(conv["id"]) or {}).get("state")
+                log(f"conversation {conv['id']}: Discord unreachable "
+                    f"({type(e).__name__}: {e}) - "
+                    + ("still due, the next tick retries it"
+                       if state in conversations.LIVE_STATES
+                       else f"it had already {state}; its report to the owner was not sent"))
+                continue
             # Bank rather than retry forever. A conversation whose counterparty has
             # blocked DMs would otherwise be attempted every 60 seconds for as long
             # as the bot runs, and the honest state for "cannot reach them" is the
-            # same as for "they never answered".
+            # same as for "they never answered". That is a statement about the
+            # PERSON, which is why an unreachable Discord is carved out above.
             log(f"conversation {conv['id']} could not be advanced ({e}) - banking it")
             try:
                 conversations.bank(conv["id"], reason=f"could not deliver: {e}")

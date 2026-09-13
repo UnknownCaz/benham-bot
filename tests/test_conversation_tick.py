@@ -18,8 +18,17 @@ was the right question. Both halves of the answer came back "not here":
 
   THE DEADLINE. c34 was an UNPROMPTED question, which never chases by design
   (INTENT stage 6, decision 29). Its due_at was a stamp mark_delivered wrote for
-  every direction. conversations.chases() owns that rule now, and the last
-  section here pins the words `conv show` prints instead of a time.
+  every direction. conversations.chases() owns that rule now, and a section here
+  pins the words `conv show` prints instead of a time.
+
+What the question DID find was one step to the side. A beat that came due while
+Discord was unreachable - the Mac's gateway was down 08:40-11:05Z on DNS that same
+day - raised a network error out of capabilities.run, and the tick's catch-all
+banked the question on the spot: nudge budget unspent, nothing sent, and a grace
+window that closes long before the connection comes back. That catch-all was
+written for a person whose DMs are closed. Discord being unreachable is not that,
+so the beat now stays due and the next tick retries it; the outage sections pin
+the retry AND the refusal that still banks.
 
 Everything runs against _testconfig's scratch state and a stand-in for the
 gateway client: no Discord connection, no real store.
@@ -39,10 +48,14 @@ import io
 import sys
 from datetime import timedelta
 
+import aiohttp
+import discord
+
 from benham import bot
 from benham.cli import conv as conv_cli
 from benham.core import conversations as C
 from benham.core import identity
+from benham.core.capabilities import ActionError
 
 # Invented and belonging to nobody: a real person's id in an assertion is a
 # machine-specific test, and the tracked tree carries none.
@@ -54,10 +67,13 @@ OWNER = sorted(identity.OWNER_IDS)[0]
 FAST = 0.05
 
 _fails = []
-SENT = []   # (uid, content) for every send that landed. Never cleared: the c34
-            # checks at the end read the whole run.
-LOGS = []   # everything bot.log() was handed, so a check can read the log the way
-            # a person reading benham.log would
+SENT = []       # (uid, content) for every send that landed. Never cleared: the c34
+                # checks at the end read the whole run.
+ATTEMPTS = []   # uid for every send tried while Discord was unreachable
+LOGS = []       # everything bot.log() was handed, so a check can read the log the
+                # way a person reading benham.log would
+# While set, every DM send raises it - Discord unreachable, from the bot's side.
+UNREACHABLE = {"exc": None}
 
 
 def check(label, got, want):
@@ -95,6 +111,9 @@ class _DM:
         return cls._by_uid.setdefault(int(uid), cls(int(uid)))
 
     async def send(self, content=None, **kw):
+        if UNREACHABLE["exc"] is not None:
+            ATTEMPTS.append(self.uid)
+            raise UNREACHABLE["exc"]
         SENT.append((self.uid, content))
         return _Msg(content)
 
@@ -138,6 +157,18 @@ class _Gateway:
 
     async def change_presence(self, **kw):
         pass
+
+
+class _Response:
+    """What discord.HTTPException reads off a response: .status and .reason."""
+
+    def __init__(self, status, reason):
+        self.status, self.reason = status, reason
+
+
+def _http(cls, status, reason, code=0, text=""):
+    """A discord HTTP error, built the way discord.py builds one from a response."""
+    return cls(_Response(status, reason), {"code": code, "message": text})
 
 
 def make_due(cid):
@@ -227,6 +258,39 @@ async def scenario():
     check("...and the beat that came due meanwhile fires",
           await settle(lambda: nudges(a2) == 1), True)
 
+    section("Discord unreachable when a beat comes due: the beat waits, it does not bank")
+    a3 = ask("did the third fix land?")
+    # The Mac's own failure from 2026-09-12 08:40Z, errno and all.
+    UNREACHABLE["exc"] = aiohttp.ClientOSError(
+        8, "nodename nor servname provided, or not known")
+    check("the tick keeps trying while Discord is unreachable",
+          await settle(lambda: ATTEMPTS.count(COLLAB) >= 3), True)
+    check("...without banking the question", C.get(a3)["state"], C.OPEN)
+    check("...or spending its nudge budget", nudges(a3), 0)
+    check("the log says Discord was unreachable and the beat is still due",
+          any(line.startswith(f"conversation {a3}: Discord unreachable")
+              and line.endswith("still due, the next tick retries it")
+              for line in LOGS), True)
+    UNREACHABLE["exc"] = None
+    await bot.on_ready()  # the READY that ends the outage
+    check("once Discord answers, the beat that came due during the outage fires",
+          await settle(lambda: nudges(a3) == 1), True)
+
+    section("A 5xx is Discord's outage too; a closed DM is the person's door")
+    a4 = ask("did the fourth fix land?")
+    before = len(ATTEMPTS)
+    UNREACHABLE["exc"] = _http(discord.DiscordServerError, 503, "Service Unavailable")
+    check("a 5xx is retried, though capabilities.run hands it back as an ActionError",
+          await settle(lambda: len(ATTEMPTS) >= before + 3), True)
+    check("...and the question is not banked", C.get(a4)["state"], C.OPEN)
+    UNREACHABLE["exc"] = _http(discord.Forbidden, 403, "Forbidden", code=50007,
+                               text="Cannot send messages to this user")
+    check("a closed DM still banks, exactly as it always did",
+          await settle(lambda: C.get(a4)["state"] == C.BANKED), True)
+    check("...with the refusal on its record",
+          "could not deliver" in (C.get(a4)["log"][-1].get("detail") or ""), True)
+    UNREACHABLE["exc"] = None
+
     section("c34's shape: the unprompted question was never chased through any of it")
     check("nothing was ever sent to the owner",
           [c for uid, c in SENT if uid == OWNER], [])
@@ -234,7 +298,8 @@ async def scenario():
     check("...and it is still open - the tick did not bank it either",
           C.get(un)["state"], C.OPEN)
     check("the tick never logged a beat for it",
-          any(f"conversation {un}" in line for line in LOGS), False)
+          any(line.startswith((f"conversation {un}:", f"conversation {un} "))
+              for line in LOGS), False)
     return a1, un
 
 
@@ -259,6 +324,40 @@ def words(a1, un):
           f"  nudges  : 2   due: {C.get(a1)['due_at']}\n" in text, True)
 
 
+def classifier():
+    section("What counts as Discord being unreachable")
+
+    def rewrapped(inner):
+        """What capabilities.run hands back for any discord.HTTPException."""
+        try:
+            try:
+                raise inner
+            except discord.HTTPException as e:
+                raise ActionError(f"Discord rejected `advance_conversation`: {e}")
+        except ActionError as outer:
+            return outer
+
+    unreachable = bot._discord_unreachable
+    check("DNS failing - the Mac's 09-12 error",
+          unreachable(aiohttp.ClientOSError(
+              8, "nodename nor servname provided, or not known")), True)
+    check("a connection reset",
+          unreachable(ConnectionResetError(54, "Connection reset by peer")), True)
+    check("a timeout", unreachable(asyncio.TimeoutError()), True)
+    check("a 5xx, even rewrapped as an ActionError",
+          unreachable(rewrapped(_http(discord.DiscordServerError, 502, "Bad Gateway"))),
+          True)
+    check("NOT a closed DM, rewrapped the same way",
+          unreachable(rewrapped(_http(discord.Forbidden, 403, "Forbidden", code=50007))),
+          False)
+    check("NOT an unknown user", unreachable(ActionError("no Discord user with id 1")),
+          False)
+    check("NOT a full disk - once a nudge has gone out, a retry would resend it "
+          "every minute", unreachable(OSError(28, "No space left on device")), False)
+    check("NOT a store it may not write",
+          unreachable(PermissionError(13, "Permission denied")), False)
+
+
 def main():
     real_client, real_log = bot.client, bot.log
     bot.client = _Gateway()
@@ -272,6 +371,7 @@ def main():
         finally:
             # on_ready started both loops. asyncio.run would cancel them at
             # shutdown regardless; stopping them here keeps the teardown in view.
+            UNREACHABLE["exc"] = None
             bot.tick_conversations.cancel()
             bot.poll_outbox.cancel()
             await asyncio.sleep(FAST * 2)
@@ -279,6 +379,7 @@ def main():
     try:
         a1, un = asyncio.run(run())
         words(a1, un)
+        classifier()
     finally:
         bot.tick_conversations.change_interval(seconds=60)
         bot.client, bot.log = real_client, real_log

@@ -203,6 +203,11 @@ he answers   "2: yeah drop it"  → live slot 2 is READY TO DEPLOY</code></pre>
     delivery used to stamp a due time whatever the direction, and an unprompted question reading
     <code>nudges: 0, due: 04:43Z</code> eleven hours later was, reasonably, taken for a timer that
     had died.</p>
+    <p>A beat that comes due while <strong>Discord is unreachable</strong> stays due, and the next
+    tick retries it: the same beat, arriving late. Only a refusal banks a question on the spot (a
+    closed DM, an unknown user), because that is a statement about the person, and a DNS outage, a
+    dropped connection or a 5xx is not. Until 2026-09-12 both banked, so an outage would have
+    silently banked every question that came due inside it.</p>
     <p class="note"><strong>Delivery is a fact about a question, not about a message</strong>, and
     until 2026-08-17 it was neither — it was inferred from <code>ask_message_ids</code>, which is
     the <em>binding</em> record. The batch message id lands on every question the message shows,
