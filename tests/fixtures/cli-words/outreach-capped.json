@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "outreach",
+    "draco",
+    "one poke only?",
+    "--nudge-cap",
+    "0"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "asked 555000555000555001 (c5): one poke only?\nthe bot delivers it on its own; it will NEVER be nudged (cap 0), and banks at <HH:MM>Z. Read it later with: python benham.py conv show c5\n",
+  "stderr": ""
+}

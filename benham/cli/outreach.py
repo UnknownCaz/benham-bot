@@ -162,8 +162,13 @@ def main(argv):
     # and delivers the question already stored on the record.
     outbox.enqueue(face=paths.PROCESS_FACE, action="advance_conversation", id=conv["id"])
     print(f"asked {who} ({conv['id']}): {a.question}")
-    print(f"the bot delivers and nudges it on its own; read it later with: "
-          f"python benham.py conv show {conv['id']}")
+    # "Delivers" is unconditional and true; the nudging half is not, so it is
+    # computed from the record (c38). This line matters more here than in ask:
+    # c19 - the incident the cap was built for - was an OUTREACH double-ask at a
+    # real guest, so the command whose prose must never overpromise a chase is
+    # this one.
+    print(f"the bot delivers it on its own; {conversations.nudge_outlook(conv)}. "
+          f"Read it later with: python benham.py conv show {conv['id']}")
     return 0
 
 
