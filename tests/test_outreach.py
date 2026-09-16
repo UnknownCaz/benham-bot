@@ -16,10 +16,30 @@ not having it, because it would look like the safe option.
   IT COMPOSES NOTHING. The only outward step is advance_conversation, which cannot
   choose a recipient or words: both come from the conversation record. That is why
   this needs none of the denied permissions.
+
+WHY THIS FILE IMPORTS _testconfig, when it was written without it. It did not need
+it: `resolve_target` read identity.CONTROL and identity.GUEST_PEOPLE, and the checks
+below swap exactly those, so the monkeypatches WERE the fixture. Phase B commit 2
+(1975452, 2026-09-05) moved the lookup behind remote.identity() - "the SERVING
+face's config, not this tree's copy" - and on the PC config/remote.json is present,
+so the call left the process. The suite asked the live bot on cazzy-mac who Doom is
+and measured its answer: five checks red, with real Discord ids printed into test
+output, which is the INTENT §1 leak the 2026-08-22 scrub closed, re-opened by a
+transport change rather than by an edit to any of these lines.
+
+It went red only in the main checkout. A worktree has no remote.json and no MOVED
+marker, so it stayed local and stayed green - "what the tests measure depends on
+whose machine ran them", which is the trap _testconfig exists to end, wearing the
+one hat that file did not yet cover.
+
+The import repoints paths.CONFIG_DIR at a fixture with no remote.json, so the
+client is local and remote.identity() reads the module state these checks swap -
+which is what remote.identity()'s own docstring promises it does when local.
 """
 
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import _testconfig  # noqa: F401,E402 - must precede every benham import
 
 import os
 import shutil
