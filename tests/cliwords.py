@@ -17,7 +17,9 @@ How it works, so the next rewrite can reuse it:
     channels.json, a bot log - written by the code's own store functions so
     the shape can never drift from what the bot writes.
   * A FAKE BOT: a thread that answers the outbox the way bot.py's poller does
-    (sent/ + _result.json), deterministically. No Discord, no token.
+    (sent/ + _result.json), deterministically. No Discord, no token. It and
+    the rig take turns over the tree (FakeBot.quiet), because the rig deletes
+    the outbox between cases while the bot is polling it.
   * Each case is `python benham.py <argv> --face benham` run as a real
     subprocess in the clone, stdout/stderr/exit captured and NORMALISED
     (paths, request names, timestamps, pids) so only the words remain.
@@ -36,6 +38,7 @@ Re-pinning a fixture is a deliberate act: it means the words changed and
 somebody decided that was fine. Say so in the commit.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -45,6 +48,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 
@@ -227,38 +231,106 @@ def _answer(req):
 
 
 class FakeBot(threading.Thread):
-    """Polls <state>/outbox every 0.2s and archives each request with a result."""
+    """Polls <state>/outbox every 0.2s and archives each request with a result.
+
+    THE WALL (quiet()). One instance serves a whole REMOTE run while the rig
+    WIPES the very tree it polls between cases, so the two take turns: this
+    thread holds `_lock` for a whole read-move-write cycle, the rig holds the
+    same lock across its rmtree-and-reseed, and neither can be inside the
+    other. There was only ever ONE poller here - the second writer was the
+    harness itself.
+
+    Without that wall the rmtree landed between this thread's json.load and its
+    os.replace about once every few runs (twelve chances per run: every
+    --no-wait case leaves a live request behind for the next case's reseed to
+    delete). The unguarded move then raised FileNotFoundError straight out of
+    Thread.run and the thread DIED - daemon, unjoined, nobody asking - after
+    which every later case needing an answer failed as a words-diff. Six
+    unrelated verbs "changing their wording" was the symptom; a dead fake bot
+    was the disease, and crying wolf is the one thing this suite cannot afford.
+
+    bot.py has never been exposed to it. Its _finish() wraps the move, logs it,
+    quarantines the file out of the "*.json" glob and keeps the loop alive -
+    and in production nobody deletes a running bot's outbox. The harness
+    omitted the guard, not the product.
+    """
 
     def __init__(self, state_dir):
         super().__init__(name="fake-bot", daemon=True)
         self.outbox = os.path.join(state_dir, "outbox")
         self.stop = threading.Event()
         self.seen = []
+        self._lock = threading.Lock()
+        # A fake bot that dies quietly reports as wording drift in whatever
+        # verb runs next. Record it instead, and let check() say the true thing.
+        self.error = None
+
+    @contextlib.contextmanager
+    def quiet(self):
+        """Hold the outbox still: no cycle is in flight, and none will start."""
+        with self._lock:
+            yield
 
     def run(self):
         while not self.stop.is_set():
             try:
-                names = sorted(f for f in os.listdir(self.outbox) if f.endswith(".json"))
-            except FileNotFoundError:
-                names = []
-            for fname in names:
-                path = os.path.join(self.outbox, fname)
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        req = json.load(f)
-                except (OSError, ValueError):
-                    continue
-                dest, result = _answer(req)
-                folder = os.path.join(self.outbox, dest)
-                os.makedirs(folder, exist_ok=True)
-                base = os.path.splitext(fname)[0]
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                os.replace(path, os.path.join(folder, f"{base}_{stamp}.json"))
-                with open(os.path.join(folder, f"{base}_{stamp}_result.json"), "w",
-                          encoding="utf-8") as f:
-                    json.dump(result, f, indent=2)
-                self.seen.append(req)
+                with self._lock:
+                    self._cycle()
+            except Exception:  # noqa: BLE001 - keep polling; check() reports it
+                if self.error is None:
+                    self.error = traceback.format_exc()
             self.stop.wait(0.2)
+
+    def _cycle(self):
+        try:
+            names = sorted(f for f in os.listdir(self.outbox) if f.endswith(".json"))
+        except FileNotFoundError:
+            return
+        for fname in names:
+            path = os.path.join(self.outbox, fname)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    req = json.load(f)
+            except (OSError, ValueError):
+                continue
+            dest, result = _answer(req)
+            folder = os.path.join(self.outbox, dest)
+            os.makedirs(folder, exist_ok=True)
+            base = os.path.splitext(fname)[0]
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            os.replace(path, os.path.join(folder, f"{base}_{stamp}.json"))
+            with open(os.path.join(folder, f"{base}_{stamp}_result.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            self.seen.append(req)
+
+    def check(self):
+        """Raise if the fake bot has stopped being one. Called after every case.
+
+        A harness that breaks must SAY it broke. The alternative is the failure
+        this replaced, where a dead thread was reported as the words changing
+        in six verbs at once - and a fixture re-pinned over that would have
+        written the breakage into the contract.
+        """
+        if self.error:
+            raise RuntimeError(
+                "the fake bot hit an error - this is a HARNESS failure, NOT a "
+                "change in the words; do not re-pin a fixture over it:\n"
+                + self.error)
+        if not self.is_alive():
+            raise RuntimeError(
+                "the fake bot thread is gone - this is a HARNESS failure, NOT "
+                "a change in the words; do not re-pin a fixture over it")
+
+    def shutdown(self):
+        """Stop polling and WAIT for it, so the caller may delete the tree.
+
+        stop.set() alone only ASKED; the rmtree that followed it raced the
+        cycle still running. Event.wait wakes on set(), so this costs one
+        cycle, not one poll interval.
+        """
+        self.stop.set()
+        self.join(timeout=30)
 
 
 # --------------------------------------------------------------------------
@@ -510,10 +582,11 @@ class Harness:
         for argv in spec["chain"]:
             out = run_case(self.client, argv, face=spec["face"], env=self.env)
         out["argv"] = spec["chain"][-1] if len(spec["chain"]) == 1 else spec["chain"]
+        self.bot.check()
         return normalised(out, self.roots)
 
     def close(self):
-        self.bot.stop.set()
+        self.bot.shutdown()
         for d in self.roots:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -604,10 +677,14 @@ class RemoteRig:
         self.bot.start()
 
     def reseed(self):
-        for d in ("state", "logs"):
-            shutil.rmtree(os.path.join(self.mac, d), ignore_errors=True)
-            os.makedirs(os.path.join(self.mac, d), exist_ok=True)
-        seed(self.mac)
+        # Under quiet(): this deletes the outbox the fake bot is polling, and
+        # one long-lived bot sees ~130 of these per run. Every --no-wait case
+        # leaves a live request behind for exactly this rmtree to land on.
+        with self.bot.quiet():
+            for d in ("state", "logs"):
+                shutil.rmtree(os.path.join(self.mac, d), ignore_errors=True)
+                os.makedirs(os.path.join(self.mac, d), exist_ok=True)
+            seed(self.mac)
 
     def run(self, name):
         self.reseed()
@@ -616,10 +693,11 @@ class RemoteRig:
         for argv in spec["chain"]:
             out = run_case(self.client, argv, face=spec["face"], env=self.env)
         out["argv"] = spec["chain"][-1] if len(spec["chain"]) == 1 else spec["chain"]
+        self.bot.check()
         return normalised(out, self.roots)
 
     def close(self):
-        self.bot.stop.set()
+        self.bot.shutdown()
         self.proc.kill()
         for d in self.roots:
             shutil.rmtree(d, ignore_errors=True)
