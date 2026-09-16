@@ -16,7 +16,10 @@ real listener on a loopback port with a fake client and a real event loop:
      as the same class - and the client-side proxies re-raise it,
   5. /file confines an upload to state/uploads/ whatever the filename says,
   6. remote.py's shapes: RemoteError one-liners name the host, and a tree
-     whose state was MOVED refuses to run local with no remote.json.
+     whose state was MOVED refuses to run local with no remote.json,
+  7. and the suite's own exposure to all of it: a test file that drives a CLI
+     module without isolating paths does not read a stale fixture, it works
+     the LIVE bot - so no such file may exist.
 
     python tests/test_server.py
 """
@@ -248,6 +251,39 @@ check("a MOVED marker with no remote.json REFUSES local (never write frozen hist
       "MOVED" in err and "remote.json" in err, True)
 os.remove(os.path.join(paths.STATE_DIR, "MOVED-2026-09-05.md"))
 remote._config_cache = None
+
+section("7. no test file reaches the real bot by forgetting to say local")
+# The blast radius of everything above, pointed back at the suite. A CLI module's
+# body now runs THROUGH these proxies, so a test that drives one without
+# redirecting paths.CONFIG_DIR does not read a stale fixture - it authenticates to
+# whatever config/remote.json names and works the live bot on cazzy-mac. That is
+# how test_outreach.py came to ask production who Doom is for eleven days: it
+# predates _testconfig, it never imported it, and nothing here could see that.
+#
+# Static on purpose - it must hold however a file is invoked, and every test
+# docstring in this repo advertises `python tests/test_foo.py` rather than the
+# runner, so an env var the runner sets would guard only half the ways in.
+#
+# test_cli_words.py is not in scope and needs no exemption: it imports no CLI
+# module, driving benham.py as a subprocess and standing up its own loopback bot
+# for the remote half, which is the one place remote mode is the thing under test.
+_TESTS = os.path.dirname(os.path.abspath(__file__))
+_unisolated = []
+for _name in sorted(os.listdir(_TESTS)):
+    if not (_name.startswith("test_") and _name.endswith(".py")):
+        continue
+    with open(os.path.join(_TESTS, _name), encoding="utf-8") as _f:
+        _src = _f.read()
+    if "from benham.cli" not in _src and "import benham.cli" not in _src:
+        continue
+    # Order matters as much as presence: identity resolves its control file at
+    # import and remote caches its config, so an import that lands after either
+    # one redirects nothing. Cheapest true test of "first" is position.
+    _iso, _cli = _src.find("import _testconfig"), _src.find("benham.cli")
+    if _iso == -1 or _iso > _cli:
+        _unisolated.append(_name)
+check("every test file that imports a CLI module imports _testconfig first",
+      _unisolated, [])
 
 srv.shutdown()
 loop.call_soon_threadsafe(loop.stop)
