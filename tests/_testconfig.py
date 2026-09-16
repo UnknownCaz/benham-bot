@@ -136,6 +136,35 @@ paths.CONFIG_DIR = _fixture_dir
 paths.STATE_DIR = os.path.join(_fixture_dir, "state")
 os.makedirs(paths.STATE_DIR, exist_ok=True)
 
+# --------------------------------------------------------------------------
+# LOCAL, said out loud rather than arrived at.
+#
+# Until Phase B the worst a missing redirect could do was read the wrong
+# control.json. The 2026-09-05 cutover put a THIRD untracked file in config/ -
+# remote.json - and remote.py reads it to decide whether a store call runs in
+# this process or goes over the tailnet to the bot on cazzy-mac. From that day
+# a test file's isolation decided whether it talked to PRODUCTION.
+#
+# Redirecting CONFIG_DIR above already achieves local, because the fixture dir
+# has no remote.json. But it achieves it BY ACCIDENT, and an accident is not
+# something the suite can see break: nothing said "local", so nobody adding a
+# config knob would know this file leaned on its absence. test_outreach.py spent
+# eleven days red proving the cost - it never imported this file, and the day
+# resolve_target started reading remote.identity() it began asking the live bot
+# who Doom is and printing real Discord ids into test output.
+#
+# Reads were the cheap half. rpc.TABLE is a WRITE surface too, so the same
+# missing import on a test that drives a CLI write verb would have mutated the
+# running bot's stores on another machine - state/agent_memory.json's seven
+# `test:*` keys above, one host further out and with no local file to inspect.
+#
+# So it is stated. A falsy cache makes config() return None without consulting
+# the environment; test_server.py, which has the client half under test, resets
+# the cache to None itself before setting BENHAM_REMOTE_URL.
+from benham.core import remote  # noqa: E402 - after CONFIG_DIR, and imports only paths+rpc, never identity
+
+remote._config_cache = {}
+
 
 def walled_pc_task():
     """Register a TEST-ONLY `pc_task` wearing the deleted lane's exact profile.
