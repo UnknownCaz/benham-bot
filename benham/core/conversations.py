@@ -192,6 +192,14 @@ def nudge_outlook(conv):
     policy has to be COMPUTED from that policy, or it is just a second place to
     be wrong - and the second place is the one no test was watching.
     """
+    # A finished record has no "next". All three callers print this while the
+    # conversation is live, so this branch is for the fourth caller and for the
+    # console - and saying "banks when it falls due" about a thing that banked an
+    # hour ago would be this very bug's sentence, one state to the left. A dict
+    # with no state at all is a hypothetical someone built by hand, not a record.
+    state = conv.get("state", OPEN)
+    if state not in LIVE_STATES:
+        return f"it is {state} - nothing will ask again"
     if not chases(conv):
         return "it never chases, so nothing will ask again"
     stamp = (conv.get("due_at") or "")[11:16]
