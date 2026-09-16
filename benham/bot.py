@@ -1875,6 +1875,10 @@ async def tick_loopclose():
 # Mapped to their registry twins so the refusal can name the replacement rather
 # than only saying no - see the guard in poll_outbox.
 _RETIRED_UNGATED = {"purge": "purge_messages", "delete": "delete_message"}
+# Every action poll_outbox handles OUTSIDE the registry. Anything else that is not a
+# registry action is refused by name rather than treated as a send.
+_LEGACY_ACTIONS = {"send", "dm", "edit", "history", "listen", "stop_listen",
+                   "speak", *_RETIRED_UNGATED}
 
 
 @tasks.loop(seconds=2)
@@ -1978,6 +1982,19 @@ async def poll_outbox():
                 action_done = True
                 _finish(path, fname, SENT, result)
                 continue
+
+            # A verb this process does not know is REFUSED by name, never re-read
+            # as a chat message. Before this, "not a registry action" meant "a
+            # legacy send", so a request the CLI wrote for a capability newer than
+            # the running bot fell into the send path and died on
+            # KeyError: 'channel_id' (purge --guild, 2026-08-26 02:57Z: the bot had
+            # booted before purge_guild existed). The author and the consumer are
+            # separate processes; the consumer is the one that has to say so.
+            if action not in _LEGACY_ACTIONS:
+                raise ValueError(
+                    f"this bot process does not know the action {action!r} - it is "
+                    f"not in its capability registry. If the CLI that queued it is "
+                    f"newer than the running bot, restart the bot and re-send.")
 
             if action == "dm":
                 # A DM request carries user_id, not channel_id: resolve the user's

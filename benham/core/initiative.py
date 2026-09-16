@@ -328,7 +328,9 @@ def consecutive_lapses():
             continue
         if floor and when <= floor:
             break
-        if c.get("state") == conversations.ANSWERED:
+        if conversations.engaged(c):
+            # He answered - including one answered and then closed, which is
+            # the correct end of the loop, not a lapse (ruling 2026-09-16).
             break
         if c.get("state") in conversations.LIVE_STATES:
             # Still inside its window - undecided, and undecided is not a lapse.
@@ -374,7 +376,7 @@ def sweep(now=None):
 
     for t in threads(state=T_ASKED):
         conv = conversations.get(t.get("conv_id") or "")
-        if conv and conv.get("state") == conversations.ANSWERED:
+        if conversations.engaged(conv):
             close_thread(t["id"], f"answered: {str(conv.get('answer'))[:200]}")
             notes.append(f"{t['id']} closed - he answered {conv['id']}")
     return notes

@@ -217,6 +217,42 @@ def main():
         initiative.reset()
         check("a human reset clears the count", initiative.consecutive_lapses(), 0)
 
+        section("Answered then CLOSED is answered, not a lapse (Caz's ruling 2026-09-16)")
+        # Closing the loop is Raven's correct last step, and close() overwrites
+        # `answered` with `closed`. Before the fix that made an answered question
+        # indistinguishable from an ignored one: c18 (answer on the record) read as
+        # a lapse, lapses hit the cap, and the lane went dormant with no way to
+        # clear itself except `initiate reset`.
+        t_ans = initiative.add_thread("did the eye-zoom read right on stream?")
+        q4 = initiative.open_question("did the eye-zoom read right on stream?",
+                                      thread_id=t_ans["id"])
+        initiative.mark_thread_asked(t_ans["id"], q4["id"])
+        q4 = C.mark_delivered(q4["id"])
+        C.answer(q4["id"], "Yeaj I did")
+        C.close(q4["id"], "answered; thanked him", told=True)
+        check("the record still holds his answer after the close",
+              C.get(q4["id"])["answer"], "Yeaj I did")
+        check("an answered-then-closed question is NOT a lapse",
+              initiative.consecutive_lapses(), 0)
+        check("...so the lane is not dormant", initiative.lane_state()["dormant"], False)
+        check("sweep reconciles the thread he answered, even though its conv is closed",
+              any("closed - he answered" in n for n in initiative.sweep()), True)
+        check("...leaving the thread CLOSED rather than stuck in ASKED",
+              initiative.thread(t_ans["id"])["state"], initiative.T_CLOSED)
+        # A question that lapsed AFTER the answered one still counts - the rule is
+        # "stop at the first one he engaged with", not "closed means nothing".
+        q5 = initiative.open_question("and the stream chat?")
+        q5 = C.mark_delivered(q5["id"])
+        initiative.sweep(now=initiative._parse(q5["delivered_at"]) + timedelta(days=4))
+        check("a genuine lapse after it still counts as one",
+              initiative.consecutive_lapses(), 1)
+        # And a close that was never answered is not engagement either.
+        C.mark_delivered(initiative.open_question("did you see the board?")["id"])
+        C.close(initiative.outstanding()[0]["id"], "resolved itself on the board")
+        check("closed WITHOUT an answer is still not engagement",
+              initiative.consecutive_lapses(), 2)
+        initiative.reset()
+
         section("The run log records silence, which is the whole point")
         # A run that decides nothing and logs nothing is indistinguishable from a
         # run that never happened - which is how the last scheduled task on this

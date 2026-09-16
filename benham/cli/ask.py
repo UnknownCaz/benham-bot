@@ -194,7 +194,9 @@ def main(argv):
             print(f"{conv['id']} vanished from the store", file=sys.stderr)
             return 4
         state = cur.get("state")
-        if state == conversations.ANSWERED:
+        # engaged(), not state == ANSWERED: an answer that got closed before this
+        # poll saw it is still an answer, and printing "closed" would drop it.
+        if conversations.engaged(cur):
             how = "replied to the question" if _bound_by(cur) == "reply" else \
                   "answered, bound by Benham's judgement"
             print(f"\n[{cur['id']}] {how}:\n{cur['answer']}")

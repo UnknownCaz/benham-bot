@@ -1031,6 +1031,23 @@ def answer(cid, text, bound_by="reply"):
     return _mutate(cid, go)
 
 
+def engaged(conv):
+    """Did the counterparty answer this - whatever state it is in NOW?
+
+    `answered` is a waypoint, not a resting place: close() is the correct last
+    step after an answer (it is Raven's whole job), and it overwrites the state
+    with `closed`. Anything that reads `state == ANSWERED` to mean "he replied"
+    therefore stops seeing the reply the moment the loop is properly shut. The
+    answer itself survives the close - `answered_at` is never cleared - so this
+    is the one test to use for "did he engage". Caz's ruling, 2026-09-16:
+    closed-after-answered counts as answered. A close WITHOUT an answer (resolved
+    on the board, withdrawn) is not engagement, and a bank never is.
+    """
+    if not conv:
+        return False
+    return conv.get("state") == ANSWERED or bool(conv.get("answered_at"))
+
+
 def close(cid, outcome, told=False):
     """The loop is shut: they have been told, or are about to be, what happened.
 
