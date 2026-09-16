@@ -169,6 +169,42 @@ def chases(conv):
     return conv.get("direction", ASKING) == ASKING
 
 
+def nudge_outlook(conv):
+    """One clause on what the timer will do to this record NEXT. Takes a conv dict.
+
+    Computed from the same four fields due() reads - direction, nudge_cap,
+    nudges, due_at - so a line printed to a session cannot disagree with the
+    schedule the bot is actually keeping. Returns a fragment meant to follow
+    "... is still open - ", not a sentence: each caller wraps it its own way.
+
+    c38 (2026-09-16) IS c19 IN REVERSE, and that is why this is a function
+    rather than three f-strings. c19 was a ceiling promised in prose that never
+    reached the timer, and the cure was to put the cap on the record the timer
+    reads. Here the timer was already right - c38 was opened with --nudge-cap 0,
+    due() said "bank" on the first beat, `conv show` read `nudges : 0 (cap 0)` -
+    and the PROSE was wrong: ask's timeout line said "the bot keeps nudging"
+    unconditionally. Same lie, pointing the other way. A session reading it
+    would believe a zero-pressure ask still chases Tyler, and would either avoid
+    the flag that exists to protect him or tell him he was being nudged when
+    nothing would ever nudge him again.
+
+    The lesson generalises past both incidents: a sentence that restates a
+    policy has to be COMPUTED from that policy, or it is just a second place to
+    be wrong - and the second place is the one no test was watching.
+    """
+    if not chases(conv):
+        return "it never chases, so nothing will ask again"
+    stamp = (conv.get("due_at") or "")[11:16]
+    when = f"at {stamp}Z" if stamp else "when it falls due"
+    cap = nudge_cap_of(conv)
+    left = cap - int(conv.get("nudges", 0))
+    if left > 0:
+        return f"{left} of {cap} nudge(s) left, next {when}"
+    if cap == 0:
+        return f"it will NEVER be nudged (cap 0), and banks {when}"
+    return f"its {cap} nudge(s) are spent, and it banks {when}"
+
+
 # An away signal ("brb", visibly mid-game) may only ever EXTEND a wait, and by at
 # most this much. Never shortens: a person who said they were busy has given you
 # information about when to ask again, not permission to ask sooner.

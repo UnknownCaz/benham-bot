@@ -175,11 +175,18 @@ def main(argv):
     print(f"asked {who} ({conv['id']}, {a.priority}{where}): {a.question}")
 
     if a.no_wait:
-        print(f"not waiting - read it later with: python benham.py conv show {conv['id']} --face {paths.PROCESS_FACE}")
+        # The same computed clause as the timeout path: the session that fires and
+        # walks away is the one MOST likely to report to Tyler later about whether
+        # he was being chased, and it never sees the record again to check.
+        print(f"not waiting - {conversations.nudge_outlook(conv)}; "
+              f"read it later with: python benham.py conv show {conv['id']} --face {paths.PROCESS_FACE}")
         return 0
 
     deadline = time.time() + max(10, int(a.timeout))
     poll = 3
+    # Seeded so the timeout line below always has a record to read, and reads the
+    # freshest one the loop saw rather than the one we opened with.
+    cur = conv
     while time.time() < deadline:
         time.sleep(poll)
         cur = conversations.get(conv["id"])
@@ -197,10 +204,15 @@ def main(argv):
                   file=sys.stderr)
             return 5
 
-    # A timeout is NOT a failure of the conversation. The bot keeps nudging on its
-    # own schedule and Tyler can still answer; only this process stopped watching.
-    print(f"\nNo answer within {a.timeout}s. {conv['id']} is still open - the bot "
-          f"keeps nudging, and the answer will be waiting in the store.",
+    # A timeout is NOT a failure of the conversation: Tyler can still answer, and
+    # only this process stopped watching. What happens next is the RECORD's
+    # business, never this line's guess - see nudge_outlook() and c38 for the
+    # version that guessed "the bot keeps nudging" and was wrong for every ask
+    # placed with --nudge-cap 0. "Waiting in the store" survives a bank either
+    # way: bank() keeps the question, and BANK_GRACE still binds a late answer.
+    print(f"\nNo answer within {a.timeout}s. {cur['id']} is still open - "
+          f"{conversations.nudge_outlook(cur)}. The answer will be waiting in "
+          f"the store whenever it comes.",
           file=sys.stderr)
     return 6
 

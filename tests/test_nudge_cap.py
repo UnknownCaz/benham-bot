@@ -12,6 +12,8 @@ against a real human before it was code, and a per-ask field that could raise
 it would quietly convert a global promise into a suggestion.
 """
 
+import contextlib
+import io
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -120,6 +122,61 @@ try:
 except SystemExit as e:
     _code = e.code
 check("ask refuses a cap above the global policy (usage error)", _code, 2)
+
+section("c38: the line a session READS must agree with the timer")
+# c19 in reverse. The cap reached the timer exactly as the section above proves,
+# and then ask's timeout line said "the bot keeps nudging" to every caller
+# regardless - so the tool was right and its own report was wrong. A capped ask
+# is only zero-pressure to the person; a session that believes it still chases
+# will either avoid the flag or tell Tyler he is being nudged when he is not.
+_zero = {"nudge_cap": 0, "due_at": "2026-09-16T05:15:00+00:00"}
+_open = {"due_at": "2026-09-16T05:15:00+00:00"}
+check("cap 0 promises no nudge at all",
+      "NEVER be nudged" in conversations.nudge_outlook(_zero), True)
+check("...and says what happens instead, with the deadline",
+      "banks at 05:15Z" in conversations.nudge_outlook(_zero), True)
+check("an uncapped ask still reports the chase it really gets",
+      conversations.nudge_outlook(_open),
+      f"{conversations.MAX_NUDGES} of {conversations.MAX_NUDGES} nudge(s) left, "
+      "next at 05:15Z")
+check("a spent budget banks rather than claiming another nudge",
+      "banks" in conversations.nudge_outlook(
+          {"nudge_cap": 1, "nudges": 1, "due_at": "2026-09-16T05:31:00+00:00"}), True)
+check("a direction that never chases says so, instead of a nudge count",
+      conversations.nudge_outlook({"direction": conversations.UNPROMPTED}),
+      "it never chases, so nothing will ask again")
+
+
+def _said(fn, argv):
+    """Everything one CLI call printed, both streams, as the caller reads it."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            fn(argv)
+        except SystemExit:
+            pass
+    return out.getvalue() + err.getvalue()
+
+
+# The literal phrase from the c38 report, asserted against the commands that
+# printed it. Worth pinning by its exact words: this defect was invisible to
+# every behavioural test in this file, because the behaviour was already right.
+_words = _said(ask.main, ["capped ask?", "--nudge-cap", "0", "--no-wait"])
+check("ask --no-wait on a capped ask never claims a nudge is coming",
+      "keeps nudging" in _words or "nudges it on its own" in _words, False)
+check("...and tells the session what WILL happen", "NEVER be nudged" in _words, True)
+_words = _said(ask.main, ["uncapped ask?", "--no-wait"])
+check("ask --no-wait on an uncapped ask still reports its real budget",
+      "nudge(s) left" in _words, True)
+_words = _said(outreach.main, [str(GUEST), "capped poke?", "--nudge-cap", "0"])
+check("outreach never overpromises a chase at a guest either - c19's own "
+      "command, and the one that reaches a real person",
+      "nudges it on its own" in _words, False)
+check("...and says the question is banked, not chased",
+      "NEVER be nudged" in _words, True)
+_words = _said(outreach.main, [str(GUEST), "uncapped poke?"])
+check("an uncapped outreach still says it will be nudged",
+      "nudge(s) left" in _words, True)
 
 print()
 if _fails:

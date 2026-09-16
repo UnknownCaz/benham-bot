@@ -395,6 +395,11 @@ CASES = {
     "ask-nowait": ["ask", "which db?", "--no-wait", "--priority", "whenever",
                    "--why", "no rush", "--project", "benham"],
     "ask-timeout": ["ask", "which db?", "--timeout", "1", "--purpose", "db choice"],
+    # c38: the capped twin of the two cases above. Both lines used to promise a
+    # nudge that --nudge-cap 0 had already ruled out, and no fixture noticed
+    # because no fixture ever ran these verbs WITH the flag.
+    "ask-timeout-capped": ["ask", "which db?", "--timeout", "1", "--nudge-cap", "0"],
+    "ask-nowait-capped": ["ask", "which db?", "--no-wait", "--nudge-cap", "0"],
     "conv-help": ["conv"],
     "conv-list": ["conv", "list"],
     "conv-list-all": ["conv", "list", "--all"],
@@ -410,6 +415,7 @@ CASES = {
     "outreach-owner": ["outreach", str(OWNER_ID), "hi?"],
     "outreach-list": ["outreach", "doom", "--list"],
     "outreach-ok": ["outreach", "draco", "does the image thing work now?", "--project", "storyizier"],
+    "outreach-capped": ["outreach", "draco", "one poke only?", "--nudge-cap", "0"],
     "outreach-no-question": ["outreach", "draco"],
     # --- initiate
     "initiate-help": ["initiate"],

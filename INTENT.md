@@ -1115,6 +1115,40 @@ participant before the build, not after it.
 
 ## 7. Known bugs
 
+### 2026-09-16 — c38: the timer was right and the sentence was wrong (c19 in reverse)
+
+c38 was opened with `--nudge-cap 0`. Everything the cap touches behaved: `due()` returned `bank`
+on the first beat, `conv show` read `nudges : 0 (cap 0)`, and nothing ever nudged Tyler. Then the
+ask timed out and printed **"c38 is still open - the bot keeps nudging, and the answer will be
+waiting in the store"** - a fixed string, printed whatever the cap said.
+
+**This is item 19's shape once more, and c19's exactly inverted.** c19 (2026-08-22) was a ceiling
+promised in prose that never reached the timer; the cure was to move the cap onto the record the
+timer reads. Here the record and the timer already agreed, and the REPORT disagreed with both. A
+field making a claim nothing would honour, and a sentence denying a rule everything was honouring,
+are the same defect wearing opposite costumes - and the second one is worse-placed, because the
+line is what a session quotes back to Tyler. A Claude reading it would either avoid the flag built
+to protect him or tell him he was being chased when nothing would ever chase him again.
+
+**Why no test caught it.** `tests/test_nudge_cap.py` proved the behaviour thoroughly and the words
+not at all, and `tests/cliwords.py` pinned `ask-timeout`, `ask-nowait` and `outreach-ok` - none of
+which had ever been run WITH `--nudge-cap`. The capped path had no fixture, so its prose was the
+one thing in this tool nobody was reading.
+
+**`conversations.nudge_outlook()` now owns the sentence,** computed from the same four fields
+`due()` reads - direction, `nudge_cap`, `nudges`, `due_at` - so a printed line cannot drift from
+the schedule again without the schedule drifting too. A capped ask says it will never be nudged
+and names its bank time; an uncapped one says how many nudges are left and when the next falls
+due; a spent budget says it banks; a direction that never chases (stage 6, decision 29) says so
+instead of counting. Three callers print it: `ask`'s timeout, `ask --no-wait`, and `outreach` -
+the last mattering most, since c19 was an outreach double-ask at a real guest. `conv bank` was
+checked and was already honest ("the question is kept"), as was `initiate`'s "It will NOT be
+nudged".
+
+Eleven checks in `test_nudge_cap.py` now assert the words, including the literal phrase from this
+report, and `ask-timeout-capped`, `ask-nowait-capped` and `outreach-capped` pin the capped prose
+in the fixture set. The three re-pinned fixtures changed in the nudge clause only.
+
 ### 2026-09-12 — c34: a deadline nothing would keep, and the outage that could have eaten a real one
 
 Raven's 12:08Z and 16:07Z wakes found c34 open with `nudges: 0`, eleven hours after `conv show`
