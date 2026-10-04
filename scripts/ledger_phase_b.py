@@ -49,10 +49,10 @@ BLAST = ("Benham offline = the ask queue goes quiet (no session can reach Tyler 
          "job and is untouched; nothing on the PC depends on the process itself any more - "
          "every PC caller is a client of :8903 over the tailnet and fails in one line.")
 
-NOTES = ("MOVED to cazzy-mac at Phase B (2026-09-05; drafts\\benham-phase-b\\BUILD-BRIEF.md, "
+NOTES = ("MOVED to cazzy-mac at Phase B (2026-09-05; Projects\\Work-In-Project\\benham-bot\\private\\phase-b\\BUILD-BRIEF.md, "
          "INTENT decisions 38-48). Deployed by git clone to /Users/administrator/benham-bot, "
          "OUTSIDE the synced repo clone (codex's precedent), pinned commit in "
-         "drafts\\benham-phase-b\\HANDOFF.md. Python 3.14.7 venv. Secrets rode scp, never git: "
+         "Projects\\Work-In-Project\\benham-bot\\private\\phase-b\\HANDOFF.md. Python 3.14.7 venv. Secrets rode scp, never git: "
          "config/environ.env on the Mac holds BOT_KEY (RESET at the Developer Portal inside "
          "the cutover window - the PC's copy died with the reset, and the PC's environ.env no "
          "longer carries it: INTENT 42) + ANTHROPIC_API_KEY; control.json; exaroton_watch.json; "

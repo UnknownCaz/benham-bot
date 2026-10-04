@@ -126,3 +126,9 @@ build_out.json
 state/MOVED-*.md
 # The initiates lane proof-of-run stamp (Phase B, INTENT 41) - written by the client on the PC.
 state/initiative-heartbeat.local
+
+# Design records that moved in from the Claude folder (the Phase B build records, the
+# 2026-09-27 usage tables). They carry addresses, ids and who-used-what counts - the same
+# privacy class as the state files above. The folder exists so the records live with the
+# project they describe; nothing in it is ever committed.
+private/

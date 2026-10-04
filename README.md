@@ -122,7 +122,7 @@ recommendation): the code is deleted, `claude_agent_sdk` is needed nowhere, a `p
 plain sentence saying so, and the boot banner reads `PC access: removed`. The machine wall
 (decision 34) stays in code, refusing a capability that no longer exists - re-adding one is a
 deliberate act of deleting a rule and its test, not a config edit. The revival path, if ever
-wanted, is the PC-side relay in `drafts\benham-phase-b\DESIGN.md` §2-A.
+wanted, is the PC-side relay in `Projects\Work-In-Project\benham-bot\private\phase-b\DESIGN.md` §2-A.
 
 ## Where the bot runs - cazzy-mac, and this tree is a client (Phase B)
 
