@@ -261,7 +261,7 @@ class Ctx:
 # --- serializers: compact, JSON-safe views of discord objects ---
 
 def msg_dict(m):
-    return {
+    d = {
         "message_id": m.id,
         "ts": m.created_at.isoformat(),
         "author": str(m.author),
@@ -273,6 +273,35 @@ def msg_dict(m):
         "reactions": [{"emoji": str(r.emoji), "count": r.count} for r in m.reactions],
         "pinned": m.pinned,
         "reply_to": m.reference.message_id if m.reference else None,
+    }
+    # A poll message has empty content, so without this a read reports it as a
+    # blank line. Only present on a poll - every other message keeps its shape.
+    poll = getattr(m, "poll", None)
+    if poll is not None:
+        d["poll"] = poll_dict(poll)
+    return d
+
+
+def poll_dict(poll):
+    """A poll's readable surface: the question, each answer's votes, who leads.
+
+    `finalized` is the field that says how far to trust the numbers: Discord's
+    counts are approximate while a poll runs and exact only once it has closed
+    and been tallied. `leading` is computed from the counts rather than read
+    from the library's victor field, which is only filled in from the gateway's
+    result notice and so reads None on a message fetched later. It is a list
+    because a tie is a real outcome, and empty while nobody has voted.
+    """
+    answers = [{"text": a.text, "votes": a.vote_count} for a in poll.answers]
+    top = max((a["votes"] for a in answers), default=0)
+    return {
+        "question": poll.question,
+        "answers": answers,
+        "total_votes": poll.total_votes,
+        "leading": [a["text"] for a in answers if top and a["votes"] == top],
+        "multiple": poll.multiple,
+        "expires_at": poll.expires_at.isoformat() if poll.expires_at else None,
+        "finalized": poll.is_finalised(),
     }
 
 
@@ -1556,6 +1585,22 @@ async def _edit_message(ctx, p):
     old = m.content
     await m.edit(content=str(p["content"]))
     return {"status": "edited", "message_id": m.id, "previous_content": old}
+
+
+@action("end_poll", identity.MANAGE,
+        "End one of this bot's own polls now instead of waiting out its timer. "
+        "Discord announces the result, and a closed poll cannot be reopened.",
+        {"channel_id": {"type": "int", "required": True},
+         "message_id": {"type": "int", "required": True}},
+        outward=True)
+async def _end_poll(ctx, p):
+    m = await ctx.message(p["channel_id"], p["message_id"])
+    if getattr(m, "poll", None) is None:
+        raise ActionError(f"message {m.id} is not a poll")
+    if m.author.id != ctx.client.user.id:
+        raise ActionError("Discord only allows a bot to end its own polls")
+    poll = await m.poll.end()
+    return {"status": "ended", "message_id": m.id, "poll": poll_dict(poll)}
 
 
 @action("pin_message", identity.MANAGE, "Pin a message.",
