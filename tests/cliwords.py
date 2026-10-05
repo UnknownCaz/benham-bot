@@ -553,6 +553,10 @@ CASES = {
     "catchup-usage": ["catchup"],
     "catchup-bad-id": ["catchup", "x"],
     "read-history-usage": ["read_history", "x"],
+    # --- rehearse (2026-10-05): a new verb, so its words are pinned from birth
+    # rather than captured against a pre-Phase-B tree it never existed in.
+    "rehearse-usage": ["rehearse"],
+    "rehearse-bad-id": ["rehearse", "x", "--look"],
 }
 
 

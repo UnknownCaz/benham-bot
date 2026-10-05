@@ -38,6 +38,7 @@ COMMANDS = {
     "purge":        ("benham.cli.purge",        "bulk-delete a channel by age (previews, then --confirm-token)"),
     "catchup":      ("benham.cli.catchup",      "invisible, read-only catch-up on one channel"),
     "read_history": ("benham.cli.read_history", "invisible, read-only reader across guilds"),
+    "rehearse":     ("benham.cli.rehearse",     "what he'd read + say if @mentioned in a channel; posts nothing"),
     "ask":          ("benham.cli.ask",          "ask Tyler something and wait for his answer"),
     "initiate":     ("benham.cli.initiate",     "Claude reaching out to Tyler FIRST - the daily job's surface"),
     "outreach":     ("benham.cli.outreach",     "ask a whitelisted COLLABORATOR something (never Tyler)"),

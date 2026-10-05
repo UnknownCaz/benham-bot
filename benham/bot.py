@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 
 from benham.core import agent
 from benham.core import capabilities
+from benham.core import channelread
 from benham.core import confirm
 from benham.core import conversations
 from benham.core import exaroton_ops as exa
@@ -1044,7 +1045,8 @@ def quoted_block(obj, label, tag=None):
     return msgparts.fence(label, lines, source=getattr(obj, "author", None), tag=tag)
 
 
-async def inbound_content(message, typed, can_read_attachments=False, log=None):
+async def inbound_content(message, typed, can_read_attachments=False, log=None,
+                          room=None):
     """Everything on one inbound message that the model should see.
 
     Returns `(content, remembered, tainted, usable)`.
@@ -1070,6 +1072,11 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
     it is an owner/guest split: the owner can be told the ids that
     `read_attachments` needs, and a guest must not be handed the name of a tool
     that would refuse them anyway.
+
+    `room` is the third surface: a server mention passes where it is ("#general
+    in Some Server") and the channel's recent messages are read and added below
+    everything else - channelread.py has the why. None, the default, reads
+    nothing, so both DM surfaces are untouched by it.
 
     LAYOUT, AND WHY IT IS THIS ORDER. What the person TYPED is always the first
     block. Everything after it is either Benham's own description or fenced
@@ -1146,16 +1153,42 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
         notes.append(attachment_note(message, shown,
                                      can_read=can_read_attachments))
 
-    if not (quoted or images or notes):
+    # --- the room, on a server mention ------------------------------------
+    # Read AFTER this message's own pictures, so they keep first claim on the
+    # per-turn picture cap: what he sent outranks what the channel happened to
+    # have in it. Same nonce as everything above, so one turn still has one
+    # boundary vocabulary.
+    read = None
+    if room is not None:
+        read = await channelread.read(
+            message.channel, before=message, now=message.created_at,
+            is_owner=identity.is_owner,
+            self_id=getattr(client.user, "id", None), tag=tag,
+            image_budget=min(channelread.IMAGES, msgparts.MAX_IMAGES - len(images)),
+            log=log)
+        if read.third_party:
+            tainted = True
+        if not typed:
+            # A bare @Benham. Benham's own words on top, never the read.
+            notes.insert(0, channelread.BARE_NOTE)
+        if log:
+            log(f"inbound: read {read.count} message(s) in {room}"
+                + (f", looked at {len(read.images)} picture(s)" if read.images else "")
+                + (f" - could not read it ({read.error})" if read.error else ""))
+
+    if not (quoted or images or notes or read):
         return None, typed, False, False   # ordinary text: nothing changes
 
     text_parts = [p for p in ([typed or None] + notes + quoted) if p]
-    content = [{"type": "text", "text": "\n\n".join(text_parts)}]
+    room_parts = [channelread.turn_text(read, room, tag)] if read is not None else []
+    content = [{"type": "text", "text": "\n\n".join(text_parts + room_parts)}]
     if images:
         content.append({"type": "text",
                         "text": msgparts.image_open(tag, who, shown)})
         content += images
         content.append({"type": "text", "text": msgparts.image_close(tag)})
+    if read is not None:
+        content += channelread.image_parts(read, room, tag)
 
     remembered = "\n\n".join(text_parts)
     if shown:
@@ -1163,6 +1196,8 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None):
                        "and looked at them then. They are NOT in this history and "
                        "I cannot see them now - if I need to look again I have to "
                        "ask them to re-send, not describe them from memory.]")
+    if read is not None:
+        remembered += "\n\n" + channelread.remembered_note(read, room)
     return content, remembered, tainted, bool(quoted or images)
 
 
@@ -1494,8 +1529,14 @@ async def on_message(message):
     # to Benham without typing a caption hit this line and returned. That is the
     # single most natural way to say "look at this", and it did nothing at all.
     # An embed-only message (a bare link, a webhook card) had the same shape.
+    #
+    # And in a server, a bare @Benham is a message too (2026-10-05). In a group
+    # chat that is the whole ask - "you, in on this" - and now that a mention
+    # reads the room first there is something to answer it with. Only owner
+    # mentions get here, and a server off agent_guilds is still refused below
+    # before anything is read.
     if not (text or message.attachments or message.embeds or message.stickers
-            or message.message_snapshots or message.reference):
+            or message.message_snapshots or message.reference or not is_dm):
         return
 
     # Confirmation is checked BEFORE the agent, and resolved without it. A pending
@@ -1679,12 +1720,18 @@ async def on_message(message):
     # always applied; inlining only moves it to where the content arrives.
     # Consequences are real and intended: outward actions need his approval -
     # he looks, then authorises the action from a fresh, clean message.
+    #
+    # A server mention also reads the room (channelread.py): the channel's
+    # recent messages, fenced below his words, fresh every time and never
+    # remembered. Placed after may_engage_agent on purpose - a server that is
+    # not on agent_guilds has nothing read, as well as nothing said.
+    where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     content, text, tainted, _usable = await inbound_content(
-        message, text, can_read_attachments=True, log=log)
+        message, text, can_read_attachments=True, log=log,
+        room=None if is_dm else where)
     if tainted:
         call_ctx = call_ctx.with_taint(True)
 
-    where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
     key = f"dm:{message.author.id}" if is_dm else f"ch:{message.channel.id}"
     await react(message, "👀")
     try:
@@ -1871,14 +1918,60 @@ async def tick_loopclose():
             f"{e.get('author')} ({e.get('author_id')})")
 
 
+async def rehearse(channel, req):
+    """`benham.py rehearse`: what a mention in this channel would put in front of
+    the model, and - unless `look` - what the model would say to it.
+
+    The test Tyler thought could not exist (2026-10-05: "we can't really put him
+    in a fake environment with messages and stuff can we?"). It runs against the
+    REAL channel: the same read a mention makes, handed to the same prompt, the
+    same memory for that channel. What it leaves out is every consequence -
+    nothing is posted, nothing is remembered, nothing is parked, and the model
+    is shown its tools under tool_choice "none", so it can see them and cannot
+    call one.
+
+    Deliberately NOT gated on agent_guilds. That list stops a server from
+    getting answers it was never meant to get; a rehearsal answers nobody, and
+    rehearsing a server BEFORE it goes on the list is the point of it.
+
+    Outside the capability registry on purpose, like `history`: a registered
+    action is a tool the model could call, and the model rehearsing itself is
+    not a thing anyone asked for.
+    """
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        raise ValueError("rehearse reads a server channel - a DM has no room to read")
+    typed = str(req.get("text") or "").strip()
+    where = f"#{channel} in {guild.name}"
+    tag = msgparts.new_tag()
+    read = await channelread.read(
+        channel, before=None, now=datetime.now(timezone.utc),
+        is_owner=identity.is_owner, self_id=getattr(client.user, "id", None),
+        tag=tag, image_budget=channelread.IMAGES, log=log)
+    seen = "\n\n".join([typed or channelread.BARE_NOTE,
+                        channelread.turn_text(read, where, tag, before_his=False)])
+    out = {"status": "rehearsed", "channel": str(channel), "where": where,
+           "read": read.count, "dropped": read.dropped, "pictures": read.shown,
+           "skipped": read.skipped, "tainted": read.third_party,
+           "read_error": read.error, "seen": seen}
+    if req.get("look"):
+        return out
+    content = ([{"type": "text", "text": seen}]
+               + channelread.image_parts(read, where, tag))
+    reply, usage = await agent.rehearse(log, content, where=where,
+                                        conversation_key=f"ch:{channel.id}")
+    out.update({"reply": reply, "usage": usage})
+    return out
+
+
 # Legacy outbox verbs retired 2026-08-26 because they bypassed every tier-3 gate.
 # Mapped to their registry twins so the refusal can name the replacement rather
 # than only saying no - see the guard in poll_outbox.
 _RETIRED_UNGATED = {"purge": "purge_messages", "delete": "delete_message"}
 # Every action poll_outbox handles OUTSIDE the registry. Anything else that is not a
 # registry action is refused by name rather than treated as a send.
-_LEGACY_ACTIONS = {"send", "dm", "edit", "history", "listen", "stop_listen",
-                   "speak", *_RETIRED_UNGATED}
+_LEGACY_ACTIONS = {"send", "dm", "edit", "history", "rehearse", "listen",
+                   "stop_listen", "speak", *_RETIRED_UNGATED}
 
 
 @tasks.loop(seconds=2)
@@ -2081,6 +2174,17 @@ async def poll_outbox():
                 action_done = True
                 _finish(path, fname, SENT, result)
                 log(f"Fetched {len(msgs)} msg(s) from #{getattr(channel, 'name', channel_id)}")
+            elif action == "rehearse":
+                # Inline, like every verb here: the poller waits for the model
+                # call (seconds), which holds up anything queued behind it for
+                # that long. A rare owner verb; not worth a second queue.
+                result.update(await rehearse(channel, req))
+                result["request"] = req
+                action_done = True
+                _finish(path, fname, SENT, result)
+                log(f"Rehearsed a mention in #{getattr(channel, 'name', channel_id)}: "
+                    f"read {result.get('read')} message(s)"
+                    + ("" if req.get("look") else ", model asked; nothing posted"))
             else:
                 content = str(req["content"])
                 sent = await channel.send(content)

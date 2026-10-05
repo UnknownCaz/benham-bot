@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "rehearse"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python -u benham.py rehearse <channel_id> [\"message\"] [--look]\n"
+}
