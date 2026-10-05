@@ -41,6 +41,7 @@ TYLER = 273967061619965952
 DOOM = 777000777000777000
 
 _fails = []
+_sends = []     # the kwargs of every DM the fake channel was handed
 
 
 def check(label, got, want):
@@ -72,6 +73,7 @@ def deliver(cid):
 
     class _Chan:
         async def send(self, *a, **k):
+            _sends.append(k)
             return _Msg()
 
     class _User:
@@ -171,8 +173,20 @@ def main():
         check("it is not in the numbered queue Tyler answers by slot",
               [c["id"] for c in C.queue_for(TYLER)], [normal["id"]])
         check("...so it has no slot at all", C.slot_of(q["id"]), None)
+
+        section("It buzzes his phone (Caz, 2026-10-05)")
+        # Reversed from the 2026-08-20 "QUIET, always": a silent DM was one he
+        # never saw. Checked through the real handler, because the tier in
+        # notify.py means nothing if the send does not read it.
+        del _sends[:]
+        check("the real capability delivers it", deliver(q["id"]), "asked")
+        check("...as a normal DM, not a silent one",
+              [k.get("silent") for k in _sends], [False])
         q = C.mark_delivered(q["id"])
-        late = now + timedelta(days=30)
+        # Thirty days past the REAL clock, which is what stamped these records.
+        # Measured from the fixed date above it went red by itself on 2026-09-19,
+        # once "30 days later" fell before the moment the question was opened.
+        late = datetime.now(timezone.utc) + timedelta(days=30)
         check("...and it is never due for a nudge or a bank, however long it sits",
               [cid for (cid, _w) in [(c["id"], w) for c, w in C.due(now=late)]],
               [normal["id"]])

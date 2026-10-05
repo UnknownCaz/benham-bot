@@ -911,7 +911,7 @@ about Tyler, it learned because he raised it first.
 
 **Shape.** A scheduled job (`claude-initiates-daily`, 18:23 local) wakes, reads real state, and
 almost always decides there is nothing worth asking. When there is, one question goes out as a
-silent DM. It reuses the whole conversation primitive rather than inventing a channel:
+DM (silent until 2026-10-05; it buzzes now, see the `curious` row). It reuses the whole conversation primitive rather than inventing a channel:
 
 | Piece | What it is |
 |---|---|
@@ -919,7 +919,7 @@ silent DM. It reuses the whole conversation primitive rather than inventing a ch
 | `initiative.py` | Threads (open loops any session can write down) and runs (what every wake-up decided, and why) |
 | `policy.authorize_unprompted` | The gate. Eight rules, and the numbers that ARE the interruption budget |
 | `deliver_unprompted` | The only outward action in the lane. A conversation id in; recipient and words off the record — the same bounded shape as `advance_conversation`, but reachable from **no human origin at all** |
-| `notify` kind `curious` | QUIET, always. Something nobody asked for has no business waking his phone |
+| `notify` kind `curious` | BUZZ since 2026-10-05, Tyler's reversal ("it should buzz my phone"): built QUIET on 2026-08-20, and sent silently the questions were ones he never saw. The budget is unchanged and is not here - `policy.authorize_unprompted` (48h floor, one unanswered at a time) plus the job's roughly-weekly rhythm |
 
 **Decision 29 is the load-bearing one: silence is the product.** A job that must produce a
 question will manufacture one, and he mutes it inside a week. So the rules are written to make

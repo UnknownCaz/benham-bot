@@ -10,6 +10,7 @@ equally, including Doom filing an idea at 23:51.
 Tyler's call, asked directly: two tiers.
 
   BUZZ   blocked-needs-your-call, something-broke.   Wake the phone.
+         (and, since 2026-10-05, a question Claude chose to ask - see KINDS)
   QUIET  task-finished, collaborator-answered.       There when he looks.
 
 The mechanism is Discord's own `silent=True`, not an invention: a silent message
@@ -37,15 +38,19 @@ KINDS = {
     # --- wake the phone ---------------------------------------------------
     "blocked":  (BUZZ,  "work stopped and cannot continue without Tyler"),
     "broke":    (BUZZ,  "something failed - a server, a sync, a scheduled task"),
+    # Added 2026-08-20 with the initiative lane, and built QUIET: Tyler had said
+    # "notifications are not the goal", and this is the one kind of message Claude
+    # sends WITHOUT being asked. He reversed that himself on 2026-10-05 - "it
+    # should buzz my phone" - because a silent DM turned out to be one he never
+    # saw, and a question nobody reads is not politeness, it is a question that
+    # was never asked. The interruption budget did not move and does not live
+    # here: policy.authorize_unprompted still holds a 48-hour floor and one
+    # unanswered question at a time, and the task prompt aims for roughly one a
+    # week. This row only decides that the few that do get through are felt.
+    "curious":  (BUZZ,  "Claude chose to ask Tyler something, unprompted"),
     # --- there when he looks ----------------------------------------------
     "finished": (QUIET, "a long task he asked for is done"),
     "answered": (QUIET, "a collaborator replied, filed an idea, or reported a bug"),
-    # Added 2026-08-20 with the initiative lane. QUIET is not a tuning choice
-    # here, it is the definition: this is the one kind of message Claude sends
-    # WITHOUT being asked, and something nobody requested has no business
-    # vibrating his phone. It waits in the channel until he looks, which is
-    # exactly the standing a question Claude chose to ask should have.
-    "curious": (QUIET, "Claude chose to ask Tyler something, unprompted"),
 }
 
 
