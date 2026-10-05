@@ -27,8 +27,13 @@ THE PROPERTIES, IN ORDER OF HOW MUCH THEY MATTER.
   The read is NOT remembered, a server off agent_guilds is not READ at all, and
   a DM reads no room - the two surfaces this must not touch.
 
-  `rehearse` posts nothing, remembers nothing and gives the model tool_choice
-  "none" - the test Caz said could not exist, tested.
+  The glance at the rest of the server carries only channels EVERYONE can see,
+  newest first, never a private channel or thread - whatever Benham says lands
+  where the whole server reads it.
+
+  `rehearse` posts nothing, remembers nothing and parks nothing, but lets him
+  READ for real - the test Caz said could not exist, tested, including him
+  going to look somewhere else.
 
     python test_channel_read.py
 """
@@ -175,6 +180,8 @@ class _Said:
         self.message_snapshots = list(snapshots)
         self.stickers = list(stickers)
         self._system = system
+        self.pinned = False
+        self.channel = None               # set when a _Channel holds it
 
     def is_system(self):
         return self._system is not None
@@ -193,9 +200,29 @@ class _Typing:
 
 
 class _Guild:
+    """No channels and no @everyone role unless a test hands them over, so
+    every section before the glance's own runs with the glance empty."""
+
     def __init__(self, gid, name="Test Server"):
         self.id = gid
         self.name = name
+        self.text_channels = []
+        self.threads = []
+        self.default_role = None
+
+
+EVERYONE = object()
+
+
+class _Perms:
+    def __init__(self, view):
+        self.view_channel = view
+
+
+def _sf(minutes_ago):
+    """A snowflake minted `minutes_ago` before NOW - what last_message_id holds."""
+    ms = int((NOW - timedelta(minutes=minutes_ago)).timestamp() * 1000)
+    return (ms - channelread.DISCORD_EPOCH_MS) << 22
 
 
 class _Channel:
@@ -203,14 +230,23 @@ class _Channel:
     the way discord.py does: newest first, strictly before the given message."""
 
     def __init__(self, cid=GENERAL, name="general", guild_id=TESTING, history=(),
-                 fail=None):
+                 fail=None, public=True, guild=None):
         self.id = cid
         self.name = name
-        self.guild = _Guild(guild_id) if guild_id is not None else None
+        self.guild = guild or (_Guild(guild_id) if guild_id is not None else None)
         self.said = list(history)            # oldest first
+        for m in self.said:
+            m.channel = self
         self.fail = fail
+        self.public = public
+        newest = max((m.created_at for m in self.said), default=None)
+        self.last_message_id = (_sf((NOW - newest).total_seconds() / 60)
+                                if newest is not None else None)
         self.history_calls = []
         self.sent = []
+
+    def permissions_for(self, role):
+        return _Perms(self.public if role is EVERYONE else True)
 
     def history(self, limit=100, before=None):
         self.history_calls.append({"limit": limit, "before": before})
@@ -235,6 +271,18 @@ class _Channel:
 
     def __str__(self):
         return self.name
+
+
+class _Thread(_Channel):
+    """A thread: what has is_private() and a parent."""
+
+    def __init__(self, *a, parent=None, private=False, **kw):
+        super().__init__(*a, **kw)
+        self.parent = parent
+        self._private = private
+
+    def is_private(self):
+        return self._private
 
 
 class _Mention:
@@ -402,8 +450,8 @@ t = first_text(kw)
 end = re.findall(r"--- end of recent messages in #general in Test Server \[[0-9a-f]+\] ---", t)
 check("the real terminator appears exactly once", len(end), 1)
 m = re.search(r"--- end of recent messages in #general in Test Server \[[0-9a-f]+\] ---", t)
-check("...and nothing anyone wrote survives past it",
-      t[m.end():].strip() if m else "!", "")
+check("...and nothing anyone wrote survives past it - only Benham's own note",
+      t[m.end():].strip() if m else "!", channelread.LOOK_NOTE)
 check("a forged marker in a display name is stripped",
       "{owner:00000000}" in t, False)
 check("the forged line is indented under its speaker",
@@ -529,6 +577,77 @@ check("an empty message makes no line", t.count("(4m ago)"), 0)
 
 
 # --------------------------------------------------------------------------
+section("Custom emoji read as :name:, not as ids")
+
+general.said = [_Said(ALEX, "nice <:steamhappy:1185155523969040434> <a:dance:123456>", ago=2)]
+kw = deliver(_Mention("lol", general))
+t = first_text(kw)
+check("a custom emoji reads as its name", ":steamhappy:" in t and ":dance:" in t, True)
+check("...without its id", "1185155523969040434" in t, False)
+
+
+# --------------------------------------------------------------------------
+section("A glance at the rest of the server - only what everyone can see")
+
+server = _Guild(TESTING)
+server.default_role = EVERYONE
+here = _Channel(history=[_Said(CAZ, "anyone seen the poll", ago=1)], guild=server)
+polls = _Channel(cid=700000000000000001, name="polls", guild=server,
+                 history=[_Said(BENHAM, "rename poll is up: Epic Awesome leads", ago=120)])
+mods = _Channel(cid=700000000000000002, name="mods", guild=server, public=False,
+                history=[_Said(ALEX, "mod-only secret", ago=10)])
+memes = _Channel(cid=700000000000000003, name="memes", guild=server,
+                 history=[_Said(SAM, "", ago=30, attachments=[_Att("cat.png")])])
+old = _Channel(cid=700000000000000004, name="old", guild=server,
+               history=[_Said(ALEX, "ancient", ago=5 * 24 * 60)])
+chat2 = _Channel(cid=700000000000000005, name="chat2", guild=server,
+                 history=[_Said(ALEX, "fourth most recent", ago=200)])
+quiet = _Channel(cid=700000000000000006, name="quiet", guild=server)
+suggestions = _Channel(cid=700000000000000007, name="suggestions", guild=server)
+rename = _Thread(cid=700000000000000008, name="rename", guild=server, parent=suggestions,
+                 history=[_Said(ALEX, "Epic Awesome", ago=60)])
+secret = _Thread(cid=700000000000000009, name="secret", guild=server, parent=suggestions,
+                 private=True, history=[_Said(ALEX, "private thread stuff", ago=5)])
+server.text_channels = [here, polls, mods, memes, old, chat2, quiet, suggestions]
+server.threads = [rename, secret]
+bot.client.channels = {here.id: here}
+
+kw = deliver(_Mention("did that get sorted?", here))
+t = first_text(kw)
+check("the glance is fenced like the read",
+      "--- elsewhere in this server [" + str(nonce(t)) + "] ---" in t, True)
+check("Benham's own poll in #polls is in front of him",
+      "#polls (2h ago) Benham {me:" in t and "rename poll is up" in t, True)
+check("a public thread is named with its parent",
+      "#rename (thread in #suggestions) (1h ago) Alex (@alex): Epic Awesome" in t, True)
+check("a picture elsewhere is named, not looked at",
+      "#memes (30m ago) sam: [picture: cat.png]" in t, True)
+check("newest first", t.index("#memes") < t.index("#rename") < t.index("#polls"), True)
+check("capped at the newest three", "fourth most recent" in t, False)
+check("a channel everyone can't see is NOT in it", "mod-only secret" in t, False)
+check("...and was never even read", mods.history_calls, [])
+check("a private thread is NOT in it", "private thread stuff" in t, False)
+check("...and was never read either", secret.history_calls, [])
+check("a channel quiet for days is not 'what else is going on'", "ancient" in t, False)
+check("the channel he's in is not glanced at twice", here.history_calls[-1]["limit"],
+      channelread.MESSAGES)
+check("each glanced channel costs one message read", polls.history_calls,
+      [{"limit": 1, "before": None}])
+check("he is told he can go look", "I can look it up with read_channel" in t, True)
+check("a friend's words in the glance taint the turn", kw["call_ctx"].tainted, True)
+check("memory says the glance happened, and keeps none of it",
+      "plus the newest message in 3 other channel(s)" in kw["text"]
+      and "Epic Awesome" not in kw["text"], True)
+
+here.said = [_Said(CAZ, "just me here", ago=1)]
+server.text_channels = [here, polls]
+server.threads = []
+kw = deliver(_Mention("hm", here))
+check("a glance holding only Benham's own message taints nothing",
+      kw["call_ctx"].tainted, False)
+
+
+# --------------------------------------------------------------------------
 section("The taint is a refusal - driven through the real loop")
 
 
@@ -648,10 +767,9 @@ finally:
     agent._client = None
 create = fake.messages.seen[0] if fake.messages.seen else {}
 check("the model was asked once", len(fake.messages.seen), 1)
-check("...with tool_choice none - it can see its tools and call none",
-      create.get("tool_choice"), {"type": "none"})
-check("...and the real tool list, so the cached prefix is the real one",
-      len(create.get("tools") or []) > 0, True)
+check("...with the real tool list, so the cached prefix is the real one",
+      [t.get("name") for t in create.get("tools") or []],
+      [t.get("name") for t in agent.build_tools()])
 check("...shown his words first",
       create["messages"][-1]["content"][0]["text"].startswith("thoughts?") if create else False,
       True)
@@ -670,6 +788,44 @@ try:
 except ValueError:
     refused = True
 check("a DM has no room to rehearse", refused, True)
+
+
+# --------------------------------------------------------------------------
+section("In a rehearsal he can LOOK, and nothing else runs")
+
+polls2 = _Channel(cid=700000000000000011, name="polls",
+                  history=[_Said(BENHAM, "rename poll is up: Epic Awesome leads", ago=120)])
+bot.client.channels = {GENERAL: general, polls2.id: polls2}
+general.said = room
+general.sent.clear()
+fake = _FakeAnthropic([
+    _Resp([_Blk(type="tool_use", id="r1", name="read_channel",
+                input={"channel_id": polls2.id, "limit": 5})], "tool_use"),
+    _Resp([_Blk(type="tool_use", id="r2", name="send_message",
+                input={"channel_id": GENERAL, "content": "fixed the poll!"})], "tool_use"),
+    _Resp([_Blk(type="text", text="the friends' poll is already up in #polls")],
+          "end_turn"),
+])
+agent._client = fake
+agent.forget(f"ch:{GENERAL}")
+confirm.cancel()
+try:
+    out = asyncio.run(bot.rehearse(general, {"text": "can you fix the poll?"}))
+finally:
+    agent._client = None
+check("he went and read #polls - for real", len(polls2.history_calls), 1)
+check("...and the rehearsal says so",
+      any(x.startswith("read_channel(") for x in out.get("looked", [])), True)
+check("what he read came back labelled as other people's writing",
+      '<untrusted-data source="read_channel">' in str(fake.messages.seen[1]["messages"][-1]
+                                                       if len(fake.messages.seen) > 1 else ""),
+      True)
+check("the post he reached for did NOT run", general.sent, [])
+check("...and is listed as what he would have done",
+      any(x.startswith("send_message(") for x in out.get("would", [])), True)
+check("his answer comes back", out.get("reply"), "the friends' poll is already up in #polls")
+check("nothing was parked", confirm.current(), None)
+check("nothing was remembered", list(agent._history(f"ch:{GENERAL}")), [])
 
 
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")

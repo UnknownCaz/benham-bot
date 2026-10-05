@@ -2,9 +2,10 @@
 
 Runs against the REAL channel through the running bot: the same read a mention
 makes (channelread.py), the same prompt, the same memory for that channel. Then
-it prints what came back. Nothing is posted, nothing is remembered, and the
-model sees its tools under tool_choice "none", so it cannot call one. Works on a
-server that is not on agent_guilds yet - rehearsing one before it goes on the
+it prints what came back. Nothing is posted, nothing is remembered, nothing is
+parked. He may LOOK - read-only tools run for real, and what he read is listed -
+while anything else he reaches for is listed as "would have", not run. Works on
+a server that is not on agent_guilds yet - rehearsing one before it goes on the
 list is the point.
 
 Usage:
@@ -12,8 +13,8 @@ Usage:
     python -u benham.py rehearse <channel_id>            # a bare @Benham - "jump in"
     python -u benham.py rehearse <channel_id> --look     # the read only, no model call
 
-A rehearsal with a message costs one model call (a few cents); --look costs
-nothing. Like catchup, this prints a channel's recent messages - keep
+A rehearsal costs a model call, or a few if he looks things up (cents);
+--look costs nothing. Like catchup, this prints a channel's recent messages - keep
 friend-server reads light.
 """
 
@@ -54,6 +55,8 @@ def main(argv):
         head += f", {result['dropped']} older left out for length"
     if pics:
         head += f", {len(pics)} picture(s) looked at"
+    if result.get("elsewhere"):
+        head += f", newest message in {result['elsewhere']} other channel(s)"
     print(head + ") ---")
     print(result.get("seen") or "")
     for p in pics:
@@ -63,6 +66,10 @@ def main(argv):
     print("(actions on this turn would wait for your tap)" if result.get("tainted")
           else "(nothing here was written by anyone else - actions would not need a tap)")
     if not look:
+        for x in result.get("looked") or []:
+            print(f"  [he looked: {x}]")
+        for x in result.get("would") or []:
+            print(f"  [he would have done (NOT run): {x}]")
         print("--- what Benham would say ---")
         print(result.get("reply") or "(nothing - he would stay quiet)")
         usage = result.get("usage") or {}
