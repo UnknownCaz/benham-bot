@@ -358,7 +358,10 @@ it deliberately instead.
                 f"He is being waited on for an answer to `{cid}`:\n> {q}\n"
                 f"If his message answers it, call `answer_conversation` with id "
                 f"`{cid}` and his words, and then SAY in your reply that you took it "
-                f"as the answer. If it is unrelated, ignore this section entirely and "
+                f"as the answer. Saying you took it records NOTHING - only the tool "
+                f"call does, and earlier replies in this chat that announce one do "
+                f"not show the call that went with them. "
+                f"If it is unrelated, ignore this section entirely and "
                 f"answer him normally - do not mention the open question, and do not "
                 f"call the tool. If you genuinely cannot tell, ask him which he meant.")
 
@@ -484,6 +487,10 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # and handed the gate a context claiming to be clean. Two independent
     # guarantees now: this seed, and with_taint being monotonic.
     tainted = bool(call_ctx is not None and call_ctx.tainted)
+    # Whether the model reached for answer_conversation at all this turn, success
+    # or refusal - either way a tool result told it the truth. Read after the
+    # loop by the answer-claim check.
+    tried_answer = False
 
     for round_no in range(MAX_TOOL_ROUNDS):
         resp = api.messages.create(
@@ -536,6 +543,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         for call in tool_calls:
             act = capabilities.REGISTRY.get(call.name)
             params = dict(call.input or {})
+            if call.name == "answer_conversation":
+                tried_answer = True
 
             # No policy logic here any more. capabilities.run asks policy,
             # and a call that needs Tyler's approval comes back as a preview with
@@ -641,10 +650,117 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             "tell me to keep going if that wasn't the whole job.)")
 
     reply = "\n\n".join(p.strip() for p in reply_parts if p and p.strip())
+
+    # --- an announced answer must have the call behind it ---------------------
+    # See _answer_claim_ids. Skipped when a reply already bound in code (naming
+    # the id is simply true then), when the model did reach for the tool (a tool
+    # result already told it what happened), and when the loop ran out of rounds
+    # (the turn list ends on tool results, and that turn has its own notice).
+    named = ([] if (already_bound or tried_answer
+                    or turns[-1].get("role") != "assistant")
+             else _answer_claim_ids(reply, conversation, queue, recent))
+    if named:
+        log(f"agent: reply named {', '.join(named)} with no answer_conversation "
+            f"call this turn - asking once whether it meant it")
+        turns.append({"role": "user", "content": _ANSWER_CHECK.format(
+            ids=", ".join(f"`{i}`" for i in named))})
+        resp = api.messages.create(
+            model=MODEL, max_tokens=MAX_TOKENS, system=system,
+            messages=turns, tools=tools,
+        )
+        _log_usage(log, resp, "answer-check")
+        recorded, refused = [], []
+        # ONLY answer_conversation, and only for an id that was in front of it.
+        # This round exists to finish one specific sentence; anything else the
+        # model reaches for here was not asked for and is not run.
+        for call in [b for b in resp.content if b.type == "tool_use"
+                     and b.name == "answer_conversation"]:
+            params = dict(call.input or {})
+            if str(params.get("id")) not in named:
+                continue
+            try:
+                await capabilities.run(
+                    client, log, call.name, params, actor_id=actor_id, force=False,
+                    call_ctx=call_ctx.with_taint(tainted) if call_ctx else None)
+                recorded.append(str(params["id"]))
+            except capabilities.ActionError as e:
+                refused.append(f"{params.get('id')}: {e}")
+            except Exception as e:  # noqa: BLE001 - surface, don't crash the bot
+                log(f"agent tool {call.name} crashed: {type(e).__name__}: {e}")
+                refused.append(f"{params.get('id')}: {type(e).__name__}")
+        declined = _response_text(resp).strip().upper().startswith(_ANSWER_CHECK_NO)
+        if recorded:
+            log(f"agent: answer-check recorded {', '.join(recorded)}")
+        missing = [i for i in named if i not in recorded]
+        if refused or (missing and not recorded and not declined):
+            log(f"agent: answer-check left {', '.join(missing)} unrecorded"
+                + (f" ({'; '.join(refused)})" if refused else ""))
+            reply += ("\n\n⚠️ Correction (automatic check): I named "
+                      + ", ".join(missing) + " above, but nothing was recorded "
+                      "against " + ("it" if len(missing) == 1 else "them")
+                      + (f" ({'; '.join(refused)})" if refused else "")
+                      + ". If you meant that as your answer, reply directly to the "
+                      "question's message - a Discord reply binds without me.")
+
     reply = _verify_saved_claims(reply, log)
     reply = _verify_confirmation_claims(reply, log)
     _remember(conversation_key, text, reply)
     return (reply or None), pending
+
+
+# What the model is told when its reply names a waiting question and no
+# answer_conversation call was made. Sent as a user turn because the API needs
+# one after an assistant turn; it lives only in this call's turn list and is
+# never remembered (_remember stores his text and the reply, nothing else).
+_ANSWER_CHECK_NO = "NOT AN ANSWER"
+_ANSWER_CHECK = (
+    "[automatic check from the harness - Tyler did not write this and will not "
+    "see your reply to it]\n"
+    "Your reply above names {ids}, but you did not call `answer_conversation` "
+    "this turn, so NOTHING is recorded and the question is still open. Your "
+    "reply has not been changed and cannot be now.\n"
+    "- If you took his message as the answer, call `answer_conversation` now "
+    "with that id and his words exactly as he typed them.\n"
+    "- If you did not mean it as his answer, call nothing and reply with "
+    "exactly: " + _ANSWER_CHECK_NO)
+
+
+def _answer_claim_ids(reply, conversation, queue, recent):
+    """Ids of waiting questions the reply NAMES - the trigger for the answer check.
+
+    2026-10-05. An unprompted question buzzed his phone; he typed back two and a
+    half minutes later; the reply opened "That's the answer to <id> - taking it
+    as such" and no tool was called. One round, no action line. The record
+    stayed open and the lane read an answered question as an ignored one. On
+    2026-09-15 the same sentence was said about a queued ask - "Answered and
+    logged" - with nothing behind it either. INTENT.md section 3.3 through the
+    judged-binding route: the model kept the SAY half of "judges and tells me"
+    and dropped the DO half.
+
+    Deliberately the WEAKEST possible prose match - the reply contains the id of
+    a question that was in front of the model this turn - because of what it
+    buys. It does not bind anything and it does not brand anything a lie. It
+    buys one more round in which the model is told nothing was recorded and
+    either makes the call or says it did not mean it. So the judgement stays
+    the model's (bound_by="judged", the tool's own path, policy and all) and a
+    false positive costs one API call. That is the asymmetry section 3.3 says
+    to look for before reaching for a checker; the confirmation check had
+    "redundant when true", this one has "the model gets to answer for itself".
+
+    The prompt tells it not to mention an open question it is not answering, so
+    naming one at all is already most of the way to a claim.
+    """
+    if not reply:
+        return []
+    seen, out = set(), []
+    for c in [conversation] + list(queue or []) + list(recent or []):
+        cid = str((c or {}).get("id") or "")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        if re.search(rf"(?<!\w){re.escape(cid)}(?!\w)", reply, re.I):
+            out.append(cid)
+    return out
 
 
 # A sentence claiming a confirmation is sitting in front of Tyler RIGHT NOW. Both
