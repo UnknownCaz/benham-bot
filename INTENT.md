@@ -250,6 +250,25 @@ independently deliver — a prose check has a real false-positive cost and is th
 **None of it makes the sentence impossible**, and no commit here claims otherwise. Three of these
 now exist; expect a fourth through whichever store gets built next.
 
+**The fourth, 2026-10-05 - and it came through an OLD store, not a new one.** An unprompted
+question buzzed his phone, he typed back in under three minutes, and the reply opened "That's the
+answer to it - taking it as such". One round, no `answer_conversation` call. The question WAS in
+the prompt and the model DID judge it; it kept the *say* half of item 12's "judges and tells me"
+and dropped the *do* half. The same sentence had been said about a queued ask on 2026-09-15
+("Answered and logged"), and that exchange was still in the turn history - which stores text
+only, so history itself shows announcements with no call beside them.
+
+The asymmetry this time: the claim names a question the harness can identify, so the check
+(`agent._answer_claim_ids`) does not have to decide whether the sentence is true. It asks the
+model ONCE more - make the call, or say it was not an answer - and corrects the reply only if
+nothing lands. The prose match never binds anything by itself.
+
+**SETTLED 2026-10-05 (Tyler): code does not bind a plain DM.** Offered a rule that would bind his
+next typed message to a just-delivered lane question with no model involved, he kept item 12 as
+it stands: a Discord reply binds in code, anything else the model judges and announces. The
+reason is the one item 12 already gives - an unrelated message sent right after a buzz would be
+swallowed as an answer.
+
 ### 3.4 The guest lane is split on the wrong seam
 
 The split is owner-vs-guest — which is why there are three agent loops (`agent.py` 652,
