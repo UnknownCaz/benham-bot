@@ -1926,13 +1926,16 @@ async def rehearse(channel, req):
     in a fake environment with messages and stuff can we?"). It runs against the
     REAL channel: the same read a mention makes, handed to the same prompt, the
     same memory for that channel. What it leaves out is every consequence -
-    nothing is posted, nothing is remembered, nothing is parked, and the model
-    is shown its tools under tool_choice "none", so it can see them and cannot
-    call one.
+    nothing is posted, nothing is remembered, nothing is parked. He may read
+    (agent.rehearse runs READ-tier calls for real, so a rehearsal shows him
+    going to look); anything else he reaches for is reported, not run.
 
     Deliberately NOT gated on agent_guilds. That list stops a server from
     getting answers it was never meant to get; a rehearsal answers nobody, and
-    rehearsing a server BEFORE it goes on the list is the point of it.
+    rehearsing a server BEFORE it goes on the list is the point of it. So its
+    reads run as the CLI they came from (CallContext.local), not as a mention -
+    rule_agent_guild would refuse a mention's reads in an off-list server, and
+    a rehearsal that cannot look there could not rehearse looking there.
 
     Outside the capability registry on purpose, like `history`: a registered
     action is a tool the model could call, and the model rehearsing itself is
@@ -1952,15 +1955,17 @@ async def rehearse(channel, req):
                         channelread.turn_text(read, where, tag, before_his=False)])
     out = {"status": "rehearsed", "channel": str(channel), "where": where,
            "read": read.count, "dropped": read.dropped, "pictures": read.shown,
-           "skipped": read.skipped, "tainted": read.third_party,
-           "read_error": read.error, "seen": seen}
+           "skipped": read.skipped, "elsewhere": len(read.elsewhere),
+           "tainted": read.third_party, "read_error": read.error, "seen": seen}
     if req.get("look"):
         return out
     content = ([{"type": "text", "text": seen}]
                + channelread.image_parts(read, where, tag))
-    reply, usage = await agent.rehearse(log, content, where=where,
-                                        conversation_key=f"ch:{channel.id}")
-    out.update({"reply": reply, "usage": usage})
+    owner = next(iter(sorted(identity.OWNER_IDS)), None)
+    reply, usage, looked, would = await agent.rehearse(
+        client, log, content, where=where, conversation_key=f"ch:{channel.id}",
+        call_ctx=policy.CallContext.local(owner).with_taint(True), actor_id=owner)
+    out.update({"reply": reply, "usage": usage, "looked": looked, "would": would})
     return out
 
 
