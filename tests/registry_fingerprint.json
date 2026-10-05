@@ -271,6 +271,19 @@
     "taints": true,
     "tier": 2
   },
+  "end_poll": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "file_issue": {
     "always_confirm": false,
     "blocked_when_tainted": false,

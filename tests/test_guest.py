@@ -102,7 +102,7 @@ check("every registered capability denies a guest", reachable, [])
 # because this file's enable_guests() grants nothing in guest.capabilities -
 # the config half of the grant is missing, which is its own denial
 # (test_guest_grants.py takes that machinery apart properly).
-check("...and that is all 66 of them", len(capabilities.REGISTRY), 66)
+check("...and that is all 67 of them", len(capabilities.REGISTRY), 67)
 
 # Both denials are asserted separately: either alone would secure this, and the
 # point of having two is that a future edit to one is survivable. Since Stage 2
