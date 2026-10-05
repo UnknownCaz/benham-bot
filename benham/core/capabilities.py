@@ -1374,6 +1374,53 @@ async def _send_embed(ctx, p):
             "jump_url": sent.jump_url}
 
 
+# Discord's own limits, checked here so a refusal names the offending part
+# instead of arriving as a bare 400 from the API.
+POLL_MAX_QUESTION_CHARS = 300
+POLL_MAX_ANSWERS = 10
+POLL_MAX_ANSWER_CHARS = 55
+POLL_MAX_HOURS = 32 * 24
+
+
+@action("send_poll", identity.SPEAK,
+        "Post a native Discord poll to a channel. It closes itself when the timer "
+        "runs out and Discord announces the result.",
+        {"channel_id": {"type": "int", "required": True},
+         "question": {"type": "str", "required": True},
+         "answers": {"type": "list", "required": True,
+                     "desc": "2-10 answers: plain strings, or {text, emoji}"},
+         "hours": {"type": "int", "desc": "How long it stays open, 1-768 (default 24)"},
+         "multiple": {"type": "bool", "desc": "Let people pick more than one answer"}},
+        outward=True, posts=True)
+async def _send_poll(ctx, p):
+    question = str(p["question"]).strip()
+    if not 1 <= len(question) <= POLL_MAX_QUESTION_CHARS:
+        raise ActionError(f"a poll question needs 1-{POLL_MAX_QUESTION_CHARS} "
+                          f"characters, got {len(question)}")
+    answers = []
+    for a in p["answers"]:
+        text, emoji = (a.get("text"), a.get("emoji")) if isinstance(a, dict) else (a, None)
+        text = str(text or "").strip()
+        if not 1 <= len(text) <= POLL_MAX_ANSWER_CHARS:
+            raise ActionError(f"each poll answer needs 1-{POLL_MAX_ANSWER_CHARS} "
+                              f"characters, got {len(text)}: {text!r}")
+        answers.append((text, emoji or None))
+    if not 2 <= len(answers) <= POLL_MAX_ANSWERS:
+        raise ActionError(f"a poll needs 2-{POLL_MAX_ANSWERS} answers, got {len(answers)}")
+    hours = p.get("hours", 24)
+    if not 1 <= hours <= POLL_MAX_HOURS:
+        raise ActionError(f"hours must be 1-{POLL_MAX_HOURS}, got {hours}")
+    ch = await ctx.channel(p["channel_id"])
+    poll = discord.Poll(question=question, duration=timedelta(hours=hours),
+                        multiple=bool(p.get("multiple")))
+    for text, emoji in answers:
+        poll.add_answer(text=text, emoji=emoji)
+    sent = await ch.send(poll=poll)
+    return {"status": "sent", "message_id": sent.id, "channel": str(ch),
+            "answers": [text for text, _ in answers], "hours": hours,
+            "jump_url": sent.jump_url}
+
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024   # Discord's per-message payload limit
 MAX_UPLOAD_FILES = 10                 # Discord's per-message file count
 
@@ -2736,7 +2783,8 @@ def describe_call(name, params):
     paths = _outgoing_paths(params)
     if paths:
         bits.append("files=" + ", ".join(os.path.basename(x) for x in paths))
-    body = params.get("content") or params.get("task") or params.get("nickname") or ""
+    body = (params.get("content") or params.get("question") or params.get("task")
+            or params.get("nickname") or "")
     detail = f"> {str(body)[:400]}" if body else ""
     return {
         "summary": f"`{name}`" + (f" ({', '.join(bits)})" if bits else ""),

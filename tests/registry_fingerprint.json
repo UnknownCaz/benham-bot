@@ -699,6 +699,19 @@
     "taints": false,
     "tier": 1
   },
+  "send_poll": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": true,
+    "posts": true,
+    "taints": false,
+    "tier": 1
+  },
   "set_bot_nickname": {
     "always_confirm": false,
     "blocked_when_tainted": false,

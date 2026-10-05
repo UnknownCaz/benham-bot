@@ -248,7 +248,7 @@ check("posting into a guild Benham is invited to later is REFUSED",
       policy.authorize_target(send_a, target(OUTSIDE_GUILD, 999)).allowed, False)
 check("the refusal names the rule",
       policy.authorize_target(send_a, target(OUTSIDE_GUILD, 999)).rule, "posting_scope")
-for nm in ("send_embed", "send_file"):
+for nm in ("send_embed", "send_file", "send_poll"):
     check(f"{nm} is capped too",
           policy.authorize_target(capabilities.REGISTRY[nm],
                                   target(OUTSIDE_GUILD, 999)).allowed, False)
