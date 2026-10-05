@@ -708,6 +708,37 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     return (reply or None), pending
 
 
+async def rehearse(log, content, where, conversation_key, actor_name="caz6666"):
+    """One owner turn as respond() would open it, with every consequence removed.
+
+    Returns (reply_text, usage). The same system prompt, the same tool list (so
+    the cached prefix is the one real turns use), the same memory for the
+    conversation key - read, never written. What differs is everything that
+    would make it count: tool_choice "none", so the model sees its tools and
+    cannot call one; no cooldown; nothing parked; nothing remembered. bot.py's
+    `rehearse` is the only caller; channelread.py says what it is for.
+    """
+    if not ENABLED:
+        raise RuntimeError("the agent is disabled in control.json")
+    turns = list(_history(conversation_key))
+    turns.append({"role": "user", "content": content})
+    static, volatile = _system_blocks(where, actor_name)
+    system = [
+        {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": volatile},
+    ]
+    resp = _get_client().messages.create(
+        model=MODEL, max_tokens=MAX_TOKENS, system=system, messages=turns,
+        tools=build_tools(), tool_choice={"type": "none"},
+    )
+    _log_usage(log, resp, "rehearsal")
+    u = getattr(resp, "usage", None)
+    usage = {k: getattr(u, k, None) for k in
+             ("input_tokens", "output_tokens", "cache_read_input_tokens",
+              "cache_creation_input_tokens")} if u is not None else {}
+    return (_response_text(resp) or None), usage
+
+
 # What the model is told when its reply names a waiting question and no
 # answer_conversation call was made. Sent as a user turn because the API needs
 # one after an assistant turn; it lives only in this call's turn list and is
