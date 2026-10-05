@@ -1284,10 +1284,9 @@ async def _deliver_unprompted(ctx, p):
     # itself rather than about the thing being asked.
     sent = await ch.send(
         str(conv["question"])[:1900],
-        # QUIET, always. notify.KINDS calls this "curious": Claude choosing to ask
-        # something is by definition not urgent, and a channel Claude may open on
-        # its own must never be one that can wake his phone. The message lands
-        # normally and waits to be seen.
+        # The volume is notify.KINDS' call, kind "curious" - never decided here.
+        # It was QUIET until 2026-10-05, when Tyler reversed it: sent silently,
+        # these were questions he never saw.
         silent=notify.is_silent("curious"))
 
     # Bind it, so a Discord reply answers it with no model involved - by_ask_message
@@ -1296,7 +1295,7 @@ async def _deliver_unprompted(ctx, p):
     conversations.record_ask_message(conv["id"], sent.id)
     conversations.mark_delivered(conv["id"])
     return {"status": "asked", "id": conv["id"], "counterparty": who,
-            "message_id": sent.id, "silent": True}
+            "message_id": sent.id, "silent": notify.is_silent("curious")}
 
 
 @action("guild_info", identity.READ, "Overview of one server.",

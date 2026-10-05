@@ -53,6 +53,8 @@ def main():
     check("broke wakes him", notify.tier_for("broke"), notify.BUZZ)
     check("a finished task waits", notify.tier_for("finished"), notify.QUIET)
     check("a collaborator replying waits", notify.tier_for("answered"), notify.QUIET)
+    # Caz reversed this on 2026-10-05: silent meant he never saw the questions.
+    check("a question Claude chose to ask wakes him", notify.tier_for("curious"), notify.BUZZ)
 
     section("An unknown kind is refused, not defaulted")
     try:
