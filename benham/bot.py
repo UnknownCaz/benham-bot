@@ -52,6 +52,7 @@ from benham.core import health
 from benham.core import ideas
 from benham.core import initiative
 from benham.core import identity
+from benham.core import invites
 from benham.core import issues
 from benham.core import jsonio
 from benham.core import loopclose
@@ -162,7 +163,15 @@ _INTENT_CFG = identity.CONTROL.get("intents", {}) or {}
 intents.members = bool(_INTENT_CFG.get("members", False))
 intents.presences = bool(_INTENT_CFG.get("presences", False))
 
-client = discord.Client(intents=intents)
+# Who a message from this bot can wake: one person at a time, never a crowd.
+# Caz, 2026-10-05, asked whether Benham should ever ping @everyone or @here now
+# that a mention reads friends' messages first: "No not unless I say so." This
+# is the "No", on every send the client makes; policy.authorize_crowd_ping is
+# the "unless I say so" (INTENT decision 50).
+ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True,
+                                           replied_user=True)
+
+client = discord.Client(intents=intents, allowed_mentions=ALLOWED_MENTIONS)
 tree = app_commands.CommandTree(client)
 
 
@@ -713,6 +722,10 @@ class ApprovalView(discord.ui.View):
     in the DM looking pressable is how stale approvals happen.
     """
 
+    # What the prompt says once decided, (yes, no). A class attribute so a
+    # subclass with other buttons (InviteView) says its own thing.
+    NOTES = ("✅ approved", "❌ denied")
+
     def __init__(self, on_decide, timeout):
         super().__init__(timeout=timeout)
         self.on_decide = on_decide   # async fn(approved: bool)
@@ -754,7 +767,7 @@ class ApprovalView(discord.ui.View):
                 pass
             return
         self._disable()
-        note = "✅ approved" if approved else "❌ denied"
+        note = self.NOTES[0] if approved else self.NOTES[1]
         try:
             await interaction.response.edit_message(
                 content=f"{interaction.message.content}\n\n_{note}_", view=self)
@@ -774,8 +787,24 @@ class ApprovalView(discord.ui.View):
         await self.deaden("expired — treated as no")
 
 
+class InviteView(ApprovalView):
+    """"Let him answer" / "Ignore" on the DM asking whether Benham may answer
+    friends who @mentioned him (INTENT 50). Same click handler, so the same
+    owner check guards it; only the words differ."""
+
+    NOTES = ("✅ answering them", "🙈 ignored")
+
+    @discord.ui.button(label="Let him answer", style=discord.ButtonStyle.success)
+    async def approve(self, interaction, button):
+        await self._click(interaction, True)
+
+    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.secondary)
+    async def deny(self, interaction, button):
+        await self._click(interaction, False)
+
+
 # Live button views, so the typed-reply paths can retire them when they win the
-# race. Keys: ("pc", rid) and ("confirm", token).
+# race. Keys: ("pc", rid), ("confirm", token) and ("invite", channel_id).
 _views = {}
 
 
@@ -805,6 +834,13 @@ async def send_with_view(channel, text, view, reference=None):
     return msg
 
 
+async def owner_dm_channel():
+    """Tyler's DM channel with this bot - where anything behind the scenes goes."""
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    user = client.get_user(owner_id) or await client.fetch_user(owner_id)
+    return user.dm_channel or await user.create_dm()
+
+
 async def ask_owner_dm(text, kind=None):
     """DM the owner - the notify path (guest filings, lane news).
 
@@ -812,9 +848,7 @@ async def ask_owner_dm(text, kind=None):
     Approve/Deny buttons resolving a codesession request. That lane is gone
     (INTENT decision 39); what is left is the plain notification.
     """
-    owner_id = sorted(identity.OWNER_IDS)[0]
-    user = client.get_user(owner_id) or await client.fetch_user(owner_id)
-    channel = user.dm_channel or await user.create_dm()
+    channel = await owner_dm_channel()
     # `kind` is optional and its absence is meaningful: an unclassified message
     # buzzes, because the default for "I do not know how urgent this is" must
     # be to reach him. Only news deliberately classified as quiet goes quiet.
@@ -840,7 +874,14 @@ async def fire_confirmed(pending, channel):
             actor_id=pending.requested_by, force=True,
             call_ctx=pending.call_ctx)
         log(f"CONFIRMED {pending.action} (token {pending.token}) by {pending.requested_by}: {result}")
-        await reply_in(channel, f"Done — `{pending.action}`: {json.dumps(result, default=str)}")
+        # A post's own message is the proof, so say where it went - a link, not
+        # the raw result - and say nothing at all when it landed right here
+        # (2026-10-05: a confirmed reply in #asd was followed by a JSON blob).
+        jump = str((result or {}).get("jump_url") or "")
+        if jump and f"/{getattr(channel, 'id', '')}/" in jump:
+            return
+        await reply_in(channel, f"Done — `{pending.action}`: "
+                       + (jump if jump else json.dumps(result, default=str)))
     except capabilities.ActionError as e:
         await reply_in(channel, f"Couldn't do it: {e}")
     except Exception as e:  # noqa: BLE001
@@ -1073,10 +1114,11 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
     `read_attachments` needs, and a guest must not be handed the name of a tool
     that would refuse them anyway.
 
-    `room` is the third surface: a server mention passes where it is ("#general
-    in Some Server") and the channel's recent messages are read and added below
-    everything else - channelread.py has the why. None, the default, reads
-    nothing, so both DM surfaces are untouched by it.
+    `room` is the third surface: a server mention passes a channelread.Room
+    naming where it is ("#general in Some Server"), the channel's recent
+    messages are read and added below everything else - channelread.py has the
+    why - and the read is left on room.read for the reply's pings. None, the
+    default, reads nothing, so both DM surfaces are untouched by it.
 
     LAYOUT, AND WHY IT IS THIS ORDER. What the person TYPED is always the first
     block. Everything after it is either Benham's own description or fenced
@@ -1159,6 +1201,7 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
     # have in it. Same nonce as everything above, so one turn still has one
     # boundary vocabulary.
     read = None
+    room_where = room.where if room is not None else None
     if room is not None:
         read = await channelread.read(
             message.channel, before=message, now=message.created_at,
@@ -1166,13 +1209,14 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
             self_id=getattr(client.user, "id", None), tag=tag,
             image_budget=min(channelread.IMAGES, msgparts.MAX_IMAGES - len(images)),
             log=log)
+        room.read = read            # the caller turns @names into pings with it
         if read.third_party:
             tainted = True
         if not typed:
             # A bare @Benham. Benham's own words on top, never the read.
             notes.insert(0, channelread.BARE_NOTE)
         if log:
-            log(f"inbound: read {read.count} message(s) in {room}"
+            log(f"inbound: read {read.count} message(s) in {room_where}"
                 + (f", looked at {len(read.images)} picture(s)" if read.images else "")
                 + (f" - could not read it ({read.error})" if read.error else ""))
 
@@ -1180,7 +1224,8 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
         return None, typed, False, False   # ordinary text: nothing changes
 
     text_parts = [p for p in ([typed or None] + notes + quoted) if p]
-    room_parts = [channelread.turn_text(read, room, tag)] if read is not None else []
+    room_parts = ([channelread.turn_text(read, room_where, tag)]
+                  if read is not None else [])
     content = [{"type": "text", "text": "\n\n".join(text_parts + room_parts)}]
     if images:
         content.append({"type": "text",
@@ -1188,7 +1233,7 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
         content += images
         content.append({"type": "text", "text": msgparts.image_close(tag)})
     if read is not None:
-        content += channelread.image_parts(read, room, tag)
+        content += channelread.image_parts(read, room_where, tag)
 
     remembered = "\n\n".join(text_parts)
     if shown:
@@ -1197,7 +1242,7 @@ async def inbound_content(message, typed, can_read_attachments=False, log=None,
                        "I cannot see them now - if I need to look again I have to "
                        "ask them to re-send, not describe them from memory.]")
     if read is not None:
-        remembered += "\n\n" + channelread.remembered_note(read, room)
+        remembered += "\n\n" + channelread.remembered_note(read, room_where)
     return content, remembered, tainted, bool(quoted or images)
 
 
@@ -1513,6 +1558,12 @@ async def on_message(message):
         if is_dm and guest.is_known_guest(message.author.id):
             await handle_guest_dm(message)
             return
+        if not is_dm and agent.ENABLED and message.guild.id in identity.agent_guilds():
+            # A friend @mentioning Benham in a server he answers in. Never a model
+            # turn on their say-so: either Tyler already let them in (an open
+            # invite) or Tyler gets asked, privately. INTENT decision 50.
+            await handle_friend_mention(message)
+            return
         log(f"ignoring direction from non-owner {message.author} ({message.author.id})")
         if is_dm:
             await reply_in(message.channel, identity.refusal(message.author.id))
@@ -1726,9 +1777,9 @@ async def on_message(message):
     # remembered. Placed after may_engage_agent on purpose - a server that is
     # not on agent_guilds has nothing read, as well as nothing said.
     where = "a DM" if is_dm else f"#{message.channel} in {message.guild.name}"
+    room = None if is_dm else channelread.Room(where)
     content, text, tainted, _usable = await inbound_content(
-        message, text, can_read_attachments=True, log=log,
-        room=None if is_dm else where)
+        message, text, can_read_attachments=True, log=log, room=room)
     if tainted:
         call_ctx = call_ctx.with_taint(True)
 
@@ -1773,13 +1824,26 @@ async def on_message(message):
         await reply_in(message.channel, f"My brain threw an error: {type(e).__name__}: {e}")
         return
 
+    # Where an approval goes. In a server it goes to his DMs, and the reply that
+    # explains it goes with it - Caz, 2026-10-05: "so they dont see the behind
+    # the scenes confirmation". The channel keeps the 👀/✅ on his message.
+    channel = message.channel
+    if parked is not None and not is_dm:
+        channel = await owner_dm_channel()
+        if reply:
+            reply = f"(about #{message.channel} in {message.guild.name})\n{reply}"
+
     if reply:
-        await reply_in(message.channel, reply)
+        pinged = {}
+        if channel is message.channel and room is not None and room.read is not None:
+            reply, pinged = channelread.apply_pings(reply, room.read.people)
+        await reply_in(channel, reply)
+        if pinged:
+            await invite_pinged(message.channel, pinged)
     if parked is not None:
         # The preview carries Approve/Deny buttons wired to the SAME chokepoint a
         # typed "yes" reaches: consume-then-fire_confirmed, which the model never
         # touches. A button is a faster finger, not a new authority.
-        channel = message.channel
 
         async def decide(approved, _parked=parked, _channel=channel):
             if approved:
@@ -1797,8 +1861,118 @@ async def on_message(message):
         view = ApprovalView(decide, timeout=max(parked.seconds_left, 1))
         _views[("confirm", parked.token)] = view
         await send_with_view(channel, confirm.describe(parked), view,
-                             reference=message)
+                             reference=message if channel is message.channel else None)
     await react(message, "✅")
+
+
+# --------------------------------------------------------------------------
+# Friends in a channel (INTENT decision 50)
+# --------------------------------------------------------------------------
+#
+# Caz, 2026-10-05: "I was talking to Benham and my friends wanted to jump in. I
+# @ him in the same channel saying he should respond. OR he dms me to ask if he
+# should wiht the prompt so they dont see the behind the scenes confirmation.
+# Then after those steps he can @ the people and resond to them for the alloted
+# amount of turns default is one reply with one closing message in response."
+#
+# So a friend's @ never starts a model turn on their say-so. Either Tyler has
+# already let them in - by tapping "Let him answer" on the DM, or by having
+# Benham ping them in a reply to his own mention - or Tyler is asked, in his
+# DMs, where the channel cannot see it. invites.py keeps the books.
+
+def _display(user):
+    return str(getattr(user, "display_name", None) or getattr(user, "name", None) or user)
+
+
+async def handle_friend_mention(message):
+    """A non-owner @mentioned Benham in a server on agent_guilds."""
+    ch, who = message.channel, message.author
+    if invites.invite_for(ch.id, who.id) is not None:
+        closing = invites.use(ch.id) == 0      # the reply this spends was the last
+        log(f"friend @ from {who} in #{ch}: answering on an open invite"
+            + (" (closing message)" if closing else ""))
+        await react(message, "👀")
+        await answer_friends(ch, {who.id: _display(who)}, closing)
+        return
+    if invites.quiet(ch.id):
+        log(f"friend @ from {who} in #{ch}: quiet after an Ignore - not asking again yet")
+        return
+    ask, is_new = invites.add_ask(ch.id, who.id, _display(who), message.id)
+    if not is_new:
+        log(f"friend @ from {who} in #{ch}: folded into the ask already in Tyler's DMs")
+        return
+
+    said = channelread.snippet(message, 300) or "(no text)"
+    text = (f"**{_display(who)}** @'d me in #{ch} ({message.guild.name}):\n> {said}\n"
+            f"Want me to answer? I'd reply once, then send one closing message if "
+            f"they answer back. Nobody in the channel sees this.")
+
+    async def decide(approved, _ch=ch):
+        waiting = invites.drop_ask(_ch.id, ignored=not approved)
+        if not approved:
+            log(f"friend ask in #{_ch}: ignored by Tyler")
+            return
+        if waiting is None:
+            log(f"friend ask in #{_ch}: approved, but it had already expired")
+            return
+        invites.open_invite(_ch.id, waiting["people"], invites.REPLIES, by="tap")
+        invites.use(_ch.id)                    # this reply spends the first one
+        await answer_friends(_ch, waiting["people"], closing=False)
+
+    view = InviteView(decide, timeout=invites.ASK_TTL)
+    _views[("invite", ch.id)] = view
+    try:
+        await send_with_view(await owner_dm_channel(), text, view)
+        log(f"friend @ from {who} in #{ch}: asked Tyler in DMs")
+    except Exception as e:  # noqa: BLE001 - an ask that never reached him is no ask
+        invites.drop_ask(ch.id)
+        _views.pop(("invite", ch.id), None)
+        log(f"friend ask in #{ch} could not reach Tyler: {type(e).__name__}: {e}")
+
+
+async def answer_friends(channel, people, closing):
+    """One chat-only reply in `channel` to friends Tyler let in.
+
+    Reads the room fresh - the friend's message is the newest line of it, fenced
+    like everyone else's - with Benham's own note on top, never their words."""
+    where = f"#{channel} in {channel.guild.name}"
+    tag = msgparts.new_tag()
+    read = await channelread.read(
+        channel, before=None, now=datetime.now(timezone.utc),
+        is_owner=identity.is_owner, self_id=getattr(client.user, "id", None),
+        tag=tag, log=log)
+    names = ", ".join(sorted(set(people.values())))
+    seen = "\n\n".join([channelread.friend_note(names, closing),
+                        channelread.turn_text(read, where, tag, before_his=False,
+                                              can_look=False)])
+    content = [{"type": "text", "text": seen}] + channelread.image_parts(read, where, tag)
+    try:
+        async with channel.typing():
+            reply = await agent.friend_turn(log, content, where=where,
+                                            channel_id=channel.id,
+                                            guild_id=channel.guild.id,
+                                            names=names, closing=closing)
+    except Exception:  # noqa: BLE001 - a brain failure must not kill the bot
+        log(f"friend reply failed in #{channel}:\n{traceback.format_exc()}")
+        return
+    if reply:
+        reply, _pinged = channelread.apply_pings(reply, read.people)
+        await reply_in(channel, reply)
+
+
+async def invite_pinged(channel, pinged):
+    """Benham pinged people in a reply to Tyler's own mention: Tyler asked them
+    in, so they get the closing reply - "counts the same as tapping yes", with
+    the reply already spent. A friend ask waiting on the same channel is
+    answered by this too, so its DM buttons retire rather than linger."""
+    friends = {uid: label for uid, label in pinged.items()
+               if not identity.is_owner(uid) and uid != getattr(client.user, "id", None)}
+    if not friends:
+        return
+    invites.open_invite(channel.id, friends, 1, by="channel")
+    log(f"invite open in #{channel} for {', '.join(friends.values())}: one closing reply")
+    if invites.drop_ask(channel.id) is not None:
+        await retire_view(("invite", channel.id), "answered in the channel")
 
 
 # What a failed beat means when Discord could not be reached, as opposed to the
@@ -1964,7 +2138,8 @@ async def rehearse(channel, req):
     owner = next(iter(sorted(identity.OWNER_IDS)), None)
     reply, usage, looked, would = await agent.rehearse(
         client, log, content, where=where, conversation_key=f"ch:{channel.id}",
-        call_ctx=policy.CallContext.local(owner).with_taint(True), actor_id=owner)
+        call_ctx=policy.CallContext.local(owner).with_taint(True), actor_id=owner,
+        channel_id=channel.id, guild_id=guild.id)
     out.update({"reply": reply, "usage": usage, "looked": looked, "would": would})
     return out
 

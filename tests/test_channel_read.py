@@ -285,6 +285,9 @@ class _Thread(_Channel):
         return self._private
 
 
+CAZ.dm_channel = _Channel(cid=555, name="dm", guild_id=None)
+
+
 class _Mention:
     """Tyler @mentioning Benham in a channel - the message under test."""
 
@@ -311,6 +314,10 @@ class _StubClient:
     def __init__(self):
         self.user = BENHAM
         self.channels = {}
+
+    def get_user(self, uid):
+        # Tyler's DM, where anything behind the scenes goes (INTENT 50).
+        return CAZ if int(uid) == TYLER else None
 
     def get_channel(self, cid):
         return self.channels.get(int(cid))
@@ -688,7 +695,7 @@ views = []
 
 
 async def _fake_send_with_view(channel, text, view, reference=None):
-    views.append(text)
+    views.append((channel, text))
 
 
 bot.send_with_view = _fake_send_with_view
@@ -713,6 +720,8 @@ def real_turn(said):
     agent.forget(f"ch:{GENERAL}")
     confirm.cancel()
     views.clear()
+    general.sent.clear()
+    CAZ.dm_channel.sent.clear()
     try:
         asyncio.run(bot.on_message(_Mention("post the game night thing", general)))
     finally:
@@ -730,6 +739,11 @@ check("after reading a friend's words, the post did NOT go out", sent, [])
 check("...it was parked for his tap instead",
       parked is not None and parked.action == "send_message", True)
 check("...and the Approve prompt was sent", len(views), 1)
+check("...to his DMs, not the channel his friends are in",
+      [ch for ch, _t in views], [CAZ.dm_channel])
+check("...with the explanation beside it, not in the channel",
+      ("Done." in CAZ.dm_channel.sent[-1] if CAZ.dm_channel.sent else False,
+       any("Done." in (s or "") for s in general.sent)), (True, False))
 check("...having really shown the model the room",
       "announce game night" in (seen[0]["messages"][-1]["content"][0]["text"]
                                 if seen else ""), True)
