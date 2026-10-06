@@ -208,12 +208,18 @@ def _recent_failures(within_hours=24, limit=10):
 
 
 def _log_candidates():
-    """Every bot capture worth scanning - usage.py's list, run where the logs are."""
+    """Every bot capture worth scanning - usage.py's list, run where the logs are.
+
+    Rotated generations included (`benham.log.1`, `.2` - rotlog's naming). The
+    globs used to stop at `.log`, so `usage --all` on the Mac read only the live
+    file and everything before the last rotation was invisible to it."""
     cands = []
     for d in {paths.LOG_DIR, os.path.join(paths.ROOT, "logs")}:
         cands += glob.glob(os.path.join(d, "*.out"))
         cands += glob.glob(os.path.join(d, "bot*.log"))
         cands += glob.glob(os.path.join(d, "benham*.log"))
+        cands += glob.glob(os.path.join(d, "bot*.log.[0-9]"))
+        cands += glob.glob(os.path.join(d, "benham*.log.[0-9]"))
     sup = os.path.join(paths.LOG_DIR, "supervise.log")
     if os.path.isfile(sup):
         cands.append(sup)
@@ -296,6 +302,12 @@ def usage_report(log=None, all=False, today=False):  # noqa: A002 - the CLI's fl
     else:
         cands = sorted(_log_candidates(), key=os.path.getmtime)
         sources = [cands[-1]] if cands else []
+        if today and sources:
+            # rotlog rotates by SIZE, not by day, so today's earlier lines can
+            # sit in the newest log's own generations. Oldest first, so the
+            # scan reads the day in order.
+            older = [f"{sources[0]}.{i}" for i in range(9, 0, -1)]
+            sources = [p for p in older if os.path.isfile(p)] + sources
     if not sources:
         return {"sources": [], "scan": None, "process": _process_stats()}
     day = time.strftime("%Y-%m-%d", time.gmtime()) if today else None

@@ -191,9 +191,17 @@ _RAISE = {"KeyError": KeyError, "ValueError": ValueError, "OSError": OSError,
 def store(name, *args, **kwargs):
     """Run one rpc.TABLE operation on the bot. A store function that raised
     there raises the same exception class here, with the same message, so
-    the CLI's own except-branches keep their words."""
-    out = call("POST", "/store/" + name, {"args": list(args), "kwargs": kwargs},
-               timeout=kwargs.pop("_timeout", None) or (120 if name in rpc.SLOW else 30))
+    the CLI's own except-branches keep their words.
+
+    The call names the face it is made AS, and the bot refuses one that is not
+    its own (server._store). Until 2026-10-06 only the outbox route checked:
+    `status --face codex` was answered by Benham and exited 0 as if Codex were
+    up, and every other store verb under --face codex quietly worked Benham's
+    stores."""
+    timeout = kwargs.pop("_timeout", None) or (120 if name in rpc.SLOW else 30)
+    out = call("POST", "/store/" + name,
+               {"args": list(args), "kwargs": kwargs, "face": paths.PROCESS_FACE},
+               timeout=timeout)
     if isinstance(out, dict) and "raised" in out:
         exc = _RAISE.get(out["raised"].get("type"), RuntimeError)
         raise exc(*out["raised"].get("args", [out["raised"].get("message", "")]))
