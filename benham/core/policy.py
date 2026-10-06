@@ -1047,3 +1047,49 @@ def authorize_unprompted(conv, now=None):
         if verdict is not None:
             return verdict
     return _ALLOW
+
+
+# ==========================================================================
+# The crowd ping - may a post wake a whole server?
+# ==========================================================================
+#
+# Caz, 2026-10-05, asked whether Benham should ever be able to ping @everyone or
+# @here now that a mention reads friends' messages before he answers: "No not
+# unless I say so." INTENT decision 50. Two halves, and this is the second:
+#
+#   NEVER BY DEFAULT. bot.ALLOWED_MENTIONS blocks crowd and role pings on every
+#   message the client sends - a plain reply, a tool post, anything. A reply
+#   that echoes "@everyone" from a friend's bait prints the word and wakes
+#   nobody. That half is the client's, so no path can forget it.
+#
+#   UNLESS HE SAYS SO. A posting action whose text names a crowd is parked for
+#   his approval every time, however clean the turn and wherever it came from,
+#   and only the confirmed call is sent with crowd pings allowed
+#   (capabilities.Ctx.allow_crowd_ping). The machine channel - a session running
+#   `benham.py do send_message` - arrives already confirmed (force=True), which
+#   is the CLAUDE.md rule doing its job: nothing reaches anyone from a session
+#   without his yes for that post.
+
+_CROWD = re.compile(r"@(?:everyone|here)\b|<@&\d+>")
+
+
+def names_a_crowd(params):
+    """True when any text a call would send names @everyone, @here or a role."""
+    def walk(v):
+        if isinstance(v, str):
+            return bool(_CROWD.search(v))
+        if isinstance(v, dict):
+            return any(walk(x) for x in v.values())
+        if isinstance(v, (list, tuple)):
+            return any(walk(x) for x in v)
+        return False
+    return walk(params or {})
+
+
+def authorize_crowd_ping(action, params):
+    """CONFIRM for a post that would ping a crowd; None for everything else."""
+    if not action.posts or not names_a_crowd(params):
+        return None
+    return _confirm("crowd_ping",
+                    "it would ping a crowd (@everyone, @here or a role) - that only "
+                    "happens when Tyler says so, so it waits for his approval")

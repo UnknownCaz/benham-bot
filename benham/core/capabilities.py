@@ -210,6 +210,17 @@ class Ctx:
         # choice (the guest loop listens, the CLI does not). A callable for the
         # same reason on_progress is: it cannot be a schema parameter.
         self.on_attach = on_attach
+        # Set by run() only for a CONFIRMED call whose text names a crowd
+        # (policy.authorize_crowd_ping). Everything else keeps the client's
+        # default, which blocks @everyone, @here and role pings.
+        self.allow_crowd_ping = False
+
+    def crowd_kwargs(self):
+        """send() kwargs for a post: the crowd-ping unlock when, and only when,
+        Tyler approved this exact call. Empty otherwise, so the default holds."""
+        if self.allow_crowd_ping:
+            return {"allowed_mentions": discord.AllowedMentions.all()}
+        return {}
 
     async def channel(self, cid):
         """Resolve a channel id, falling back to an API fetch for uncached ones."""
@@ -1364,7 +1375,7 @@ async def _send_message(ctx, p):
         kw["reference"] = discord.MessageReference(
             message_id=int(p["reply_to"]), channel_id=ch.id,
             fail_if_not_exists=False)
-    sent = await ch.send(str(p["content"]), **kw)
+    sent = await ch.send(str(p["content"]), **kw, **ctx.crowd_kwargs())
     return {"status": "sent", "message_id": sent.id, "channel": str(ch),
             "jump_url": sent.jump_url}
 
@@ -1398,7 +1409,7 @@ async def _send_embed(ctx, p):
         em.set_image(url=p["image_url"])
     if p.get("thumbnail_url"):
         em.set_thumbnail(url=p["thumbnail_url"])
-    sent = await ch.send(content=p.get("content") or None, embed=em)
+    sent = await ch.send(content=p.get("content") or None, embed=em, **ctx.crowd_kwargs())
     return {"status": "sent", "message_id": sent.id, "channel": str(ch),
             "jump_url": sent.jump_url}
 
@@ -1508,7 +1519,8 @@ async def _send_file(ctx, p):
     files, names, total = _load_files(p)
     if not files:
         raise ActionError("send_file needs `path` (one file) or `paths` (several)")
-    sent = await ch.send(content=p.get("content") or None, files=files)
+    sent = await ch.send(content=p.get("content") or None, files=files,
+                         **ctx.crowd_kwargs())
     return {"status": "sent", "message_id": sent.id, "channel": str(ch),
             "filenames": names, "bytes": total, "jump_url": sent.jump_url}
 
@@ -2755,6 +2767,13 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         log(f"DENIED {name} by {actor_id or 'code-session'} "
             f"[rule={target_decision.rule}, guild={gid}]")
         raise ActionError(target_decision.reason)
+
+    # A post that would ping a crowd waits for Tyler, whatever else is true of the
+    # call - and only the call he confirmed is sent with crowd pings unlocked.
+    crowd = policy.authorize_crowd_ping(act, clean)
+    if crowd is not None and not target_decision.needs_confirm:
+        target_decision = crowd
+    ctx.allow_crowd_ping = bool(force and crowd is not None)
 
     # `force` means the confirmation already happened, so it is checked here and
     # deliberately not inside policy - policy states what a call needs, this decides
