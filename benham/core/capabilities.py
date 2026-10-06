@@ -290,7 +290,22 @@ def msg_dict(m):
     poll = getattr(m, "poll", None)
     if poll is not None:
         d["poll"] = poll_dict(poll)
+    # Same for a sticker: its message is blank too, and until 2026-10-06 every
+    # read reported one as nothing at all (get_message on a Chillbar sticker came
+    # back empty while the room read showed "[sticker: ...]"). Only present on a
+    # message that carries one.
+    stickers = getattr(m, "stickers", None)
+    if stickers:
+        d["stickers"] = [sticker_dict(s) for s in stickers]
     return d
+
+
+def sticker_dict(s):
+    """One sticker as metadata. `format` says whether read_attachments can fetch
+    it: png, apng and gif can; lottie is animation data Discord will not hand out
+    for reading (discord.py refuses it before asking)."""
+    return {"id": s.id, "name": s.name,
+            "format": getattr(s.format, "name", str(s.format)), "url": s.url}
 
 
 def poll_dict(poll):
@@ -503,8 +518,9 @@ def _confined_path(root, filename):
 
 
 @action("read_attachments", identity.READ,
-        "Download the files attached to one message and return what they are; text "
-        "files come back with their contents. Files are saved to the bot's safety "
+        "Download the files attached to one message, and any stickers on it, and "
+        "return what they are; text files come back with their contents. Files are "
+        "saved to the bot's safety "
         "quarantine folder (downloads/<message_id>/ inside the benham-bot repo), NOT "
         "the Windows user Downloads folder - say so when telling Tyler where a file "
         "went, and give the full saved_to path from the result.",
@@ -573,13 +589,54 @@ async def _read_attachments(ctx, p):
             rec["text_truncated"] = len(text) > MAX_TEXT_CHARS
         out.append(rec)
 
+    # Stickers (2026-10-06). The picture on a sticker message is not an
+    # attachment, so this verb used to answer "no attachments" for one. Same
+    # fence as above: it comes off the NAMED message (no url parameter), lands
+    # under downloads/<message_id>/ as sticker_<id>.<ext> - a name built here,
+    # not one the sticker's creator typed - and is never run. Skipped when
+    # `index` picks a single attachment.
+    st_out = []
+    if p.get("index") is None:
+        for s in getattr(m, "stickers", None) or []:
+            st_out.append(await _read_sticker(s, cap, save, target))
+
     res = {"message_id": m.id, "channel": str(m.channel), "author": str(m.author),
            "count": len(out), "attachments": out}
-    if save and any("saved_to" in r for r in out):
+    if st_out:
+        res["stickers"] = st_out
+    if save and any("saved_to" in r for r in out + st_out):
         res["saved_in"] = target
     if not atts:
-        res["note"] = "that message has no attachments"
+        res["note"] = ("that message has no attachments"
+                       + (" - its sticker is under `stickers`" if st_out else ""))
     return res
+
+
+async def _read_sticker(s, cap, save, target):
+    rec = sticker_dict(s)
+    if rec["format"] == "lottie":
+        rec["skipped"] = ("a Lottie sticker is animation data that Discord does not "
+                          "hand out for reading")
+        return rec
+    try:
+        data = await s.read()
+    except (discord.HTTPException, discord.NotFound, TypeError) as e:
+        rec["skipped"] = f"download failed: {getattr(e, 'text', None) or e}"
+        return rec
+    # No size in a sticker's metadata, so the ceiling is checked after the fetch.
+    # Discord caps stickers at 512KB, so this only ever fires on a broken CDN.
+    if len(data) > cap:
+        rec["skipped"] = (f"{len(data) / 1048576:.1f}MB is over the "
+                          f"{cap / 1048576:.1f}MB ceiling - raise max_bytes to keep it")
+        return rec
+    rec["bytes_downloaded"] = len(data)
+    if save:
+        os.makedirs(target, exist_ok=True)
+        dest = _confined_path(target, f"sticker_{int(s.id)}.{s.format.file_extension}")
+        with open(dest, "wb") as fh:
+            fh.write(data)
+        rec["saved_to"] = dest
+    return rec
 
 
 @action("list_guilds", identity.READ, "List every server this bot is in.", {},

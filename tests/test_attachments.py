@@ -95,18 +95,42 @@ class _Sent:
         self.jump_url = "https://discord.com/x/777"
 
 
+class _StubSticker:
+    """discord.StickerItem's readable surface, with the library's own url rule and
+    its refusal to read a lottie sticker."""
+
+    def __init__(self, sid, name, fmt=discord.StickerFormatType.png, data=b"",
+                 fail=False):
+        self.id = sid
+        self.name = name
+        self.format = fmt
+        self._data = data
+        self.fail = fail
+        host = ("https://media.discordapp.net" if fmt is discord.StickerFormatType.gif
+                else "https://cdn.discordapp.com")
+        self.url = f"{host}/stickers/{sid}.{fmt.file_extension}"
+
+    async def read(self):
+        if self.format is discord.StickerFormatType.lottie:
+            raise TypeError('Cannot read stickers of format "lottie".')
+        if self.fail:
+            raise discord.NotFound(_StubResponse(), "Unknown Sticker")
+        return self._data
+
+
 class _StubChannel:
-    def __init__(self, cid=TESTING_CHAN, attachments=()):
+    def __init__(self, cid=TESTING_CHAN, attachments=(), stickers=()):
         self.id = cid
         self.guild = _StubGuild()
         self.attachments = list(attachments)
+        self.stickers = list(stickers)
         self.sends = []
 
     def __str__(self):
         return "#stub"
 
     async def fetch_message(self, mid):
-        return _StubMessage(int(mid), self, self.attachments)
+        return _StubMessage(int(mid), self, self.attachments, self.stickers)
 
     async def send(self, content=None, files=None, **kw):
         self.sends.append({"content": content, "files": list(files or [])})
@@ -114,10 +138,11 @@ class _StubChannel:
 
 
 class _StubMessage:
-    def __init__(self, mid, channel, attachments):
+    def __init__(self, mid, channel, attachments, stickers=()):
         self.id = mid
         self.channel = channel
         self.attachments = list(attachments)
+        self.stickers = list(stickers)
         self.author = "someone"
 
 
@@ -292,6 +317,57 @@ try:
                 channel_id=TESTING_CHAN, message_id=MSG)
     check("a message with no files is an answer, not an error", empty["count"], 0)
     check("and says so", "no attachments" in empty["note"], True)
+    check("...with no stickers key when there are none", "stickers" in empty, False)
+
+    section("read_attachments - stickers (2026-10-06: a sticker read as nothing)")
+    SID = 1400000000000000001
+    cooked = _StubSticker(SID, "We are so cooked .gg/memes", data=PNG)
+    st_ch = _StubChannel(stickers=[cooked])
+    r = run(_StubClient(st_ch), "read_attachments", channel_id=TESTING_CHAN, message_id=MSG)
+    s0 = r["stickers"][0]
+    check("a sticker-only message has no attachments", r["count"], 0)
+    check("...and its sticker comes back", (s0["id"], s0["name"], s0["format"]),
+          (SID, "We are so cooked .gg/memes", "png"))
+    check("...with its CDN url", s0["url"], f"https://cdn.discordapp.com/stickers/{SID}.png")
+    check("saved as sticker_<id>.png - a name built here, not the sticker's own",
+          os.path.basename(s0["saved_to"]), f"sticker_{SID}.png")
+    check("...under downloads/<message_id>/",
+          os.path.dirname(s0["saved_to"]),
+          os.path.realpath(os.path.join(capabilities.DOWNLOAD_DIR, str(MSG))))
+    check("...with the right bytes", open(s0["saved_to"], "rb").read(), PNG)
+    check("the folder is reported", r["saved_in"],
+          os.path.join(capabilities.DOWNLOAD_DIR, str(MSG)))
+    check("the note points at the sticker", "under `stickers`" in r["note"], True)
+
+    gif = _StubSticker(SID + 1, "dance", discord.StickerFormatType.gif, data=b"GIF89a")
+    lottie = _StubSticker(SID + 2, "wumpus wave", discord.StickerFormatType.lottie)
+    gone = _StubSticker(SID + 3, "deleted one", fail=True)
+    r = run(_StubClient(_StubChannel(stickers=[gif, lottie, gone])), "read_attachments",
+            channel_id=TESTING_CHAN, message_id=MSG)
+    g0, l0, x0 = r["stickers"]
+    check("a gif sticker keeps .gif, from Discord's media host",
+          (os.path.basename(g0["saved_to"]), g0["url"].startswith("https://media.discordapp.net")),
+          (f"sticker_{SID + 1}.gif", True))
+    check("a lottie sticker is skipped with the reason", l0["skipped"].startswith("a Lottie"), True)
+    check("...and nothing is written for it", "saved_to" in l0, False)
+    check("a broken one says why, and the others still came",
+          (x0["skipped"].startswith("download failed"), "saved_to" in g0), (True, True))
+
+    r = run(_StubClient(st_ch), "read_attachments", channel_id=TESTING_CHAN,
+            message_id=MSG + 1, save=False)
+    check("save=false looks at a sticker and keeps nothing",
+          ("bytes_downloaded" in r["stickers"][0], "saved_to" in r["stickers"][0]), (True, False))
+    check("...and no folder is made for it",
+          os.path.exists(os.path.join(capabilities.DOWNLOAD_DIR, str(MSG + 1))), False)
+
+    both = _StubChannel(attachments=[_StubAttachment(12, "a.txt", b"x", "text/plain")],
+                        stickers=[cooked])
+    r = run(_StubClient(both), "read_attachments", channel_id=TESTING_CHAN,
+            message_id=MSG, index=0)
+    check("index picks one attachment, so no stickers ride along", "stickers" in r, False)
+    r = run(_StubClient(both), "read_attachments", channel_id=TESTING_CHAN, message_id=MSG)
+    check("without index, a file and a sticker both come back",
+          (r["count"], len(r["stickers"]), "note" in r), (1, 1, False))
 
     # ------------------------------------------------------------------- sending
     section("send_file")
@@ -365,6 +441,31 @@ try:
     check("and the size", d["bytes"], 4)
     check("and the type", d["content_type"], "application/pdf")
     check("and still the url", d["url"], "https://cdn.example/report.pdf")
+
+    class _Author:
+        id = 42
+
+        def __str__(self):
+            return "melon#0001"
+
+    class _Full(_StubMessage):
+        """Everything msg_dict reads off a real Message."""
+
+        def __init__(self, stickers=()):
+            super().__init__(MSG, _StubChannel(), [], stickers)
+            import datetime
+            self.created_at = datetime.datetime(2026, 10, 6, tzinfo=datetime.timezone.utc)
+            self.author = _Author()
+            self.content = ""
+            self.embeds, self.reactions = [], []
+            self.pinned, self.reference, self.poll = False, None, None
+
+    d = capabilities.msg_dict(_Full([_StubSticker(77, "We are so cooked .gg/memes")]))
+    check("a read reports a sticker: id, name, format, url",
+          d["stickers"], [{"id": 77, "name": "We are so cooked .gg/memes", "format": "png",
+                           "url": "https://cdn.discordapp.com/stickers/77.png"}])
+    check("a message without one keeps its old shape",
+          "stickers" in capabilities.msg_dict(_Full()), False)
 
     section("Embeds carry their media URLs - a GIF is invisible without them")
     # Discord's GIF picker posts a bare Tenor/Klipy URL whose embed has no
