@@ -145,7 +145,17 @@ def main():
           "pretend to be human" in low, True)
 
     # "The PC surface" (codesession._APPEND_PROMPT) stood here; the lane was
-    # deleted in Phase B (INTENT 39).
+    # deleted in Phase B (INTENT 39). The persona went on saying "you run his
+    # machine" for a month after, and Benham went on offering PC tasks (c37,
+    # 2026-09-15: "Want me to try kicking off the edit now"). Both copies now
+    # say the opposite, and these keep the old claim from coming back.
+    for label, text in (("persona.md", low),
+                        ("agent.py fallback", owner_persona(missing).lower())):
+        check(f"{label}: says he has no hands on any machine",
+              "no hands on any machine" in text, True)
+        check(f"{label}: no longer claims to run his machine",
+              any(p in text for p in ("run his machine", "in a pc session",
+                                      "lives in tyler's pc")), False)
 
     section("The fallbacks - the copy nobody re-reads")
     fallback_guest = guest_prompt(missing)

@@ -199,6 +199,11 @@ code, body = req("POST", "/store/initiative.drop_thread", {"args": ["t9", "x"]})
 check("a raised exception is carried, not a 500",
       (code, body.get("raised", {}).get("type")), (200, "KeyError"))
 check("a malformed body is 400", req("POST", "/store/rooms.listing", raw=b"{nope", ctype="application/json")[0], 400)
+code, body = req("POST", "/store/rooms.listing", {"args": ["cli"], "face": "codex"})
+check("a store call made AS another face is refused, not answered as this one",
+      (code, "refusing to answer as another identity" in body.get("error", "")), (400, True))
+check("...made as this face, it runs",
+      req("POST", "/store/rooms.listing", {"args": ["cli"], "face": "benham"})[1], {"result": []})
 
 section("5. /file confines the upload")
 boundary = "----t"
@@ -223,6 +228,15 @@ check("the proxy forwards a table name", remote.stores.rooms.listing("cli"), [])
 check("...and re-raises the server's exception class",
       _raised(lambda: remote.stores.initiative.drop_thread("t9", "x")), "KeyError")
 check("a non-table attribute is the local module's own", remote.stores.rooms.SCRATCH, "scratch")
+_face = paths.PROCESS_FACE
+paths.PROCESS_FACE = "codex"
+try:
+    err = _raised_msg(lambda: remote.stores.rooms.listing("cli"))
+finally:
+    paths.PROCESS_FACE = _face
+check("the client names its face: --face codex against Benham is refused, in one line",
+      "refusing to answer as another identity" in err and "test-mac" in err
+      and "\n" not in err, True)
 check("identity() reads the SERVING face's owners",
       remote.identity()["owner_ids"], sorted(_testconfig_owner()))
 path = remote.enqueue("benham", {"content": "hi", "channel_id": 1, "source": "test"})

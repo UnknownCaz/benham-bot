@@ -231,6 +231,15 @@ class Handler(BaseHTTPRequestHandler):
         kwargs = body.get("kwargs") or {}
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise ValueError("args must be a list and kwargs an object")
+        # The outbox route's rule, on this route too (2026-10-06): a store call
+        # is answered as THIS face or not at all. Without it `status --face
+        # codex` printed Benham's status and exited 0. A call that names no
+        # face predates the field and is answered as before - an old client
+        # elsewhere keeps working rather than breaking on the upgrade.
+        face = body.get("face")
+        if face is not None and face != self.server.face:
+            raise ValueError(f"this bot runs face {self.server.face!r}; the request "
+                             f"names {face!r} - refusing to answer as another identity")
         fn = rpc.resolve(name)
         self.server.log(f"api: store {name} <- {self.client_address[0]}")
         try:
