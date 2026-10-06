@@ -48,6 +48,7 @@ from benham.core import confirm
 from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
+from benham.guest import answers
 from benham.core import health
 from benham.core import ideas
 from benham.core import initiative
@@ -1352,6 +1353,182 @@ async def file_guest_report(message, category, rtext, log_tag,
             "on disk, sweep will surface it")
 
 
+async def bind_certain(message, text):
+    """The certain half of binding (stage 3 item 10), for whoever is answering.
+
+    Returns (bound_conv, bound_all, answer_text, queue). Lifted out of on_message
+    unchanged on 2026-10-06 so a guest's answer binds by the same rules as
+    Tyler's - until then the block sat inside his owner path, and a guest never
+    reached it (bind_guest_answer).
+    """
+    who = message.author.id
+    bound_conv = None
+    bound_all = []
+    answer_text = text
+    queue = conversations.queue_for(who)
+    # The numbering he is answering by is the one on his SCREEN, and the two
+    # part company as soon as he answers one: nothing re-renders the batch
+    # message, so the live queue renumbers underneath a list he can still
+    # read. Every "which number is this" decision below therefore asks
+    # shown_queue, which returns None in a position whose question has since
+    # been answered rather than sliding the next one up into it.
+    shown = conversations.shown_queue(who)
+
+    # SLOTS FIRST, and ALL of them. "2: sqlite" names which question it answers,
+    # which is exactly as certain as a reply used to be and survives him
+    # answering out of order. This is what pays for allowing a queue at all.
+    #
+    # Plural because the batch message says "answer any of them by number" and
+    # the natural response to a numbered list is to answer the whole list in
+    # one message. The first version handled exactly one, and greedily: slot 1
+    # swallowed the answers to 2 and 3, which then went on being nudged for
+    # questions he had already answered.
+    multi = conversations.parse_slot_answers(text) if len(shown) > 1 else {}
+    if multi:
+        done = conversations.answer_slots(who, multi)
+        if done:
+            bound_conv = done[0][1]
+            bound_all = [c for _s, c in done]
+            answer_text = multi.get(done[0][0], text)
+            log(f"answered {len(done)} by slot in one message: "
+                + ", ".join(f"{s}->{c['id']}" for s, c in done))
+            await react(message, "✅")
+    if bound_conv is None and len(shown) > 1:
+        m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
+        if not m:
+            m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
+        if m:
+            hit = conversations.by_slot(who, m.group(1))
+            if hit:
+                answer_text = m.group(2).strip()
+                conversations.answer(hit["id"], answer_text, bound_by="slot")
+                bound_conv = hit
+                bound_all = [hit]
+                log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
+                    f"- {answer_text[:120]!r}")
+                await react(message, "✅")
+
+    ref = message.reference
+    ref_id = getattr(ref, "message_id", None) if ref is not None else None
+    if bound_conv is None and ref_id:
+        hit = conversations.by_ask_message(ref_id)
+        if hit and int(hit["counterparty"]) == who:
+            # A reply is only CERTAIN while it has one candidate. Once the batch
+            # message shows several, replying to it says "one of these" and not
+            # which - so it stops being the certain path and becomes the model's
+            # job, announced. Auto-binding here would silently attach an answer
+            # to whichever happened to be at the front, which is the precise
+            # failure the old one-live-ask rule existed to prevent.
+            #
+            # Counted on the SCREEN, not the live queue: a message listing
+            # three questions is ambiguous however many of them are still
+            # open, and a reply to it should not become certain just because
+            # he happened to answer the other two.
+            if len(shown) <= 1:
+                conversations.answer(hit["id"], text, bound_by="reply")
+                bound_conv = hit
+                log(f"conversation {hit['id']}: answered by reply "
+                    f"(msg {ref_id}) - {text[:120]!r}")
+                await react(message, "✅")
+            else:
+                log(f"reply to a batch message showing {len(shown)} "
+                    f"({len(queue)} still live) - leaving it to the model to "
+                    f"say which one it means")
+    return bound_conv, bound_all, answer_text, queue
+
+
+def questions_in_front_of(who):
+    """The questions Benham asked this person that are on their screen and can
+    still take an answer - the candidates a typed message might be answering.
+
+    shown_queue is the screen (banked-in-grace included), or the live queue when
+    nothing has been rendered yet - so the delivered filter is what keeps a
+    question the bot has not sent yet from being "answered" by chance.
+    """
+    return [c for c in conversations.shown_queue(who)
+            if c is not None and conversations.was_delivered(c)
+            and conversations.answerable(c)]
+
+
+async def bind_guest_answer(message, typed):
+    """A guest's answer to a question Benham asked them, bound to that question.
+
+    THE BUG THIS ENDS: since Phase B nothing did this. Tyler's rule, applied to
+    guests (INTENT 3.3, item 10): a Discord reply or a slot number binds in
+    code - bind_certain, the block his own path runs - and a typed message is
+    JUDGED (guest/answers.py) and announced. The announcement is a check mark on
+    their message and a quiet line to Tyler saying which question it was taken
+    for, so a wrong read is visible the moment it is made.
+
+    Runs BEFORE the outreach quiet: the quiet mutes the brain, and outreach
+    answers arrive exactly while it is on. Returns the conversations this
+    message answered, [] when none.
+    """
+    if not typed:
+        return []
+    bound_conv, bound_all, _answer, _queue = await bind_certain(message, typed)
+    bound = bound_all or ([bound_conv] if bound_conv else [])
+    judged = False
+    if not bound:
+        waiting = questions_in_front_of(message.author.id)
+        if waiting:
+            ids = await asyncio.to_thread(
+                answers.judge, message.author.id, typed, waiting, log)
+            for cid in ids:
+                try:
+                    conversations.answer(cid, typed, bound_by="judged")
+                except ValueError as e:   # answered or closed a moment ago
+                    log(f"guest answer: {cid} not bound ({e})")
+                    continue
+                bound.append(conversations.get(cid))
+                log(f"conversation {cid}: answered by {message.author.id} "
+                    f"(judged) - {typed[:120]!r}")
+            if bound:
+                judged = True
+                await react(message, "✅")
+    if bound:
+        await tell_owner_answered(message, bound, judged)
+    return bound
+
+
+async def tell_owner_answered(message, bound, judged):
+    """The 'and tells me' half: a quiet line to Tyler per answered question."""
+    name = getattr(message.author, "name", None) or str(message.author)
+    lines = []
+    for c in bound:
+        c = conversations.get(c["id"]) or c
+        said = str(c.get("answer") or "")
+        q = str(c.get("question") or "")
+        lines.append(f"📬 {name} answered {c['id']}: \"{said[:300]}\"")
+        lines.append(f"asked: {q[:140]}{'...' if len(q) > 140 else ''}")
+    if judged:
+        lines.append("(typed, not a reply to the question - that's Benham's read)")
+    try:
+        await ask_owner_dm("\n".join(lines), kind="answered")
+    except Exception as e:  # noqa: BLE001 - the answer is already on the record
+        log(f"guest answer: owner DM failed ({e}) - the answer is bound either way")
+
+
+def guest_note(bound, waiting):
+    """Benham's side of the DM, for the guest brain - see guest.respond's `note`.
+
+    Without it the brain had never seen the question (outreach sends it, not the
+    brain), so an answer of "yes" read to it as a yes to nothing.
+    """
+    def quote(cs):
+        return "; ".join(f"\"{str(c.get('question') or '')[:400]}\"" for c in cs)
+    if bound:
+        return ("From Benham's side, not from them: their message was just recorded "
+                f"as their answer to what you asked them: {quote(bound)}. Tyler "
+                "gets it. Acknowledge it in a few words and don't ask it again.")
+    if waiting:
+        return ("From Benham's side, not from them: you asked them this earlier and "
+                f"are still waiting for the answer: {quote(waiting)}. Help if they "
+                "ask about it. You cannot record an answer yourself - it is recorded "
+                "when they answer it - so never say you recorded or passed one on.")
+    return None
+
+
 async def handle_guest_dm(message):
     """One guest turn: text in, text out, and the reply target cannot vary.
 
@@ -1424,23 +1601,27 @@ async def handle_guest_dm(message):
             return
         # Neither: the offer dies here and the message continues as chat.
 
-    # Outreach quiet: while Claude is talking to this person through the dm
-    # pipeline, the brain stays out of the conversation entirely. Silence, not
-    # a refusal message - the human IS being answered, just not by this code
-    # path. The message already hit inbox.jsonl in on_message, which is where
-    # the outreach watcher reads it.
-    _quiet_until = guest.quiet_until(message.author.id)
-    if _quiet_until:
-        log(f"guest quiet: brain sitting out {message.author} "
-            f"({message.author.id}), {int(_quiet_until - time.time())}s left")
-        return
-
     # `typed` stays separate from `text` all the way down. inbound_content returns
     # an ENRICHED string - his words plus the file inventory plus any fenced quote
     # - and the two guards below ask about his words alone. Reusing one name here
     # made "did he type anything?" answer yes for a bare .zip, because the
     # inventory line was in the string being tested.
     typed = strip_mention(message)
+
+    # An answer to a question Benham asked them binds HERE, ahead of the quiet:
+    # the quiet mutes the brain, and outreach answers arrive while it is on.
+    # Until 2026-10-06 nothing did this - c40's answer was found by hand.
+    bound = await bind_guest_answer(message, typed)
+
+    # Outreach quiet: while a session holds an outreach with this person, the
+    # brain stays out of the conversation entirely. Silence, not a refusal
+    # message - their answer was bound just above (a check mark says so), and
+    # everything they write is in inbox.jsonl for the session that asked.
+    _quiet_until = guest.quiet_until(message.author.id)
+    if _quiet_until:
+        log(f"guest quiet: brain sitting out {message.author} "
+            f"({message.author.id}), {int(_quiet_until - time.time())}s left")
+        return
 
     # Everything the message carried besides his typed words: the picture, the
     # message he replied to, the link preview, the forward. Built BEFORE the quota
@@ -1490,11 +1671,12 @@ async def handle_guest_dm(message):
         return
 
     log(f"guest chat from {message.author} ({message.author.id}): {text[:200]!r}")
+    note = guest_note(bound, questions_in_front_of(message.author.id))
     try:
         files = []
         async with message.channel.typing():
             reply = await asyncio.to_thread(
-                guest.respond, message.author.id, text, log, content)
+                guest.respond, message.author.id, text, log, content, note=note)
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran
@@ -1681,79 +1863,12 @@ async def on_message(message):
     # carried the ask (by_ask_message, which includes nudges). Replying to some
     # other Benham message is not an answer, and treating it as one would swallow
     # exactly the thing this design exists to protect.
+    #
+    # The block itself lives in bind_certain since 2026-10-06, so a guest's
+    # answer binds by the same rules as his (handle_guest_dm).
     bound_conv = None
-    bound_all = []
-    answer_text = text
     if is_dm:
-        queue = conversations.queue_for(message.author.id)
-        # The numbering he is answering by is the one on his SCREEN, and the two
-        # part company as soon as he answers one: nothing re-renders the batch
-        # message, so the live queue renumbers underneath a list he can still
-        # read. Every "which number is this" decision below therefore asks
-        # shown_queue, which returns None in a position whose question has since
-        # been answered rather than sliding the next one up into it.
-        shown = conversations.shown_queue(message.author.id)
-
-        # SLOTS FIRST, and ALL of them. "2: sqlite" names which question it answers,
-        # which is exactly as certain as a reply used to be and survives him
-        # answering out of order. This is what pays for allowing a queue at all.
-        #
-        # Plural because the batch message says "answer any of them by number" and
-        # the natural response to a numbered list is to answer the whole list in
-        # one message. The first version handled exactly one, and greedily: slot 1
-        # swallowed the answers to 2 and 3, which then went on being nudged for
-        # questions he had already answered.
-        multi = conversations.parse_slot_answers(text) if len(shown) > 1 else {}
-        if multi:
-            done = conversations.answer_slots(message.author.id, multi)
-            if done:
-                bound_conv = done[0][1]
-                bound_all = [c for _s, c in done]
-                answer_text = multi.get(done[0][0], text)
-                log(f"answered {len(done)} by slot in one message: "
-                    + ", ".join(f"{s}->{c['id']}" for s, c in done))
-                await react(message, "✅")
-        if bound_conv is None and len(shown) > 1:
-            m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
-            if not m:
-                m = re.match(r"^\s*#?(\d{1,2})\s+(.+)$", text, re.S)
-            if m:
-                hit = conversations.by_slot(message.author.id, m.group(1))
-                if hit:
-                    answer_text = m.group(2).strip()
-                    conversations.answer(hit["id"], answer_text, bound_by="slot")
-                    bound_conv = hit
-                    bound_all = [hit]
-                    log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
-                        f"- {answer_text[:120]!r}")
-                    await react(message, "✅")
-
-        ref = message.reference
-        ref_id = getattr(ref, "message_id", None) if ref is not None else None
-        if bound_conv is None and ref_id:
-            hit = conversations.by_ask_message(ref_id)
-            if hit and int(hit["counterparty"]) == message.author.id:
-                # A reply is only CERTAIN while it has one candidate. Once the batch
-                # message shows several, replying to it says "one of these" and not
-                # which - so it stops being the certain path and becomes the model's
-                # job, announced. Auto-binding here would silently attach an answer
-                # to whichever happened to be at the front, which is the precise
-                # failure the old one-live-ask rule existed to prevent.
-                #
-                # Counted on the SCREEN, not the live queue: a message listing
-                # three questions is ambiguous however many of them are still
-                # open, and a reply to it should not become certain just because
-                # he happened to answer the other two.
-                if len(shown) <= 1:
-                    conversations.answer(hit["id"], text, bound_by="reply")
-                    bound_conv = hit
-                    log(f"conversation {hit['id']}: answered by reply "
-                        f"(msg {ref_id}) - {text[:120]!r}")
-                    await react(message, "✅")
-                else:
-                    log(f"reply to a batch message showing {len(shown)} "
-                        f"({len(queue)} still live) - leaving it to the model to "
-                        f"say which one it means")
+        bound_conv, _bound_all, _answer_text, queue = await bind_certain(message, text)
 
     # Build the rich turn only now, on the way into the agent, and deliberately
     # BELOW everything that matches a narrow affirmative against the whole
