@@ -457,7 +457,7 @@ def _get_client():
     return _client
 
 
-def respond(user_id, text, log=None, content=None):
+def respond(user_id, text, log=None, content=None, note=None):
     """One guest turn: their message in, Benham's reply out.
 
     Requires that check() already returned ALLOW, which is also where the message was
@@ -501,6 +501,12 @@ def respond(user_id, text, log=None, content=None):
     charging double for the exact gesture this was built to support would tax
     Doom for reaching for a screenshot. The ceilings that DO hold are msgparts'
     four-images-per-message and 4MB-each, which bound the worst turn.
+
+    `note` is Benham's own side of things the guest's words cannot carry - the
+    question Benham asked them, and whether this message was just recorded as
+    the answer (bot.guest_note). It goes in a SECOND system block, after the
+    cached persona, so the cache survives it, and it is never remembered: the
+    next turn gets a fresh note or none. Still no tool - it is text.
     """
     def _log(msg):
         if log:
@@ -538,7 +544,8 @@ def respond(user_id, text, log=None, content=None):
         # it must go in a SECOND block after this one or the cache dies silently -
         # check usage.cache_read_input_tokens before believing otherwise.
         system=[{"type": "text", "text": _system_prompt(),
-                 "cache_control": {"type": "ephemeral"}}],
+                 "cache_control": {"type": "ephemeral"}}]
+               + ([{"type": "text", "text": str(note)}] if note else []),
         messages=turns,
         **kw,
     )
