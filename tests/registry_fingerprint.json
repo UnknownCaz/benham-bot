@@ -232,6 +232,19 @@
     "taints": false,
     "tier": 1
   },
+  "edit_bot_profile": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": false,
+    "tier": 2
+  },
   "edit_channel": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -259,6 +272,19 @@
     "tier": 2
   },
   "edit_role": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
+  "edit_server_look": {
     "always_confirm": true,
     "blocked_when_tainted": false,
     "destructive": false,

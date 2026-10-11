@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 from benham.core import identity
+from benham.core import lookimage
 from benham.core import pathsafe
 from benham.core import policy
 from benham.core import rooms
@@ -2273,6 +2274,335 @@ async def _set_bot_nickname(ctx, p):
     old = g.me.nick
     await g.me.edit(nick=(p.get("nickname") or None))
     return {"status": "renamed", "guild": g.name, "from": old, "to": p.get("nickname")}
+
+
+# --- embroidery: how a server and this bot LOOK (INTENT 52) ----------------
+#
+# Caz's word for it. Two capabilities, one picture grammar (lookimage.py names
+# the sources and does the byte-level checking). Posture, argued once here:
+#
+#   tier MANAGE - state changes and has an exact inverse, because the handler
+#       SAVES the current picture before replacing it (state/look_backups/).
+#       Without that save "exact inverse" would be a claim with nothing behind it.
+#   outward + always_confirm - everyone in the server (or every server the bot is
+#       in) sees the result, and a picture is the one thing a preview cannot show
+#       in full. So the preview names source, type, size and a hash of the bytes,
+#       and the change waits for his tap every time. A turn carrying an image is
+#       born tainted anyway (msgparts), so a clean fast path never existed here;
+#       always_confirm just makes the preview the real dry-run rather than the
+#       generic one a taint-induced confirmation gets.
+#   taints (server look only) - the guild's own name and description are
+#       attacker-writable strings that come back in the preview and the result.
+#
+# Discord's gates are checked BEFORE anything changes, from the guild's own
+# feature list: a banner needs Boost Level 2, an invite splash or an animated icon
+# Level 1. A request that trips one changes nothing at all - half-embroidered is
+# harder to explain than refused - and the refusal is one plain sentence.
+
+LOOK_BACKUP_DIR = os.path.join(_paths.process_state_dir(), "look_backups")
+LOOK_TIMEOUT = 60       # seconds; discord.py sleeps through a 429, this caps it
+_GUILD_SLOTS = ("icon", "banner", "splash")
+_GUILD_CLEARABLE = ("icon", "banner", "splash", "description")
+_BOT_SLOTS = ("avatar", "banner")
+_SMALL_SIDE = 128       # below this Discord's own guidance says the picture will blur
+
+
+def _look_clear(raw, allowed):
+    """The slots a caller asked to REMOVE, validated against what can be removed."""
+    out = []
+    for item in (raw or []):
+        n = str(item).strip().lower()
+        if n not in allowed:
+            raise ActionError(f"clear: {item!r} isn't something I can remove here - "
+                              f"choose from {', '.join(allowed)}.")
+        if n not in out:
+            out.append(n)
+    return out
+
+
+async def _look_pictures(ctx, p, slots):
+    """{slot: lookimage.Picture} for every slot the caller gave a source for."""
+    held = {}
+
+    async def message():
+        # The message an attachment is taken from. Named by the caller (the note
+        # on every inbound message prints both ids); ctx.source_message_id covers
+        # a surface that knows where its turn came from.
+        if "m" not in held:
+            cid = p.get("channel_id") or ctx.source_channel_id
+            mid = p.get("message_id") or ctx.source_message_id
+            if not (cid and mid):
+                raise lookimage.LookImageError(
+                    "to use an attachment I need channel_id and message_id of the "
+                    "message that carries it (they're in the note on the message).")
+            held["m"] = await ctx.message(cid, mid)
+        return held["m"]
+
+    out = {}
+    for slot in slots:
+        if p.get(slot):
+            try:
+                out[slot] = await lookimage.load(p[slot], message, slot)
+            except lookimage.LookImageError as e:
+                raise ActionError(str(e))
+    return out
+
+
+def _look_small_notes(pics, slots=("icon", "avatar")):
+    """Plain warnings for pictures Discord will show blurry - advisory, not a refusal:
+    the minimums are Discord's guidance, and refusing on a number that turned out
+    to be wrong would turn away a picture that was fine."""
+    notes = []
+    for slot in slots:
+        pic = pics.get(slot)
+        if pic and pic.width and min(pic.width, pic.height) < _SMALL_SIDE:
+            notes.append(f"The {slot} is only {pic.width}x{pic.height}; Discord "
+                         f"likes at least {_SMALL_SIDE}x{_SMALL_SIDE} and it may look blurry.")
+    return notes
+
+
+async def _look_save_old(ctx, who, held):
+    """Save the pictures about to be replaced; return the file paths written.
+
+    `held` is [(label, discord.Asset-or-None)]. Best effort and never a reason to
+    refuse the change - a failed save is reported in the result instead, so the
+    caller knows the undo is not there. Local time in the file name (house rule).
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    saved = []
+    for label, asset in held:
+        if asset is None:
+            continue
+        try:
+            raw = await asset.read()
+            os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+            path = os.path.join(LOOK_BACKUP_DIR, f"{who}-{label}-{stamp}"
+                                f"{lookimage.ext_for(raw)}")
+            with open(path, "wb") as fh:
+                fh.write(raw)
+            saved.append(path)
+        except Exception as e:  # noqa: BLE001 - a missing backup must not block the change
+            ctx.log(f"look: could not save the old {label} ({type(e).__name__}: {e})")
+    return saved
+
+
+def _look_http_error(e, what, who_limits):
+    """A Discord HTTP failure on a look change, as one plain sentence.
+
+    Three families, because they are the three a person can act on: rate limit
+    (wait), not boosted enough (boost or drop the part), anything else (Discord's
+    own words, kept). Forbidden is NOT handled here - run() already turns it into
+    the missing-permission sentence.
+    """
+    text = (getattr(e, "text", None) or str(e) or "").strip()
+    low = text.lower()
+    if getattr(e, "status", None) == 429 or any(
+            w in low for w in ("too fast", "rate limit", "rate_limit", "ratelimit")):
+        return ActionError(
+            f"Discord is rate-limiting {what} changes right now - {who_limits} "
+            "Nothing was changed; try again in a while.")
+    if any(w in low for w in ("boost", "premium", "feature")):
+        return ActionError(
+            f"Discord says this server isn't boosted enough for part of that "
+            f"({text}). Nothing was changed.")
+    return ActionError(f"Discord turned the {what} change down: "
+                       f"{text or 'it gave no reason'}. Nothing was changed.")
+
+
+async def _look_edit(awaitable, what, who_limits):
+    """Run one Discord edit with a ceiling and the plain-words error mapping."""
+    try:
+        return await asyncio.wait_for(awaitable, LOOK_TIMEOUT)
+    except discord.Forbidden:
+        raise                               # run() words this one
+    except discord.HTTPException as e:
+        raise _look_http_error(e, what, who_limits)
+    except asyncio.TimeoutError:
+        raise ActionError(f"Discord didn't answer the {what} change within "
+                          f"{LOOK_TIMEOUT} seconds - it's probably rate-limiting me. "
+                          "Nothing was confirmed changed; check and try again later.")
+
+
+@action("edit_server_look", identity.MANAGE,
+        "Change how a SERVER looks - 'embroidery': its icon, banner, invite splash, "
+        "name and description. A picture comes from an attachment (icon='attachment' "
+        "or 'attachment:1', with channel_id and message_id of the message that "
+        "carries it), from the assets folder ('asset:logo.png'), or from a public "
+        "https link. Banner needs the server at Boost Level 2, an invite splash or a "
+        "GIF icon at Level 1; if it isn't boosted enough nothing changes and the "
+        "result says so. The current pictures are saved first so it can be put back. "
+        "Always previewed and confirmed. For this bot's OWN avatar/banner use "
+        "edit_bot_profile.",
+        {"guild_id": {"type": "int", "required": True},
+         "icon": {"type": "str", "desc": "Picture source: attachment | attachment:N | "
+                                         "asset:<file> | https://link"},
+         "banner": {"type": "str", "desc": "Same sources. Needs Boost Level 2"},
+         "splash": {"type": "str", "desc": "Invite background, same sources. Needs "
+                                           "Boost Level 1"},
+         "name": {"type": "str", "desc": "New server name (2-100 characters)"},
+         "description": {"type": "str", "desc": "New server description (Discord shows "
+                                                "it on Community servers)"},
+         "clear": {"type": "list", "desc": "Things to REMOVE: any of icon, banner, "
+                                           "splash, description"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_server_look(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(
+            f"this bot lacks Manage Server in {g.name}, so it can't change how the "
+            "server looks - give its role Manage Server (or Administrator) first.")
+
+    clear = _look_clear(p.get("clear"), _GUILD_CLEARABLE)
+    pics = await _look_pictures(ctx, p, _GUILD_SLOTS)
+    name = str(p["name"]).strip() if p.get("name") is not None else None
+    desc = str(p["description"]).strip() if p.get("description") is not None else None
+    if desc == "":
+        # An empty description is how a person says "none": same as clearing it.
+        desc = None
+        if "description" not in clear:
+            clear.append("description")
+    both = sorted(set(pics) & set(clear))
+    if both:
+        raise ActionError(f"{', '.join(both)}: you asked to set and remove it in the "
+                          "same request - pick one.")
+    if desc and "description" in clear:
+        raise ActionError("description: you asked to set and remove it in the same "
+                          "request - pick one.")
+    if not (pics or clear or name is not None or desc is not None):
+        raise ActionError("nothing to change - pass icon, banner, splash, name, "
+                          "description, or clear")
+    if name is not None and not 2 <= len(name) <= 100:
+        raise ActionError(f"a server name has to be 2 to 100 characters; that's {len(name)}.")
+
+    # Discord's boost gates, from the guild's own feature list - checked before
+    # anything is touched, so a refusal here changed nothing.
+    feats = set(getattr(g, "features", None) or ())
+    tier = getattr(g, "premium_tier", 0)
+    needs = []
+    if "banner" in pics:
+        if "BANNER" not in feats:
+            needs.append("a server banner (Boost Level 2)")
+        elif pics["banner"].animated_capable and "ANIMATED_BANNER" not in feats:
+            needs.append("an animated banner (Boost Level 3)")
+    if "splash" in pics and "INVITE_SPLASH" not in feats:
+        needs.append("an invite splash (Boost Level 1)")
+    if "icon" in pics and pics["icon"].animated_capable and "ANIMATED_ICON" not in feats:
+        needs.append("a GIF icon (Boost Level 1) - a PNG or JPEG works at any level")
+    if needs:
+        raise ActionError(
+            f"{g.name} is at Boost Level {tier}, which is too low for "
+            f"{'; '.join(needs)}. Nothing was changed - ask again without "
+            f"{'that' if len(needs) == 1 else 'those'}, or boost the server first.")
+
+    if ctx.dry_run:
+        lines = [f"New {slot}: {pic.describe()}" for slot, pic in pics.items()]
+        if clear:
+            lines.append("Removes: " + ", ".join(clear) + ".")
+        if name is not None:
+            lines.append(f"Name: {g.name!r} -> {name!r}")
+        if desc is not None:
+            lines.append(f"Description: {desc!r}")
+        lines += _look_small_notes(pics)
+        if desc and "COMMUNITY" not in feats:
+            lines.append("Discord only displays a description on Community servers, "
+                         "and this one isn't, so it may not show anywhere.")
+        lines.append("The current picture(s) are saved first, so this can be put back.")
+        what = [f"new {s}" for s in pics] + [f"remove {c}" for c in clear] \
+            + (["new name"] if name is not None else []) \
+            + (["new description"] if desc is not None else [])
+        return {"summary": f"Change how **{g.name}** looks: {', '.join(what)}",
+                "detail": "\n".join(lines)}
+
+    saved = await _look_save_old(
+        ctx, str(g.id), [(s, getattr(g, s, None)) for s in _GUILD_SLOTS
+                         if s in pics or s in clear])
+    kw = {"reason": VIA}
+    for slot, pic in pics.items():
+        kw[slot] = pic.raw
+    for slot in clear:
+        if slot != "description":
+            kw[slot] = None
+    if name is not None:
+        kw["name"] = name
+    if desc is not None:
+        kw["description"] = desc
+    elif "description" in clear:
+        kw["description"] = None
+    after = await _look_edit(g.edit(**kw), "server look",
+                             "Discord throttles how often a server's pictures can change.")
+    # What Discord holds now, not what was asked for.
+    now = {s: getattr(after, s, None) is not None for s in _GUILD_SLOTS}
+    out = {"status": "server_look_changed", "guild": after.name,
+           "changed": [f"{s}" for s in pics] + clear
+                      + (["name"] if name is not None else [])
+                      + (["description"] if desc is not None else []),
+           "now_has": now,
+           "old_pictures_saved": saved}
+    missing = [s for s in pics if not now.get(s)]
+    if missing:
+        out["warning"] = ("Discord accepted the change but the server shows no "
+                          + ", ".join(missing) + " afterwards - check it.")
+    return out
+
+
+@action("edit_bot_profile", identity.MANAGE,
+        "Change this bot's OWN profile look, everywhere it appears: its avatar and "
+        "its profile banner. Pictures come from an attachment (avatar='attachment' "
+        "or 'attachment:1', with channel_id and message_id of the message that "
+        "carries it), the assets folder ('asset:logo.png') or a public https link. "
+        "Discord limits how often a bot can change its avatar (a couple of times an "
+        "hour), so this can answer 'too fast, try later'. The current pictures are "
+        "saved first. Always previewed and confirmed. For a server's icon/banner "
+        "use edit_server_look.",
+        {"avatar": {"type": "str", "desc": "Picture source: attachment | attachment:N | "
+                                           "asset:<file> | https://link"},
+         "banner": {"type": "str", "desc": "Profile banner, same sources"},
+         "clear": {"type": "list", "desc": "Things to REMOVE: avatar and/or banner"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"}},
+        outward=True, always_confirm=True)
+async def _edit_bot_profile(ctx, p):
+    clear = _look_clear(p.get("clear"), _BOT_SLOTS)
+    pics = await _look_pictures(ctx, p, _BOT_SLOTS)
+    both = sorted(set(pics) & set(clear))
+    if both:
+        raise ActionError(f"{', '.join(both)}: you asked to set and remove it in the "
+                          "same request - pick one.")
+    if not (pics or clear):
+        raise ActionError("nothing to change - pass avatar, banner, or clear")
+    me = ctx.client.user
+
+    if ctx.dry_run:
+        lines = [f"New {slot}: {pic.describe()}" for slot, pic in pics.items()]
+        if clear:
+            lines.append("Removes: " + ", ".join(clear) + ".")
+        lines += _look_small_notes(pics)
+        lines.append("It changes in every server this bot is in. Discord limits how "
+                     "often a bot can change its avatar, so a second try soon after "
+                     "may be turned down.")
+        lines.append("The current picture(s) are saved first, so this can be put back.")
+        what = [f"new {s}" for s in pics] + [f"remove {c}" for c in clear]
+        return {"summary": f"Change this bot's own profile look: {', '.join(what)}",
+                "detail": "\n".join(lines)}
+
+    saved = await _look_save_old(
+        ctx, "bot", [(s, getattr(me, s, None)) for s in _BOT_SLOTS
+                     if s in pics or s in clear])
+    kw = {}
+    for slot, pic in pics.items():
+        kw[slot] = pic.raw
+    for slot in clear:
+        kw[slot] = None
+    await _look_edit(
+        me.edit(**kw), "profile",
+        "it only lets a bot change its avatar or banner a couple of times an hour.")
+    return {"status": "bot_profile_changed",
+            "changed": list(pics) + clear,
+            "old_pictures_saved": saved}
 
 
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
