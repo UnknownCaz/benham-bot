@@ -508,6 +508,30 @@ check("someone not in the chat is left as text",
 check("@everyone is never a person", channelread.apply_pings("@everyone", people),
       ("@everyone", {}))
 
+# 2026-10-12: Caz said "Say hi to doom!" in RadioTower and the reply was
+# "Hey @<Doom's display name>, welcome in." - the display name is non-ASCII, the
+# old matcher only knew [A-Za-z0-9_.], so it went out as plain text and pinged
+# nobody. Any name the read knows must ping, whatever its letters.
+fancy = "ꀸꂦꂦꂵ"          # stand-in non-Latin display name
+people = {"doomish1": (7, "x"), fancy: (7, "x"), "big doom": (8, "Big Doom"),
+          "al": (3, "al"), "alex": (1, "Alex")}
+# ascii(): a failing check prints got/want, and a raw non-Latin repr kills the
+# Windows cp1252 console before the FAIL line is readable.
+check("a non-Latin display name pings",
+      ascii(channelread.apply_pings(f"Hey @{fancy}, welcome in.", people)),
+      ascii(("Hey <@7>, welcome in.", {7: "x"})))
+check("a display name with a space pings",
+      channelread.apply_pings("hi @Big Doom!", people), ("hi <@8>!", {8: "Big Doom"}))
+check("the longest known name wins",
+      channelread.apply_pings("@alex hi", people), ("<@1> hi", {1: "Alex"}))
+check("a known name inside a longer word is left alone",
+      channelread.apply_pings("@alexander hi", people), ("@alexander hi", {}))
+check("a known name before .com is left alone",
+      channelread.apply_pings("see @alex.com", people)[0], "see @alex.com")
+check("an existing <@id> is left alone",
+      channelread.apply_pings("<@7> hi", people), ("<@7> hi", {}))
+check("no people, no change", channelread.apply_pings("@alex", {}), ("@alex", {}))
+
 
 agent._client = None
 bot.agent.respond = _REAL_RESPOND

@@ -308,7 +308,14 @@ def friend_note(names, closing):
 
 
 # "@name" in a reply, not inside a word, an email address or an existing <@id>.
-_AT_NAME = re.compile(r"(?<![\w@<])@([A-Za-z0-9_.]{2,32})")
+# Built per reply from the names the read actually holds, rather than from a
+# fixed alphabet: until 2026-10-12 this was @[A-Za-z0-9_.]{2,32}, so a reply
+# that @'d a friend by a non-Latin display name ("Say hi to doom!" in
+# RadioTower) went out as plain text and pinged nobody. Longest name first, so
+# "@alex" is not read as "@al"; a name must end at a word boundary, and a full
+# stop only ends it when no word follows ("@alex." yes, "@alex.com" no).
+_AT_BEFORE = r"(?<![\w@<])@("
+_AT_AFTER = r")(?!\w)(?!\.\w)"
 
 
 def apply_pings(text, people):
@@ -317,22 +324,26 @@ def apply_pings(text, people):
     Returns (text, pinged) where pinged is {user_id: label}. Only names the
     read actually contains can become a ping, so a reply cannot reach anyone
     who was not in the conversation - and @everyone/@here are never in
-    `people` (the client blocks crowd pings regardless). A trailing full stop
-    is the end of a sentence, not part of a name.
+    `people` (the client blocks crowd pings regardless). Any name the read
+    knows counts, whatever its letters or spaces. A trailing full stop is the
+    end of a sentence, not part of a name.
     """
     pinged = {}
+    names = sorted((k for k in (people or {}) if k), key=len, reverse=True)
+    if not text or not names:
+        return text or "", pinged
+    pattern = re.compile(_AT_BEFORE + "|".join(map(re.escape, names)) + _AT_AFTER,
+                         re.IGNORECASE)
 
     def sub(m):
-        raw = m.group(1)
-        name = raw.rstrip(".")
-        hit = people.get(name.lower())
+        hit = people.get(m.group(1).lower())
         if hit is None:
             return m.group(0)
         uid, label = hit
         pinged[uid] = label
-        return f"<@{uid}>" + raw[len(name):]
+        return f"<@{uid}>"
 
-    return _AT_NAME.sub(sub, text or ""), pinged
+    return pattern.sub(sub, text), pinged
 
 
 def image_parts(r, where, tag):
