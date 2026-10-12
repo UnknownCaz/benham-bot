@@ -72,17 +72,42 @@ def _print_help(name):
     return outbox.EXIT_OK
 
 
-def _parse_kv(pairs):
-    """Parse key=value arguments. JSON values are decoded so lists/objects work."""
+# What a JSON-decoded value must turn out to be for each declared type. Any
+# other decode is thrown away and the text kept: `753e36` declared str is text.
+_DECODES_TO = {"list": (list,), "int": (int,), "bool": (bool,)}
+
+
+def _parse_kv(pairs, act=None):
+    """Parse key=value arguments. A value is JSON-decoded only when it decodes
+    to its parameter's declared type (a list, an int, a bool); everything else -
+    every str parameter, confirm_token, any undeclared key - is the text typed.
+
+    Values used to go through json.loads() wholesale, so lists worked - and so
+    did numbers that were never meant as numbers. A confirm token is six hex
+    characters, and one shaped digits-e-digits (`1e5`, `753e36`) is a valid
+    JSON float: the token reached the bot as 7.53e+38 and was refused as
+    unknown (2026-10-10). content="1e5" became "100000.0" the same way.
+    Decoding ints to ints keeps the request envelope as it always read
+    (`"user_id": 404`). tests/test_do_token_types.py.
+    """
+    specs = dict(act.params) if act is not None else {}
+    specs.setdefault("guild_id", {"type": "int"})   # every action accepts it
     out = {}
     for raw in pairs:
         if "=" not in raw:
             return None, f"expected key=value, got {raw!r}"
         k, v = raw.split("=", 1)
+        k = k.strip()
+        out[k] = v                      # text, the common case and the safe one
+        want = _DECODES_TO.get(specs.get(k, {}).get("type")) if k != "confirm_token" else None
+        if not want:
+            continue
         try:
-            out[k.strip()] = json.loads(v)
+            decoded = json.loads(v)
         except ValueError:
-            out[k.strip()] = v          # a bare string is the common case
+            continue                    # left as text; _coerce converts or refuses it
+        if isinstance(decoded, want) and not (want == (int,) and isinstance(decoded, bool)):
+            out[k] = decoded
     return out, None
 
 
@@ -99,7 +124,7 @@ def main(argv):
     if name not in capabilities.REGISTRY:
         return outbox.usage(f"unknown action {name!r} — try `python benham.py do list`")
 
-    params, err = _parse_kv(argv[1:])
+    params, err = _parse_kv(argv[1:], capabilities.REGISTRY[name])
     if err:
         return outbox.usage(err)
 
