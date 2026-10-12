@@ -2372,6 +2372,16 @@ async def poll_outbox():
                     continue
 
                 if act.needs_confirm:
+                    # A token is text. A number here means the caller decoded it
+                    # (an old do.py read `753e36` as a float) - say that, rather
+                    # than "unknown", and leave the real item parked.
+                    # tests/test_do_token_types.py.
+                    if not isinstance(token, str):
+                        raise ValueError(
+                            f"confirm_token must be text, got the {type(token).__name__} "
+                            f"{token!r}: the caller read the token as a number. "
+                            "Nothing ran; the confirmation is still pending - pass "
+                            "the token again as text.")
                     parked = confirm.consume(token)
                     if parked is None:
                         raise ValueError(
