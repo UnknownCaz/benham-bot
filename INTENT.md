@@ -1152,6 +1152,23 @@ participant before the build, not after it.
 
 ## 7. Known bugs
 
+### 2026-10-11 — a long reply was dropped in silence at max_tokens
+
+Caz DM'd a server build and asked for the plan first (13:02Z). Round 1 read the server and said
+"Let me pull the current state of that server before I draft the plan." Round 2 came back
+`out=2048` - the agent's whole `max_tokens` - with no text at all: every token had gone into tool
+calls cut off mid-input. The loop treated any stop_reason other than `tool_use` as "finished",
+so the turn ended on round 1's sentence and he got silence.
+
+**Fixed in `agent._create`:** a call cut off at `max_tokens` is asked again once with
+`agent.max_tokens_retry` of room (default 16000, the non-streaming ceiling) - the same request,
+so nothing has run yet. Cut off again, the reply keeps what was written and ends with a visible
+cut-off line, and a tool call the cut landed in is **never run** and is named as not run (its
+input is half a request). Same rule in the confirm-explain call, the answer check (a cut
+`answer_conversation` would record his words half-copied) and `rehearse`. The ordinary turn is
+untouched: one call, same cap. `friend_turn` (tools off, text only) was left as it was - a cut
+there still posts what was written. `tests/test_max_tokens.py` replays the 13:03Z shape.
+
 ### 2026-09-16 — c38: the timer was right and the sentence was wrong (c19 in reverse)
 
 c38 was opened with `--nudge-cap 0`. Everything the cap touches behaved: `due()` returned `bank`
