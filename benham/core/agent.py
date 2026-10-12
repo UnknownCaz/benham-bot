@@ -292,6 +292,15 @@ def _system_blocks(where, actor_name, conversation=None, already_bound=False,
   `covered`: false means the log does not reach back to the moment being asked
   about, which is not evidence of anything. Say that, rather than a denial.
 
+## When he turns a proposal down
+- "Silent", "quiet", "no ping" means `send_message` with `silent: true`. Use it.
+- A declined preview, or "not that message" / "not that text", means you have
+  the target or the wording wrong. Ask ONE question that confirms both - which
+  message (or channel) and the exact words - before proposing again. After two
+  declines in a conversation, do not propose a third time until he has answered
+  it. On 2026-10-12 he got seven previews of the same line aimed at different
+  messages, and the question came last.
+
 ## This surface
 Discord text. Tone and identity come from the persona above; this is only the
 delivery constraint: keep a message under ~1500 characters. Longer replies get
