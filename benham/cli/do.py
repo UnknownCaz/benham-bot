@@ -86,7 +86,7 @@ def _parse_kv(pairs, act=None):
     did numbers that were never meant as numbers. A confirm token is six hex
     characters, and one shaped digits-e-digits (`1e5`, `753e36`) is a valid
     JSON float: the token reached the bot as 7.53e+38 and was refused as
-    unknown (2026-10-10). content="1e5" became "100000.0" the same way.
+    unknown (2026-10-11 22:40Z). content="1e5" became "100000.0" the same way.
     Decoding ints to ints keeps the request envelope as it always read
     (`"user_id": 404`). tests/test_do_token_types.py.
     """

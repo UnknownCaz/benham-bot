@@ -1,7 +1,7 @@
 """
 test_do_token_types.py - a confirm token is a STRING from the shell to the bot.
 
-THE DEFECT (outbox, 2026-10-10 22:40 UTC). `benham.py do create_role ...
+THE DEFECT (outbox/failed, 2026-10-11 22:40Z = 18:40 local). `benham.py do create_role ...
 confirm_token=<a 6-hex token>` was refused with `confirm_token 7.53e+38 is unknown`.
 do.py's key=value parser ran json.loads() on every value so lists could be
 typed inline - and six hex characters shaped digits-e-digits are a valid JSON
