@@ -25,6 +25,7 @@ thread mid-conversation - the whole point is being reachable while Tyler is away
 and "sorry, who are you" after a crash defeats that.
 """
 
+import asyncio
 import os
 import re
 import time
@@ -552,8 +553,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     cut = None
 
     for round_no in range(MAX_TOOL_ROUNDS):
-        resp, discarded = _create(api, log, f"round {round_no + 1}", system=system,
-                                  messages=turns, tools=tools)
+        resp, discarded = await _acreate(api, log, f"round {round_no + 1}",
+                                         system=system, messages=turns, tools=tools)
 
         # Web search, if it happened, ran on Anthropic's servers DURING this call
         # and its results are already in resp.content. Two consequences, and the
@@ -696,8 +697,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
 
         if halt:
             # Let the model produce its "here's what this would do" message, then stop.
-            resp, discarded = _create(api, log, "confirm-explain", system=system,
-                                      messages=turns, tools=tools)
+            resp, discarded = await _acreate(api, log, "confirm-explain",
+                                             system=system, messages=turns, tools=tools)
             # This call carries the tool list too, so it can search. Nothing acts
             # after it - the loop breaks below - so there is no taint to set; the
             # log line still has to happen, because the trail records searches that
@@ -743,8 +744,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             f"call this turn - asking once whether it meant it")
         turns.append({"role": "user", "content": _ANSWER_CHECK.format(
             ids=", ".join(f"`{i}`" for i in named))})
-        resp, _discarded = _create(api, log, "answer-check", system=system,
-                                   messages=turns, tools=tools)
+        resp, _discarded = await _acreate(api, log, "answer-check", system=system,
+                                          messages=turns, tools=tools)
         recorded, refused = [], []
         # ONLY answer_conversation, and only for an id that was in front of it.
         # This round exists to finish one specific sentence; anything else the
@@ -916,8 +917,8 @@ async def rehearse(client, log, content, where, conversation_key, call_ctx,
     usage = dict.fromkeys(("input_tokens", "output_tokens", "cache_read_input_tokens",
                            "cache_creation_input_tokens"), 0)
     for round_no in range(MAX_TOOL_ROUNDS):
-        resp, discarded = _create(api, log, f"rehearsal {round_no + 1}", system=system,
-                                  messages=turns, tools=tools)
+        resp, discarded = await _acreate(api, log, f"rehearsal {round_no + 1}",
+                                         system=system, messages=turns, tools=tools)
         for r in discarded + [resp]:
             u = getattr(r, "usage", None)
             for k in usage:
@@ -1008,7 +1009,9 @@ async def friend_turn(log, content, where, channel_id, guild_id, names, closing)
         {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": volatile},
     ]
-    resp = _get_client().messages.create(
+    # Off the event loop, like every other call in this module (see _acreate).
+    resp = await asyncio.to_thread(
+        _get_client().messages.create,
         model=MODEL, max_tokens=MAX_TOKENS, system=system,
         messages=[{"role": "user", "content": content}],
         tools=build_tools(), tool_choice={"type": "none"})
@@ -1260,6 +1263,20 @@ def _create(api, log, label, **kw):
     if getattr(resp, "stop_reason", None) == "max_tokens":
         log(f"agent: {label} still cut off at max_tokens - the reply will say so")
     return resp, discarded
+
+
+async def _acreate(api, log, label, **kw):
+    """_create, run on a worker thread so the Discord event loop keeps beating.
+
+    2026-10-12 09:28:34Z: the agent called the API synchronously from inside
+    respond(), and discord.py logged its heartbeat blocked for more than 10
+    seconds - one slow round and the gateway starts to think the bot is dead.
+    The call itself is unchanged: this is _create, byte for byte, so the
+    retry, the usage line and the max_tokens path behave exactly as before;
+    only the thread it waits on moved. `log` is called from that thread too,
+    which every log in this bot already tolerates (bot.py's to_thread calls
+    pass the same log)."""
+    return await asyncio.to_thread(_create, api, log, label, **kw)
 
 
 def _cut_notice(cut_tools):
