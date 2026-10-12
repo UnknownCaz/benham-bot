@@ -66,7 +66,7 @@ PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "persona.md")
 
 _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))
-MODEL = _cfg.get("model", "claude-sonnet-5")
+MODEL = _cfg.get("model", "claude-opus-5-5")
 MAX_TOKENS = int(_cfg.get("max_tokens", 2048))
 # The one retry a cut-off call gets (see _create). Only ever spent when a call
 # actually hits MAX_TOKENS, so the ordinary turn costs exactly what it did.
