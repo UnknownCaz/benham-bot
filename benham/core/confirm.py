@@ -17,9 +17,10 @@ Three properties do the real work:
   when the reply names its token. It does not, and never did. The claim was
   copied out of here into two manual pages, where it was published as a safety
   property of the delete/purge/kick/ban path. What actually keeps a stray "yeah"
-  from firing something is the pair of properties below - one live confirmation
-  at a time, and a short TTL - plus read_reply()'s whitelist, which matches only
-  a bare affirmative phrase and returns None for anything it does not recognise.
+  from firing something is the pair of properties below - a bare yes fires only
+  when exactly one confirmation is live, and a short TTL - plus read_reply()'s
+  whitelist, which matches only a bare affirmative phrase and returns None for
+  anything it does not recognise.
   If the token SHOULD be mandatory for tier 3, that is a behaviour change and
   belongs in a commit that says so, not in a comment that assumes it.
 
@@ -47,9 +48,23 @@ Three properties do the real work:
   a repair path. A two-level rule would buy back only friction the button already
   removed, at the cost of a curated set that has to be kept right forever.
 
-  One at a time. Parking a new confirmation supersedes the old one rather than
-  queueing it. Two live confirmations means an ambiguous "yes", and an ambiguous
-  yes on a delete is the failure this module exists to prevent.
+  Several at once, each on its own (2026-10-11). This used to read "One at a
+  time": parking a new confirmation cleared the store, so that "yes" could never
+  be ambiguous. The cost landed at 22:35Z that day - one DM turn proposed three
+  `create_role` actions, park() wiped the first two as it stored the third, Caz
+  tapped Approve on what he could see and two roles were never created, with
+  nothing said. An overwrite in silence is worse than the ambiguity it avoided,
+  so every parked item now lives under its own token, and the ambiguity is
+  handled where it arises - resolve(), the typed-reply path:
+    - a reply naming a live token answers THAT confirmation and no other;
+    - a bare yes/no while two or more are live answers NEITHER, out loud,
+      naming each (describe_choice) - the 2026-08-26 rule, kept;
+    - a near-miss token, or two tokens in one reply, gets a spoken refusal.
+  The buttons were never ambiguous: each prompt's Approve/Deny closes over its
+  own token. The one thing still replaced is a TWIN - the same action, the same
+  parameters, from the same requester and origin - because two identical live
+  previews are one action that could be approved twice; the replacement says
+  which token it replaced (`replaces`), so its old buttons can be retired.
 
   Expiry is cancellation. A confirmation past its TTL is dead and its action never
   runs. Nothing here ever treats silence, a timeout, or a missing record as assent.
@@ -98,6 +113,8 @@ class Pending:
         # from somewhere it was allowed.
         self.call_ctx = call_ctx
         self.expires_at = time.monotonic() + ttl
+        # The token of the identical twin this one replaced, or None. See park().
+        self.replaces = None
 
     @property
     def expired(self):
@@ -108,7 +125,7 @@ class Pending:
         return max(0, int(self.expires_at - time.monotonic()))
 
 
-_pending = {}   # token -> Pending  (at most one live entry; see supersede below)
+_pending = {}   # token -> Pending, oldest first (dicts keep insertion order)
 
 
 def _ttl_for(origin):
@@ -121,13 +138,22 @@ def _ttl_for(origin):
 def park(action, params, preview, requested_by, origin, call_ctx=None):
     """Store a dry-run result awaiting confirmation. Returns the Pending.
 
-    Supersedes any existing pending action - see the module docstring on why this
-    is a replace and not a queue.
+    ADDS to what is parked - see the module docstring (2026-10-11) for why this
+    stopped being a replace. The one exception is an identical twin (same
+    action, params, requester and origin): that one is replaced, and the new
+    Pending's `replaces` names the token it took over from.
     """
-    _pending.clear()
+    twin = next((p for p in live()
+                 if p.action == action and p.params == params
+                 and p.requested_by == requested_by and p.origin == origin), None)
+    if twin is not None:
+        _pending.pop(twin.token, None)
     token = uuid.uuid4().hex[:6]
+    while token in _pending:          # six hex chars; a clash is rare, never silent
+        token = uuid.uuid4().hex[:6]
     p = Pending(token, action, params, preview, requested_by, origin,
                 _ttl_for(origin), call_ctx=call_ctx)
+    p.replaces = twin.token if twin is not None else None
     _pending[token] = p
     return p
 
@@ -147,13 +173,20 @@ def get(token):
     return p
 
 
+def live():
+    """Every live pending action, oldest first. Expired ones are dropped here."""
+    return [p for p in (get(t) for t in list(_pending)) if p is not None]
+
+
 def current():
-    """The single live pending action, or None."""
-    for token in list(_pending):
-        p = get(token)
-        if p is not None:
-            return p
-    return None
+    """The NEWEST live pending action, or None.
+
+    Kept for the callers that only ask "is anything parked?". Anything that has
+    to act on a confirmation, or tell him what is waiting, reads live() - since
+    2026-10-11 there can be several.
+    """
+    items = live()
+    return items[-1] if items else None
 
 
 def consume(token):
@@ -237,7 +270,7 @@ def require_token():
     Read live rather than captured at import, so flipping it in control.json
     takes effect on the next restart without a code change - which is the whole
     point of it being config. Global rather than per-face on purpose: `_pending`
-    is one module-level slot shared by every face, so a per-face answer to "does
+    is one module-level store shared by every face, so a per-face answer to "does
     this confirmation need its token" would be answering about the wrong object.
     """
     return config_problem() is not None or _configured_require_token() is not False
@@ -368,6 +401,72 @@ def read_reply(text, pending=None):
     if leads_yes and _references(raw, pending):
         return "yes", None
     return None, None
+
+
+def resolve(text):
+    """Read a typed reply against EVERYTHING parked. Returns (verdict, target).
+
+    The typed-reply entry point since several confirmations can be live at once
+    (2026-10-11). `verdict` is read_reply's - "yes" | "no" | "needs_token" |
+    "needs_reference" | None - about `target`, or "choose": the reply reads as
+    an answer but does not say WHICH, so it answers none of them and the caller
+    says so, naming each (describe_choice). Three rules, all the 2026-08-26
+    ones carried over from the PC-prompt collision:
+
+      - A live token belongs to its own confirmation. "yes a1b2c3" is judged
+        against a1b2c3 alone - its tier, its rules - and can fire nothing else.
+      - A bare yes or no while two or more are live answers NEITHER. Guessing
+        would misfile an approval or a cancel; each prompt has buttons, so
+        saying which costs one tap.
+      - A reply that tries and misses - a near-miss of any live token, or two
+        live tokens in one breath - is answered out loud, never with silence.
+
+    With exactly one live, this is read_reply(text, that_one), unchanged.
+    """
+    items = live()
+    if not items:
+        return None, None
+    words = [w for w in (_strip_wrapping(w) for w in
+                         _normalize(text).replace(",", " ").split()) if w]
+    named = list(dict.fromkeys(w for w in words if _is_token_shaped(w) and get(w)))
+    leads = bool(words) and (words[0] in _AFFIRMATIVE or words[0] in _NEGATIVE)
+
+    if len(named) > 1:
+        # "yes a1b2c3 d4e5f6": approving two at once would be convenient, and it
+        # is also one typo away from approving the wrong pair. One at a time.
+        rest = [w for w in words if w not in named]
+        answers = (rest and (rest[0] in _AFFIRMATIVE or rest[0] in _NEGATIVE
+                             or " ".join(rest) in _NEGATIVE)) or not rest
+        return ("choose", None) if answers else (None, None)
+
+    if len(named) == 1:
+        target = get(named[0])
+        return read_reply(text, target)[0], target
+
+    if len(items) == 1:
+        return read_reply(text, items[0])[0], items[0]
+
+    # Several live and no live token named.
+    if any(read_reply(text, p)[0] is not None for p in items):
+        return "choose", None
+    if leads and any(_token_attempt(w, p) for w in words for p in items):
+        return "choose", None
+    return None, None
+
+
+def describe_choice(items):
+    """What he reads when a typed reply did not say which of several it meant."""
+    which = "neither" if len(items) == 2 else "none of them"
+    lines = [f"**{len(items)} things are waiting on you**, so that answers {which} - "
+             f"it doesn't say which one. Nothing was run or cancelled."]
+    for p in items:
+        summary = str((p.preview or {}).get("summary") or "").strip()
+        if len(summary) > 90:
+            summary = summary[:89] + "…"
+        lines.append(f"- `{p.action}`" + (f" - {summary}" if summary else "")
+                     + f": `yes {p.token}` or `no {p.token}`")
+    lines.append("Or tap Approve / Deny on the prompt you mean.")
+    return "\n".join(lines)
 
 
 def _strip_wrapping(word):

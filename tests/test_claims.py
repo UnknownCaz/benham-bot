@@ -171,7 +171,7 @@ async def main():
             "test:claims_22_21",
             "sorry wasnt looking for the prompt again can you send it again?",
             "Retrying now - preview should be waiting on your end.", logged)
-        check("nothing was actually parked", pending, None)
+        check("nothing was actually parked", pending, [])
         check("22:21 - the phantom preview is corrected, not relayed",
               "Correction (automatic check)" in reply, True)
         check("and the correction says nothing is parked",

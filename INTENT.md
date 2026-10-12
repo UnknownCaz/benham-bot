@@ -1152,6 +1152,24 @@ participant before the build, not after it.
 
 ## 7. Known bugs
 
+### 2026-10-11 — three proposals in one turn, and only the last survived
+
+From one DM (22:35Z), Benham proposed three `create_role` actions at once - Transmitter, Operator,
+Listener - each under `always_confirm`. `confirm.park()` cleared the store on every call ("one at
+a time", so a "yes" could never be ambiguous), so only Listener was parked when Caz tapped
+Approve. The other two were never created and nothing told him; the hub built them by hand.
+
+**Fixed:** the store keeps every parked item under its own token, `agent.respond` hands back all
+of a turn's proposals, and `bot.py` sends one prompt with its own Approve/Deny per proposal.
+The ambiguity the old rule avoided is handled where it arises, in `confirm.resolve()` (the
+typed-reply path), by the 2026-08-26 rules: a live token answers its own confirmation and no
+other; a bare yes **or no** while two or more are live answers **none**, out loud, naming each
+with its exact `yes <token>` / `no <token>`; a near-miss token, or two tokens in one reply, gets
+a spoken refusal. Decision 37 is untouched (a tier-3 item still needs its token; Approve is still
+one tap). An identical re-proposal (same action, params, requester, origin) still replaces its
+twin, so one action cannot be approved twice; its old buttons are retired.
+`tests/test_multi_confirm.py` replays the 22:35Z shape.
+
 ### 2026-10-11 — a long reply was dropped in silence at max_tokens
 
 Caz DM'd a server build and asked for the plan first (13:02Z). Round 1 read the server and said

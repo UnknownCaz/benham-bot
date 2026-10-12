@@ -351,9 +351,17 @@ check("tier-2 prompt does not warn", "will not fire" in confirm.describe(d2), Fa
 confirm.cancel()
 
 section("Confirmations — lifecycle")
+# Was "parking supersedes the previous" / "only one live at a time". That rule
+# lost two of three proposed roles on 2026-10-11; several now live side by
+# side, each under its own token (test_multi_confirm.py owns the details).
+p1 = confirm.park("add_role", {"user_id": 1, "role": "Streamer"}, {"summary": "x"},
+                  TYLER, "dm")
 p2 = confirm.park("delete_channel", {"channel_id": 2}, {"summary": "x"}, TYLER, "dm")
-check("parking supersedes the previous", confirm.get(p.token), None)
-check("only one live at a time", confirm.current().token, p2.token)
+check("parking keeps the previous", confirm.get(p1.token) is not None, True)
+check("both live, oldest first", [x.token for x in confirm.live()],
+      [p1.token, p2.token])
+check("current() is the newest", confirm.current().token, p2.token)
+confirm.cancel(p1.token)
 check("consume returns it", confirm.consume(p2.token).action, "delete_channel")
 check("consumed cannot fire twice", confirm.get(p2.token), None)
 check("nothing pending after consume", confirm.current(), None)

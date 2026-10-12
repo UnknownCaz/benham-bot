@@ -327,15 +327,20 @@ it deliberately instead.
     # itself, forty lines down. And a parameter defaulting to None could not tell
     # "nothing is parked" from "nobody passed it", which is exactly the kind of
     # quietly-wrong fact this section exists to stop asserting.
-    _parked = confirm.current()
-    if _parked is not None:
+    _parked = confirm.live()
+    if _parked:
+        listed = "\n".join(
+            f"- `{p.action}` ({_preview_name(p)}token `{p.token}`), expires in "
+            f"{p.seconds_left // 60}m" for p in _parked)
+        head = ("A confirmation is parked" if len(_parked) == 1
+                else f"{len(_parked)} confirmations are parked")
         volatile += (
-            f"\n\n## A confirmation is parked\n"
-            f"`{_parked.action}` is waiting on him and expires in "
-            f"{_parked.seconds_left // 60}m. The prompt with the Approve/Deny "
-            f"buttons is a real message that went into this DM when the preview was "
-            f"created - the harness sends it, not you. Calling the tool again "
-            f"replaces this one with a fresh prompt.")
+            f"\n\n## {head}\n{listed}\n"
+            "Each is waiting on him with its own Approve/Deny buttons - a real "
+            "message that went into this DM when its preview was created; the "
+            "harness sends it, not you. Each is approved or refused on its own. "
+            "Calling a tool again with DIFFERENT parameters adds another; the same "
+            "call with the same parameters replaces its twin with a fresh prompt.")
     else:
         volatile += (
             "\n\n## Nothing is awaiting his confirmation\n"
@@ -459,10 +464,12 @@ it deliberately instead.
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
                   already_bound=False, queue=None, recent=None, content=None):
-    """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
+    """Run one agent turn. Returns (reply_text, parked).
 
-    `reply_text` is what Benham should say. The pending confirmation, if any, has
-    already been parked in confirm.py - the caller sends its prompt as a follow-up.
+    `reply_text` is what Benham should say. `parked` is the list of confirmations
+    this turn parked in confirm.py, in the order proposed - [] when none. The
+    caller sends one prompt per item as a follow-up. A list since 2026-10-11:
+    one turn proposed three create_role actions and only the last survived.
 
     `content` is the user turn as API content BLOCKS, for a message that carried
     more than text - an image to look at, a quoted message, an embed. bot.py
@@ -472,14 +479,14 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     here, and a remembered image would be re-sent and re-billed on all twenty.
     """
     if not ENABLED:
-        return None, None
+        return None, []
     if not identity.is_owner(actor_id):
         # Defence in depth; bot.py already gated this.
-        return identity.refusal(actor_id), None
+        return identity.refusal(actor_id), []
 
     last = _last_call.get(conversation_key, 0)
     if time.monotonic() - last < COOLDOWN:
-        return None, None
+        return None, []
     _last_call[conversation_key] = time.monotonic()
 
     turns = list(_history(conversation_key))
@@ -508,7 +515,10 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _volatile},   # after the breakpoint, so it stays free to vary
     ]
-    pending = None
+    # Every confirmation this turn parks, in order. Was a single `pending` that
+    # each new park overwrote - and confirm.park() cleared the store besides -
+    # so of three proposals in one round only the last reached him (2026-10-11).
+    parked = []
     reply_parts = []
     # Set once Benham has read anything a third party could have written. Never
     # cleared within a turn: you cannot un-read something, and a later "clean" read
@@ -617,8 +627,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                     client, log, call.name, params, actor_id=actor_id, force=False,
                     call_ctx=call_ctx.with_taint(tainted) if call_ctx else None)
                 if preview is not None:
-                    pending = confirm.park(call.name, params, preview, actor_id, "dm",
-                                       call_ctx=call_ctx)
+                    parked.append(confirm.park(call.name, params, preview, actor_id,
+                                               "dm", call_ctx=call_ctx))
                     results.append({
                         "type": "tool_result", "tool_use_id": call.id,
                         "content": ("NOT EXECUTED - awaiting Tyler's confirmation. "
@@ -765,7 +775,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     reply = _verify_saved_claims(reply, log)
     reply = _verify_confirmation_claims(reply, log)
     _remember(conversation_key, text, reply)
-    return (reply or None), pending
+    return (reply or None), parked
 
 
 def _label_untrusted(source, body):
@@ -1000,6 +1010,13 @@ _CONFIRM_DENIED_RE = re.compile(
     r"isn'?t|is not|wasn'?t|was not|didn'?t|did not|hasn'?t|has not|would)\b")
 
 
+def _preview_name(p):
+    """A short name for a parked item in the prompt's list: the preview's resolved
+    name when it has one, so three create_role lines read as three roles."""
+    name = p.preview.get("name") if isinstance(p.preview, dict) else None
+    return f"{str(name)[:60]}, " if name else ""
+
+
 def _confirm_window():
     """The DM confirmation window, in words, read from config.
 
@@ -1061,7 +1078,7 @@ def _verify_confirmation_claims(reply, log=None):
         return reply
     # The certain half, and the cheap one. Anything parked - by this turn, or still
     # live from an earlier one - makes the claim true enough to relay untouched.
-    if confirm.current() is not None:
+    if confirm.live():
         return reply
     claims = [s for s in re.split(r"(?<=[.!?\n])\s+", low)
               if not s.rstrip().endswith("?")

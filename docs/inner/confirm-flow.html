@@ -49,9 +49,15 @@
       against a fixed affirmative set with any token removed, and returns <code>None</code> for
       anything it does not recognise. A <code>None</code> is treated as no action — ambiguity is
       never consent.</li>
-      <li><strong>One at a time.</strong> Parking a new confirmation supersedes the old one
-      rather than queueing it, so "yes" is never ambiguous <em>between two destructive
-      actions</em> — which is the case that would actually hurt.</li>
+      <li><strong>A bare yes fires only when one thing is waiting.</strong> Several
+      confirmations can be live at once - each with its own token and its own buttons - and
+      a bare "yes" or "no" while two or more are live answers <em>none</em> of them, out loud,
+      listing each with the exact <code>yes &lt;token&gt;</code> / <code>no &lt;token&gt;</code>
+      to send. A reply naming a live token answers that confirmation and no other. (Until
+      2026-10-11 this read "one at a time": parking cleared the store, and a turn that proposed
+      three roles kept only the last - the other two were never created and nothing said so.
+      Re-proposing the identical action still replaces its twin, so one action cannot be
+      approved twice.)</li>
       <li><strong>A clock.</strong> The window is whatever
       <code>confirm.conversation_ttl_seconds</code> says for the DM path (below) - an hour
       as shipped, since decision #24 - so it is the weakest of the three guards and the
@@ -63,7 +69,9 @@
     a destructive action is answered by saying yes again, louder. A <em>mistyped or lapsed</em>
     token is answered out loud for the same reason — that is the one new way to fail here, and
     it happens to someone who did exactly what they were asked. Cancelling never got harder — a
-    bare "no" still works on every tier, so the safe direction stays the convenient one.</p>
+    bare "no" still works on every tier, so the safe direction stays the convenient one. (With
+    several things waiting, a bare "no" answers none of them and says so, exactly like a bare
+    "yes" - <code>no &lt;token&gt;</code> or the Deny button cancels the one you mean.)</p>
     <p><strong>When a PC permission prompt is live at the same time.</strong> Both can be
     waiting in the same DM, and both accept a bare "yes". A reply carrying a live confirm
     token belongs to the <em>confirmation</em> and is never read as an answer to the PC

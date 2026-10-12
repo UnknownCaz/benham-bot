@@ -1775,14 +1775,24 @@ async def on_message(message):
     # Confirmation is checked BEFORE the agent, and resolved without it. A pending
     # action only exists in the seconds after a preview, so an "ok" in ordinary
     # conversation falls through to the agent as normal.
-    pending = confirm.current()
-    if pending is not None:
-        # The pending goes IN so the tier-3 rule can apply: on a destructive action
-        # an affirmative has to carry the token (2026-08-24). At most one is ever
-        # live, so get(token) and current() are the same object whenever the token
-        # is real.
-        verdict, token = confirm.read_reply(text, pending)
-        target = confirm.get(token) if token else pending
+    #
+    # Several can be live at once since 2026-10-11 (one turn proposed three
+    # roles and the store kept only the last). confirm.resolve() reads the reply
+    # against all of them: a live token answers its own confirmation and no
+    # other, and a bare yes/no while two or more are live answers NONE of them,
+    # out loud, naming each - the 2026-08-26 collision rule, kept. With exactly
+    # one live it is read_reply(text, that_one), as it always was.
+    live = confirm.live()
+    if live:
+        verdict, pending = confirm.resolve(text)
+        target = pending
+        if verdict == "choose":
+            await reply_in(message.channel, confirm.describe_choice(live),
+                           reference=message)
+            log(f"AMBIGUOUS reply with {len(live)} confirmations live "
+                f"({', '.join(p.token for p in live)}) by {message.author.id} "
+                f"- answered none, asked which")
+            return
         if verdict == "needs_token":
             # The whole rule in the reply, including the exact string to send.
             # A safety prompt people have to guess at is a safety prompt people
@@ -1812,9 +1822,11 @@ async def on_message(message):
             await retire_view(("confirm", target.token), "answered 'yes' in chat")
             await fire_confirmed(target, message.channel)
             return
-        if verdict == "no":
+        if verdict == "no" and pending is not None:
             log(f"DECLINED {pending.action} (token {pending.token}) by {message.author.id}")
-            confirm.cancel()
+            # This one only. A bare cancel() here dropped EVERYTHING parked, which
+            # was the same thing while the store held one item and is not now.
+            confirm.cancel(pending.token)
             await retire_view(("confirm", pending.token), "answered 'no' in chat")
             await reply_in(message.channel, "Cancelled — nothing was touched.")
             return
@@ -1943,7 +1955,10 @@ async def on_message(message):
     # explains it goes with it - Caz, 2026-10-05: "so they dont see the behind
     # the scenes confirmation". The channel keeps the 👀/✅ on his message.
     channel = message.channel
-    if parked is not None and not is_dm:
+    # A list: every confirmation the turn parked, in order (2026-10-11). The
+    # `or []` keeps a stand-in that still answers None from crashing the turn.
+    parked = list(parked or [])
+    if parked and not is_dm:
         channel = await owner_dm_channel()
         if reply:
             reply = f"(about #{message.channel} in {message.guild.name})\n{reply}"
@@ -1955,12 +1970,24 @@ async def on_message(message):
         await reply_in(channel, reply)
         if pinged:
             await invite_pinged(message.channel, pinged)
-    if parked is not None:
+    for one in parked:
         # The preview carries Approve/Deny buttons wired to the SAME chokepoint a
         # typed "yes" reaches: consume-then-fire_confirmed, which the model never
         # touches. A button is a faster finger, not a new authority.
+        #
+        # One prompt and one set of buttons PER proposal, each closed over its
+        # own token, so each is approved or refused on its own. An identical
+        # re-proposal replaced its twin in the store; the twin's old buttons are
+        # retired here so nothing left in the DM looks pressable and isn't.
+        if one.replaces:
+            await retire_view(("confirm", one.replaces),
+                              "replaced by the identical preview below")
+        if confirm.get(one.token) is None:
+            # Replaced later in this same turn by its own twin (the model proposed
+            # the identical call twice) - the twin gets the one prompt.
+            continue
 
-        async def decide(approved, _parked=parked, _channel=channel):
+        async def decide(approved, _parked=one, _channel=channel):
             if approved:
                 target = confirm.consume(_parked.token)
                 if target is None:
@@ -1973,9 +2000,9 @@ async def on_message(message):
                 confirm.cancel(_parked.token)
                 await reply_in(_channel, "Cancelled — nothing was touched.")
 
-        view = ApprovalView(decide, timeout=max(parked.seconds_left, 1))
-        _views[("confirm", parked.token)] = view
-        await send_with_view(channel, confirm.describe(parked), view,
+        view = ApprovalView(decide, timeout=max(one.seconds_left, 1))
+        _views[("confirm", one.token)] = view
+        await send_with_view(channel, confirm.describe(one), view,
                              reference=message if channel is message.channel else None)
     await react(message, "✅")
 
@@ -2328,8 +2355,8 @@ async def poll_outbox():
                     parked = confirm.park(
                         action, params, preview, req.get("actor_id"), "outbox",
                         # Park the context too. Without it a CLI-initiated dry-run
-                        # stored call_ctx=None, and because confirm holds a single
-                        # global slot, answering "yes" in Discord replayed that None
+                        # stored call_ctx=None, and because confirm is one global
+                        # store, answering "yes" in Discord replayed that None
                         # into run() and was denied by rule_context_present - a
                         # working flow broken by the gate rather than by an attack.
                         call_ctx=policy.CallContext.local(req.get("actor_id")))
