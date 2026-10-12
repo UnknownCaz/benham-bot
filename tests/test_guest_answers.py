@@ -191,6 +191,7 @@ def _install():
     bot.agent.respond = _agent
     agent.ENABLED = True
     confirm.current = lambda: None
+    confirm.live = lambda: []
 
     tmp = tempfile.mkdtemp(prefix="benham-answers-test-")
     guest.MEMORY_FILE = os.path.join(tmp, "guest_memory.json")

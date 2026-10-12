@@ -67,6 +67,11 @@ _cfg = identity.CONTROL.get("agent", {}) or {}
 ENABLED = bool(_cfg.get("enabled", True))
 MODEL = _cfg.get("model", "claude-sonnet-5")
 MAX_TOKENS = int(_cfg.get("max_tokens", 2048))
+# The one retry a cut-off call gets (see _create). Only ever spent when a call
+# actually hits MAX_TOKENS, so the ordinary turn costs exactly what it did.
+# 16000 is the ceiling the SDK guidance gives for a NON-streaming call - past it
+# the HTTP request risks timing out, which would trade a cut reply for an error.
+MAX_TOKENS_RETRY = int(_cfg.get("max_tokens_retry", 16000))
 MAX_TOOL_ROUNDS = int(_cfg.get("max_tool_rounds", 8))
 HISTORY_TURNS = int(_cfg.get("history_turns", 20))
 COOLDOWN = float(_cfg.get("cooldown_seconds", 1.5))
@@ -322,15 +327,20 @@ it deliberately instead.
     # itself, forty lines down. And a parameter defaulting to None could not tell
     # "nothing is parked" from "nobody passed it", which is exactly the kind of
     # quietly-wrong fact this section exists to stop asserting.
-    _parked = confirm.current()
-    if _parked is not None:
+    _parked = confirm.live()
+    if _parked:
+        listed = "\n".join(
+            f"- `{p.action}` ({_preview_name(p)}token `{p.token}`), expires in "
+            f"{p.seconds_left // 60}m" for p in _parked)
+        head = ("A confirmation is parked" if len(_parked) == 1
+                else f"{len(_parked)} confirmations are parked")
         volatile += (
-            f"\n\n## A confirmation is parked\n"
-            f"`{_parked.action}` is waiting on him and expires in "
-            f"{_parked.seconds_left // 60}m. The prompt with the Approve/Deny "
-            f"buttons is a real message that went into this DM when the preview was "
-            f"created - the harness sends it, not you. Calling the tool again "
-            f"replaces this one with a fresh prompt.")
+            f"\n\n## {head}\n{listed}\n"
+            "Each is waiting on him with its own Approve/Deny buttons - a real "
+            "message that went into this DM when its preview was created; the "
+            "harness sends it, not you. Each is approved or refused on its own. "
+            "Calling a tool again with DIFFERENT parameters adds another; the same "
+            "call with the same parameters replaces its twin with a fresh prompt.")
     else:
         volatile += (
             "\n\n## Nothing is awaiting his confirmation\n"
@@ -454,10 +464,12 @@ it deliberately instead.
 async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                   where, conversation_key, call_ctx=None, conversation=None,
                   already_bound=False, queue=None, recent=None, content=None):
-    """Run one agent turn. Returns (reply_text, pending_confirmation_or_None).
+    """Run one agent turn. Returns (reply_text, parked).
 
-    `reply_text` is what Benham should say. The pending confirmation, if any, has
-    already been parked in confirm.py - the caller sends its prompt as a follow-up.
+    `reply_text` is what Benham should say. `parked` is the list of confirmations
+    this turn parked in confirm.py, in the order proposed - [] when none. The
+    caller sends one prompt per item as a follow-up. A list since 2026-10-11:
+    one turn proposed three create_role actions and only the last survived.
 
     `content` is the user turn as API content BLOCKS, for a message that carried
     more than text - an image to look at, a quoted message, an embed. bot.py
@@ -467,14 +479,14 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     here, and a remembered image would be re-sent and re-billed on all twenty.
     """
     if not ENABLED:
-        return None, None
+        return None, []
     if not identity.is_owner(actor_id):
         # Defence in depth; bot.py already gated this.
-        return identity.refusal(actor_id), None
+        return identity.refusal(actor_id), []
 
     last = _last_call.get(conversation_key, 0)
     if time.monotonic() - last < COOLDOWN:
-        return None, None
+        return None, []
     _last_call[conversation_key] = time.monotonic()
 
     turns = list(_history(conversation_key))
@@ -503,7 +515,10 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         {"type": "text", "text": _static, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _volatile},   # after the breakpoint, so it stays free to vary
     ]
-    pending = None
+    # Every confirmation this turn parks, in order. Was a single `pending` that
+    # each new park overwrote - and confirm.park() cleared the store besides -
+    # so of three proposals in one round only the last reached him (2026-10-11).
+    parked = []
     reply_parts = []
     # Set once Benham has read anything a third party could have written. Never
     # cleared within a turn: you cannot un-read something, and a later "clean" read
@@ -522,12 +537,14 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     # loop by the answer-claim check.
     tried_answer = False
 
+    # Set when a call was still cut off at max_tokens after its retry - the names
+    # of any tool calls it was cut off in the middle of (never run), or [] when
+    # only text was cut. None means nothing was cut. See _create.
+    cut = None
+
     for round_no in range(MAX_TOOL_ROUNDS):
-        resp = api.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system,
-            messages=turns, tools=tools,
-        )
-        _log_usage(log, resp, f"round {round_no + 1}")
+        resp, discarded = _create(api, log, f"round {round_no + 1}", system=system,
+                                  messages=turns, tools=tools)
 
         # Web search, if it happened, ran on Anthropic's servers DURING this call
         # and its results are already in resp.content. Two consequences, and the
@@ -543,7 +560,13 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         # afterwards would let the first post-search action through clean.
         #
         # Never cleared - see `tainted`'s declaration.
-        queries = shared_tools.search_queries(resp) if WEB_SEARCH else []
+        #
+        # A response thrown away for being cut off (see _create) still ran its
+        # searches on Anthropic's side: they are logged and taint like any other,
+        # because the trail records searches that were made, and tainting is the
+        # safe direction to be wrong in.
+        queries = ([q for r in discarded + [resp] for q in shared_tools.search_queries(r)]
+                   if WEB_SEARCH else [])
         if queries:
             shared_tools.log_searches(SEARCH_LOG, actor_id, queries, role="owner")
             log(f"agent search [{actor_id}]: " + "; ".join(repr(q) for q in queries))
@@ -560,6 +583,20 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         resp_text = _response_text(resp)
         if resp_text:
             reply_parts.append(resp_text)
+
+        if resp.stop_reason == "max_tokens":
+            # Cut off even after the retry. Whatever text exists is kept (above)
+            # and the reply says it was cut; a tool call that was cut is NEVER
+            # run - its input is whatever had been written when the budget ran
+            # out, so running it would act on half a request. It is also left
+            # out of the recorded turn: a tool_use with no tool_result after it
+            # is a turn list the API rejects, and the answer check below may
+            # still send this one.
+            cut = [c.name for c in tool_calls]
+            kept = [b.model_dump() for b in resp.content if b.type != "tool_use"]
+            turns.append({"role": "assistant",
+                          "content": kept or [{"type": "text", "text": "(cut off)"}]})
+            break
 
         # Record the assistant turn verbatim so tool_use/tool_result stay paired -
         # the API rejects a tool_result whose tool_use is missing from history.
@@ -590,8 +627,8 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
                     client, log, call.name, params, actor_id=actor_id, force=False,
                     call_ctx=call_ctx.with_taint(tainted) if call_ctx else None)
                 if preview is not None:
-                    pending = confirm.park(call.name, params, preview, actor_id, "dm",
-                                       call_ctx=call_ctx)
+                    parked.append(confirm.park(call.name, params, preview, actor_id,
+                                               "dm", call_ctx=call_ctx))
                     results.append({
                         "type": "tool_result", "tool_use_id": call.id,
                         "content": ("NOT EXECUTED - awaiting Tyler's confirmation. "
@@ -651,23 +688,28 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
 
         if halt:
             # Let the model produce its "here's what this would do" message, then stop.
-            resp = api.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS, system=system,
-                messages=turns, tools=tools,
-            )
-            _log_usage(log, resp, "confirm-explain")
+            resp, discarded = _create(api, log, "confirm-explain", system=system,
+                                      messages=turns, tools=tools)
             # This call carries the tool list too, so it can search. Nothing acts
             # after it - the loop breaks below - so there is no taint to set; the
             # log line still has to happen, because the trail records searches that
             # were made, not searches that went on to matter.
-            for q in (shared_tools.search_queries(resp) if WEB_SEARCH else []):
+            for q in ([q for r in discarded + [resp]
+                       for q in shared_tools.search_queries(r)] if WEB_SEARCH else []):
                 shared_tools.log_searches(SEARCH_LOG, actor_id, [q], role="owner")
                 log(f"agent search [{actor_id}]: {q!r}")
             final = _response_text(resp)
             if final:
                 reply_parts.append(final)
-            turns.append({"role": "assistant",
-                          "content": [b.model_dump() for b in resp.content]})
+            if resp.stop_reason == "max_tokens":
+                # Nothing from this call is ever run, so only the words were cut.
+                cut = []
+                turns.append({"role": "assistant", "content": (
+                    [b.model_dump() for b in resp.content if b.type != "tool_use"]
+                    or [{"type": "text", "text": "(cut off)"}])})
+            else:
+                turns.append({"role": "assistant",
+                              "content": [b.model_dump() for b in resp.content]})
             break
     else:
         reply_parts.append(
@@ -675,6 +717,10 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             "tell me to keep going if that wasn't the whole job.)")
 
     reply = "\n\n".join(p.strip() for p in reply_parts if p and p.strip())
+    if cut is not None:
+        # 2026-10-11 13:03Z: the turn that was cut off sent nothing past its
+        # first sentence, and he got silence. Never again in silence.
+        reply = (reply + "\n\n" if reply else "") + _cut_notice(cut)
 
     # --- an announced answer must have the call behind it ---------------------
     # See _answer_claim_ids. Skipped when a reply already bound in code (naming
@@ -689,17 +735,16 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
             f"call this turn - asking once whether it meant it")
         turns.append({"role": "user", "content": _ANSWER_CHECK.format(
             ids=", ".join(f"`{i}`" for i in named))})
-        resp = api.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system,
-            messages=turns, tools=tools,
-        )
-        _log_usage(log, resp, "answer-check")
+        resp, _discarded = _create(api, log, "answer-check", system=system,
+                                   messages=turns, tools=tools)
         recorded, refused = [], []
         # ONLY answer_conversation, and only for an id that was in front of it.
         # This round exists to finish one specific sentence; anything else the
-        # model reaches for here was not asked for and is not run.
+        # model reaches for here was not asked for and is not run. Nor is a call
+        # cut off at max_tokens: its `answer` would be his words, half-copied.
         for call in [b for b in resp.content if b.type == "tool_use"
-                     and b.name == "answer_conversation"]:
+                     and b.name == "answer_conversation"
+                     and resp.stop_reason != "max_tokens"]:
             params = dict(call.input or {})
             if str(params.get("id")) not in named:
                 continue
@@ -730,7 +775,7 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
     reply = _verify_saved_claims(reply, log)
     reply = _verify_confirmation_claims(reply, log)
     _remember(conversation_key, text, reply)
-    return (reply or None), pending
+    return (reply or None), parked
 
 
 def _label_untrusted(source, body):
@@ -792,22 +837,28 @@ async def rehearse(client, log, content, where, conversation_key, call_ctx,
     usage = dict.fromkeys(("input_tokens", "output_tokens", "cache_read_input_tokens",
                            "cache_creation_input_tokens"), 0)
     for round_no in range(MAX_TOOL_ROUNDS):
-        resp = api.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system,
-                                   messages=turns, tools=tools)
-        _log_usage(log, resp, f"rehearsal {round_no + 1}")
-        u = getattr(resp, "usage", None)
-        for k in usage:
-            usage[k] += int(getattr(u, k, 0) or 0)
+        resp, discarded = _create(api, log, f"rehearsal {round_no + 1}", system=system,
+                                  messages=turns, tools=tools)
+        for r in discarded + [resp]:
+            u = getattr(r, "usage", None)
+            for k in usage:
+                usage[k] += int(getattr(u, k, 0) or 0)
         # Searches are reads too, and the trail records searches that were made.
-        queries = shared_tools.search_queries(resp) if WEB_SEARCH else []
+        queries = ([q for r in discarded + [resp] for q in shared_tools.search_queries(r)]
+                   if WEB_SEARCH else [])
         if queries:
             shared_tools.log_searches(SEARCH_LOG, actor_id, queries, role="rehearsal")
             looked += [f"web search {q!r}" for q in queries]
         text = _response_text(resp)
         if text:
             parts.append(text)
-        turns.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
         calls = [b for b in resp.content if b.type == "tool_use"]
+        if resp.stop_reason == "max_tokens":
+            # Same rule as respond(): a cut-off call is neither run nor listed
+            # as something he would have done - half a request is not a plan.
+            parts.append(_cut_notice([c.name for c in calls]))
+            break
+        turns.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
         if resp.stop_reason != "tool_use" or not calls:
             break
         results = []
@@ -959,6 +1010,13 @@ _CONFIRM_DENIED_RE = re.compile(
     r"isn'?t|is not|wasn'?t|was not|didn'?t|did not|hasn'?t|has not|would)\b")
 
 
+def _preview_name(p):
+    """A short name for a parked item in the prompt's list: the preview's resolved
+    name when it has one, so three create_role lines read as three roles."""
+    name = p.preview.get("name") if isinstance(p.preview, dict) else None
+    return f"{str(name)[:60]}, " if name else ""
+
+
 def _confirm_window():
     """The DM confirmation window, in words, read from config.
 
@@ -1020,7 +1078,7 @@ def _verify_confirmation_claims(reply, log=None):
         return reply
     # The certain half, and the cheap one. Anything parked - by this turn, or still
     # live from an earlier one - makes the claim true enough to relay untouched.
-    if confirm.current() is not None:
+    if confirm.live():
         return reply
     claims = [s for s in re.split(r"(?<=[.!?\n])\s+", low)
               if not s.rstrip().endswith("?")
@@ -1090,6 +1148,56 @@ def _verify_saved_claims(reply, log=None):
             " - no such file was actually saved. Disregard any claim above that "
             "those files were downloaded; ask me to read the attachments and I "
             "will do it for real.")
+
+
+def _create(api, log, label, **kw):
+    """One model call that is never cut off in silence. Returns (resp, discarded).
+
+    2026-10-11 13:03Z: Caz asked for a server-build plan, round 2 came back
+    `out=2048` - this module's whole max_tokens - with every token spent on tool
+    calls that were cut off mid-input and not one word of text. stop_reason was
+    "max_tokens", the loop read anything but "tool_use" as finished, and he got
+    the round-1 sentence and then silence.
+
+    So a call that hits MAX_TOKENS is asked again, once, with MAX_TOKENS_RETRY
+    of room - the API's own advice for a truncated tool call is to re-ask with a
+    higher cap, never to run it. The same request, so nothing has happened yet
+    to undo: tools run only after a call returns. Once, because a plan that
+    does not fit in 16k tokens will not fit in 16k on the second try either.
+
+    `discarded` holds the cut-off first response when there was a retry, so a
+    caller can still log the searches it made. If the retry is cut off too,
+    resp.stop_reason is still "max_tokens" and the CALLER says so out loud
+    (_cut_notice) - this function only gives it the best chance not to have to.
+    """
+    resp = api.messages.create(model=MODEL, max_tokens=MAX_TOKENS, **kw)
+    _log_usage(log, resp, label)
+    discarded = []
+    if getattr(resp, "stop_reason", None) == "max_tokens" and MAX_TOKENS_RETRY > MAX_TOKENS:
+        log(f"agent: {label} hit max_tokens={MAX_TOKENS} - retrying once at "
+            f"{MAX_TOKENS_RETRY}")
+        discarded.append(resp)
+        resp = api.messages.create(model=MODEL, max_tokens=MAX_TOKENS_RETRY, **kw)
+        _log_usage(log, resp, f"{label} retry")
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        log(f"agent: {label} still cut off at max_tokens - the reply will say so")
+    return resp, discarded
+
+
+def _cut_notice(cut_tools):
+    """What he reads when a reply was cut off even after the retry.
+
+    `cut_tools` names the tool calls the cut landed in. They were never run,
+    and he is told so, because "I was about to create a role" and "I created a
+    role" read the same in a message that stops halfway.
+    """
+    line = ("✂️ Cut off: I hit my length limit for one reply and the rest of it "
+            "never got written.")
+    if cut_tools:
+        names = ", ".join(f"`{n}`" for n in dict.fromkeys(cut_tools))
+        line += (f" I was partway through {names} when it cut and did NOT run it "
+                 "- a half-written action never goes out.")
+    return line + " Say \"keep going\" and I'll pick it up from here."
 
 
 def _log_usage(log, resp, label):

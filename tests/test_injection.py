@@ -319,7 +319,8 @@ async def _end_to_end():
     check("the poisoned channel never received a send", len(_PoisonedChannel.sent), 0)
     check("nothing was invoked with force (which would mean it executed)",
           [p for p in posted if p.get("force")], [])
-    check("it was parked for Tyler instead", parked is not None, True)
+    check("it was parked for Tyler instead", len(parked), 1)
+    parked = parked[0] if parked else None
     if parked:
         check("the parked action is the send", parked.action, "send_message")
         check("the parked preview records why it is asking",
@@ -368,7 +369,7 @@ async def _taint_order():
             guild_id=None, where="a DM", conversation_key="test:taintorder",
             call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN))
         check("pc_task RUNS in a clean DM turn", len(ran), 1)
-        check("...and was not parked for confirmation", parked, None)
+        check("...and was not parked for confirmation", parked, [])
 
         # Same turn, but a read happens first. Now it must be refused.
         ran.clear()
@@ -440,7 +441,7 @@ async def _inbound_taint():
             call_ctx=policy.CallContext.owner_dm(TYLER, TESTING_CHAN, tainted=True))
         check("pc_task is REFUSED on a turn that arrived tainted", len(ran), 0)
         check("...and not parked either - blocked_when_tainted is a flat no",
-              parked, None)
+              parked, [])
         check("Tyler still got a reply saying so", bool(reply), True)
 
         # The control: same script, same everything, clean context. Without this
@@ -521,7 +522,8 @@ async def _search_taints():
 
     check("the send after a search never reached the channel",
           len(_PoisonedChannel.sent), 0)
-    check("it was parked for Tyler instead", parked is not None, True)
+    check("it was parked for Tyler instead", len(parked), 1)
+    parked = parked[0] if parked else None
     if parked:
         check("...and the reason names the taint, not some other refusal",
               "already read content other people wrote" in parked.preview.get("reason", ""),

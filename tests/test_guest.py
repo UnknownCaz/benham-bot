@@ -569,6 +569,11 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True
     # checks below exist to prove a guest's "yes" cannot fire one. (The third
     # sink, the PC permission prompt, went with the lane in Phase B.)
     confirm.current = (lambda: _Pending()) if parked else (lambda: None)
+    # The owner path reads the whole store since 2026-10-11 (several can be
+    # live): live() and resolve() are the sink now, armed the same way.
+    confirm.live = (lambda: [_Pending()]) if parked else (lambda: [])
+    confirm.resolve = lambda t: (
+        ("yes", _Pending()) if parked and t.strip().lower() == "yes" else (None, None))
     confirm.read_reply = lambda t, pending=None: (
         ("yes", None) if t.strip().lower() == "yes" else (None, None))
     confirm.get = lambda tok: _Pending()

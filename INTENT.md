@@ -1152,6 +1152,41 @@ participant before the build, not after it.
 
 ## 7. Known bugs
 
+### 2026-10-11 — three proposals in one turn, and only the last survived
+
+From one DM (22:35Z), Benham proposed three `create_role` actions at once - Transmitter, Operator,
+Listener - each under `always_confirm`. `confirm.park()` cleared the store on every call ("one at
+a time", so a "yes" could never be ambiguous), so only Listener was parked when Caz tapped
+Approve. The other two were never created and nothing told him; the hub built them by hand.
+
+**Fixed:** the store keeps every parked item under its own token, `agent.respond` hands back all
+of a turn's proposals, and `bot.py` sends one prompt with its own Approve/Deny per proposal.
+The ambiguity the old rule avoided is handled where it arises, in `confirm.resolve()` (the
+typed-reply path), by the 2026-08-26 rules: a live token answers its own confirmation and no
+other; a bare yes **or no** while two or more are live answers **none**, out loud, naming each
+with its exact `yes <token>` / `no <token>`; a near-miss token, or two tokens in one reply, gets
+a spoken refusal. Decision 37 is untouched (a tier-3 item still needs its token; Approve is still
+one tap). An identical re-proposal (same action, params, requester, origin) still replaces its
+twin, so one action cannot be approved twice; its old buttons are retired.
+`tests/test_multi_confirm.py` replays the 22:35Z shape.
+
+### 2026-10-11 — a long reply was dropped in silence at max_tokens
+
+Caz DM'd a server build and asked for the plan first (13:02Z). Round 1 read the server and said
+"Let me pull the current state of that server before I draft the plan." Round 2 came back
+`out=2048` - the agent's whole `max_tokens` - with no text at all: every token had gone into tool
+calls cut off mid-input. The loop treated any stop_reason other than `tool_use` as "finished",
+so the turn ended on round 1's sentence and he got silence.
+
+**Fixed in `agent._create`:** a call cut off at `max_tokens` is asked again once with
+`agent.max_tokens_retry` of room (default 16000, the non-streaming ceiling) - the same request,
+so nothing has run yet. Cut off again, the reply keeps what was written and ends with a visible
+cut-off line, and a tool call the cut landed in is **never run** and is named as not run (its
+input is half a request). Same rule in the confirm-explain call, the answer check (a cut
+`answer_conversation` would record his words half-copied) and `rehearse`. The ordinary turn is
+untouched: one call, same cap. `friend_turn` (tools off, text only) was left as it was - a cut
+there still posts what was written. `tests/test_max_tokens.py` replays the 13:03Z shape.
+
 ### 2026-09-16 — c38: the timer was right and the sentence was wrong (c19 in reverse)
 
 c38 was opened with `--nudge-cap 0`. Everything the cap touches behaved: `due()` returned `bank`
