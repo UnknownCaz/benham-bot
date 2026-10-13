@@ -890,11 +890,35 @@ async def fire_confirmed(pending, channel):
         await reply_in(channel, f"That failed: {type(e).__name__}: {e}")
 
 
+def _own_roles(message, user):
+    """Roles in this message that are the bot's own managed role (held by this bot alone)."""
+    out = []
+    for role in getattr(message, "role_mentions", None) or ():
+        if not getattr(role, "managed", False):
+            continue  # a plain role is a group of people, never a way to say "Benham"
+        tags = getattr(role, "tags", None)
+        if tags is not None:
+            if getattr(tags, "bot_id", None) == user.id:
+                out.append(role)
+        elif getattr(role, "name", None) == user.name:  # tags unavailable: the name is all there is
+            out.append(role)
+    return out
+
+
+def _addressed(message, user):
+    """True when the message pings this bot: its user mention, or its own managed role."""
+    if not user:
+        return False
+    return user in message.mentions or bool(_own_roles(message, user))
+
+
 def strip_mention(message):
     """The message text with Benham's own mention removed."""
     text = message.content or ""
     if client.user:
-        for form in (f"<@{client.user.id}>", f"<@!{client.user.id}>"):
+        forms = [f"<@{client.user.id}>", f"<@!{client.user.id}>"]
+        forms += [f"<@&{r.id}>" for r in _own_roles(message, client.user)]
+        for form in forms:
             text = text.replace(form, " ")
     return text.strip()
 
@@ -1719,7 +1743,7 @@ async def on_message(message):
     log(f"inbox #{rec['channel']} <{rec['author']}>: {rec['content']!r}")
 
     is_dm = message.guild is None
-    mentioned = bool(client.user and client.user in message.mentions)
+    mentioned = _addressed(message, client.user)  # the user mention or the bot's managed role
     if not (is_dm or mentioned):
         return  # Benham reads everything, but only engages when addressed.
 
