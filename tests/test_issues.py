@@ -84,6 +84,30 @@ gh = GhStub()
 issues._run_gh = gh
 
 
+section("find_gh - a thin launchd PATH cannot hide gh (2026-10-12)")
+import shutil as _shutil, tempfile as _tempfile
+_real_which = _shutil.which
+_gh_dir = _tempfile.mkdtemp(prefix="benham-gh-")
+_fake_gh = _os.path.join(_gh_dir, "gh")
+with open(_fake_gh, "w") as _f:
+    _f.write("#!/bin/sh\n")
+_os.chmod(_fake_gh, 0o755)
+try:
+    _shutil.which = lambda name, *a, **k: None
+    check("not on PATH: falls back to a Homebrew location",
+          issues.find_gh(fallbacks=("/nonexistent/gh", _fake_gh)), _fake_gh)
+    check("not on PATH and not installed: None",
+          issues.find_gh(fallbacks=("/nonexistent/gh",)), None)
+    _shutil.which = lambda name, *a, **k: "/on/path/gh"
+    check("PATH wins when gh is on it",
+          issues.find_gh(fallbacks=(_fake_gh,)), "/on/path/gh")
+finally:
+    _shutil.which = _real_which
+    _shutil.rmtree(_gh_dir, ignore_errors=True)
+check("both Homebrew prefixes are fallbacks",
+      set(issues.GH_FALLBACKS) >= {"/opt/homebrew/bin/gh", "/usr/local/bin/gh"}, True)
+
+
 section("extract - the bug../want.. prefixes")
 check("bug.. extracts", issues.extract("bug.. the lore button 404s"),
       ("bug", "the lore button 404s"))

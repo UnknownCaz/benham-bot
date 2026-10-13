@@ -602,11 +602,30 @@ def retry_unsent():
     return sent, failed, urls
 
 
+# Where Homebrew puts gh: Apple silicon, then Intel (cazzy-mac is Intel).
+# 2026-10-12: gh was never installed on cazzy-mac after the 09-05 move, so
+# file_issue failed and loop-close went silently dead. The fallbacks mean a thin
+# launchd PATH cannot hide an installed gh again.
+GH_FALLBACKS = ("/opt/homebrew/bin/gh", "/usr/local/bin/gh")
+
+
+def find_gh(fallbacks=GH_FALLBACKS):
+    """Path to the gh CLI: PATH first, then the Homebrew locations, else None.
+    loopclose uses this too, so both lanes find gh the same way."""
+    exe = shutil.which("gh")
+    if exe:
+        return exe
+    for p in fallbacks:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
 def _run_gh(args, timeout=30):
     """One gh CLI call. Split out so tests replace it with an assertive stub
     that RECORDS what was passed - the ask-queue delivery bugs taught that a
     loose stub reads exactly like a passing one."""
-    exe = shutil.which("gh")
+    exe = find_gh()
     if not exe:
         raise OSError("gh CLI not on PATH for the bot process")
     proc = subprocess.run([exe] + list(args), capture_output=True, text=True,
