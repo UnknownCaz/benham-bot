@@ -121,6 +121,31 @@ def main():
             shutil.rmtree(empty, ignore_errors=True)
             paths.LOG_DIR = tmp
 
+        section("The Mac's log: benham.log and its rotations (2026-10-12)")
+        # On cazzy-mac the live log is benham.log, rotated to .1, .2. Until
+        # 2026-10-12 only bot.log/supervise.log were read, so there what_i_did
+        # always said covers None, covered False.
+        mac = tempfile.mkdtemp(prefix="benham-selfrecord-mac-")
+        try:
+            gens = {"benham.log.2": 900, "benham.log.1": 400, "benham.log": 20}
+            for name, ago in gens.items():
+                with open(os.path.join(mac, name), "w", encoding="utf-8") as fh:
+                    fh.write(f"{stamp(ago)} action read_channel by 1: {name}\n")
+            paths.LOG_DIR = mac
+            order = [os.path.basename(p) for p in selfrecord._log_files()]
+            check("rotations read oldest first, live file last",
+                  order, ["benham.log.2", "benham.log.1", "benham.log"])
+            r = selfrecord.read(limit=10, since_minutes=600, now=NOW)
+            check("the two generations inside the window match", r["matched"], 2)
+            check("covers reaches back into benham.log.2",
+                  r["covers"]["from"], (NOW - timedelta(minutes=900)).isoformat())
+            check("a window inside the rotated span is covered", r["covered"], True)
+            r = selfrecord.read(limit=10, since_minutes=2000, now=NOW)
+            check("a window older than .2 is still not covered", r["covered"], False)
+        finally:
+            shutil.rmtree(mac, ignore_errors=True)
+            paths.LOG_DIR = tmp
+
         section("The capability wired on top")
         act = capabilities.REGISTRY.get("what_i_did")
         check("what_i_did is registered", act is not None, True)

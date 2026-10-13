@@ -327,6 +327,11 @@ check("...and the friends' words are fenced below it",
 volatile = call["system"][1]["text"] if call else ""
 check("...told they are not his owner", "They are NOT your owner" in volatile, True)
 check("...told it has no tools", "no tools on this turn" in volatile, True)
+# 2026-10-12: told Doom "I can't open attachments from here" about a file
+# he handed over for Caz. A hand-off for Tyler is noted, never a "can't".
+check("...told a hand-off for Tyler is noted, not refused",
+      "say it's noted and Tyler will see it" in volatile
+      and "never tell them you can't" in volatile, True)
 check("the reply went to the channel", len(general.sent), 1)
 check("...with @names turned into real pings",
       general.sent[0] if general.sent else "",

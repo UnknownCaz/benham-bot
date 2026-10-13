@@ -35,7 +35,6 @@ and a record carrying `told` is never considered again.
 """
 
 import json
-import shutil
 import subprocess
 
 from benham import paths
@@ -48,9 +47,9 @@ MAX_REASON = 400
 
 
 def _gh_json(args, timeout=30):
-    exe = shutil.which("gh")
+    exe = issues.find_gh()
     if not exe:
-        raise OSError("gh CLI not on PATH")
+        raise OSError("gh CLI not on PATH or in the Homebrew locations")
     proc = subprocess.run([exe] + list(args), capture_output=True, text=True,
                           timeout=timeout)
     if proc.returncode != 0:

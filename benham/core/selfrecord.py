@@ -42,14 +42,30 @@ _LINE_RE = re.compile(
 _ACTION_RE = re.compile(r"^\s+(?P<name>\S+)\s+by\s+(?P<actor>\S+):\s*(?P<detail>.*)$", re.DOTALL)
 _DENIED_RE = re.compile(r"^\s+(?P<name>\S+)\s+by\s+(?P<actor>\S+)\s*(?P<detail>.*)$", re.DOTALL)
 
-# Newest last. supervise.log is the live one; bot.log is a pre-supervisor relic
-# kept because it still holds July.
+# Newest last. On the PC supervise.log is the live one and bot.log a
+# pre-supervisor relic kept because it still holds July. On cazzy-mac (since the
+# 09-05 move) the live log is benham.log, rotated by rotlog into benham.log.1,
+# .2 (rpc._log_candidates reads the same names). Until 2026-10-12 only the PC
+# names were read, so on the Mac what_i_did always answered covers None,
+# covered False - an honest "no record" about a record that existed.
 LOG_NAMES = ("bot.log", "supervise.log")
+ROTATING_LOG = "benham.log"
+
+
+def _rotations(base):
+    """benham.log.N generations in the log dir, oldest (highest N) first."""
+    gens = []
+    for name in os.listdir(paths.LOG_DIR) if os.path.isdir(paths.LOG_DIR) else ():
+        head, _, num = name.rpartition(".")
+        if head == base and num.isdigit():
+            gens.append((int(num), name))
+    return [name for _, name in sorted(gens, reverse=True)]
 
 
 def _log_files():
+    names = list(LOG_NAMES) + _rotations(ROTATING_LOG) + [ROTATING_LOG]
     out = []
-    for name in LOG_NAMES:
+    for name in names:
         p = os.path.join(paths.LOG_DIR, name)
         if os.path.exists(p):
             out.append(p)
