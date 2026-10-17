@@ -57,6 +57,8 @@
     "conversation_ttl_seconds": 3600,
     "require_token_tier3": true
   },
+  "bot_guests": {},
+  "_bot_guests": "INTENT decision 53 (2026-10-17): another BOT that may @mention this face and get a chat-only reply WITHOUT Tyler being asked first - only in the channels listed, only in a guild on agent_guilds. Shape: {\"hermes\": {\"id\": <bot user id>, \"channels\": [<channel id>]}} (or {\"<user id>\": [<channel id>]}). Everywhere else that account takes the ordinary friend path (decision 50). Replies to it open with its inline mention and are capped at 10 per rolling hour per channel (core/botguests.py), then silence, logged. Empty = nobody. RESTART REQUIRED.",
   "_confirm": "How long a pending tier-3 confirmation stays valid. Expired means CANCELLED - never assumed yes. require_token_tier3 (default true, 2026-08-24): on tier 3 a TYPED yes must carry the 6-hex token - 'yes a1b2c3'. A yes that only names the action ('yes, purge that channel') is refused out loud and told to send the token, because that rule's guarantee is word overlap with ordinary English and the accepted words are channel/user/role names. The Approve button is unaffected - it holds the token already, so the ordinary path is still one tap. Set false to fall back to the 2026-08-17 naming rule; that is the revert, and it needs a restart like everything else here.",
   "presence": {
     "status": "online",

@@ -42,6 +42,7 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 from benham.core import agent
+from benham.core import botguests
 from benham.core import capabilities
 from benham.core import channelread
 from benham.core import confirm
@@ -1764,6 +1765,13 @@ async def on_message(message):
         if is_dm and guest.is_known_guest(message.author.id):
             await handle_guest_dm(message)
             return
+        if (not is_dm and agent.ENABLED and policy.may_answer_bot_guest(
+                message.author.id, message.guild.id, message.channel.id).allowed):
+            # A bot guest (Hermes in #kestra, INTENT decision 53): decision 50's
+            # chat-only friend turn with the ask pre-answered by control.json,
+            # for that account in the channels listed for it and nowhere else.
+            await handle_bot_guest_mention(message)
+            return
         if not is_dm and agent.ENABLED and message.guild.id in identity.agent_guilds():
             # A friend @mentioning Benham in a server he answers in. Never a model
             # turn on their say-so: either Tyler already let them in (an open
@@ -2096,11 +2104,30 @@ async def handle_friend_mention(message):
         log(f"friend ask in #{ch} could not reach Tyler: {type(e).__name__}: {e}")
 
 
-async def answer_friends(channel, people, closing):
+async def handle_bot_guest_mention(message):
+    """A bot guest @mentioned Benham in a channel control.json opens to it.
+
+    policy.may_answer_bot_guest already said yes to WHO and WHERE; this spends
+    the hourly budget (core/botguests.py) and answers chat-only, the reply
+    opening with the bot's inline mention so its own gate will hear it."""
+    ch, who = message.channel, message.author
+    allowed, used = botguests.take(ch.id, who.id)
+    if not allowed:
+        log(f"bot guest @ from {who} in #{ch}: hourly cap reached "
+            f"({botguests.CAP} per {botguests.WINDOW // 60} min) - staying quiet")
+        return
+    log(f"bot guest @ from {who} in #{ch}: answering ({used}/{botguests.CAP} this hour)")
+    await react(message, "\N{EYES}")
+    await answer_friends(ch, {who.id: _display(who)}, closing=False, bot_guest=who.id)
+
+
+async def answer_friends(channel, people, closing, bot_guest=None):
     """One chat-only reply in `channel` to friends Tyler let in.
 
     Reads the room fresh - the friend's message is the newest line of it, fenced
-    like everyone else's - with Benham's own note on top, never their words."""
+    like everyone else's - with Benham's own note on top, never their words.
+    `bot_guest` (a user id) is decision 53's variant: a standing channel line
+    rather than a one-reply invite, and the reply opens with that bot's ping."""
     where = f"#{channel} in {channel.guild.name}"
     tag = msgparts.new_tag()
     read = await channelread.read(
@@ -2108,7 +2135,9 @@ async def answer_friends(channel, people, closing):
         is_owner=identity.is_owner, self_id=getattr(client.user, "id", None),
         tag=tag, log=log)
     names = ", ".join(sorted(set(people.values())))
-    seen = "\n\n".join([channelread.friend_note(names, closing),
+    note = (channelread.bot_guest_note(names) if bot_guest
+            else channelread.friend_note(names, closing))
+    seen = "\n\n".join([note,
                         channelread.turn_text(read, where, tag, before_his=False,
                                               can_look=False)])
     content = [{"type": "text", "text": seen}] + channelread.image_parts(read, where, tag)
@@ -2117,12 +2146,15 @@ async def answer_friends(channel, people, closing):
             reply = await agent.friend_turn(log, content, where=where,
                                             channel_id=channel.id,
                                             guild_id=channel.guild.id,
-                                            names=names, closing=closing)
+                                            names=names, closing=closing,
+                                            bot_guest=bool(bot_guest))
     except Exception:  # noqa: BLE001 - a brain failure must not kill the bot
         log(f"friend reply failed in #{channel}:\n{traceback.format_exc()}")
         return
     if reply:
         reply, _pinged = channelread.apply_pings(reply, read.people)
+        if bot_guest:
+            reply = botguests.lead_with_mention(reply, bot_guest)
         await reply_in(channel, reply)
 
 
