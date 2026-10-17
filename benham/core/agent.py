@@ -29,7 +29,7 @@ import asyncio
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -75,6 +75,11 @@ MAX_TOKENS = int(_cfg.get("max_tokens", 2048))
 MAX_TOKENS_RETRY = int(_cfg.get("max_tokens_retry", 16000))
 MAX_TOOL_ROUNDS = int(_cfg.get("max_tool_rounds", 8))
 HISTORY_TURNS = int(_cfg.get("history_turns", 20))
+# How old a remembered exchange may be and still be sent (hours; 0 or less = no
+# limit). Gumshoe case 2026-10-17-benham-bot: the count limit alone kept a 2.5-
+# day-old argument as the newest context, and a fresh answer to c46 was read as
+# part of it. A day keeps a running chat whole and lets a stale one go.
+MEMORY_MAX_AGE_HOURS = float(_cfg.get("memory_max_age_hours", 24))
 COOLDOWN = float(_cfg.get("cooldown_seconds", 1.5))
 # Anthropic's SERVER-SIDE web search, the same one guests have had (shared_tools).
 # Tyler had no way to ask Benham to look something up, which meant the owner path
@@ -118,8 +123,15 @@ _store = turnmemory.TurnMemory(lambda: MEMORY_FILE, HISTORY_TURNS)
 is_echo_pair = turnmemory.is_echo_pair
 
 
-def _history(key):
-    return _store.history(key)
+def _memory_max_age():
+    """MEMORY_MAX_AGE_HOURS as a timedelta, or None for no limit. Read per call
+    so a test (or a REPL) can rebind the constant."""
+    hours = MEMORY_MAX_AGE_HOURS
+    return timedelta(hours=hours) if hours and hours > 0 else None
+
+
+def _history(key, now=None):
+    return _store.history(key, max_age=_memory_max_age(), now=now)
 
 
 def _remember(key, user_text, assistant_text):
@@ -130,6 +142,136 @@ def _remember(key, user_text, assistant_text):
 def forget(key=None):
     """Drop conversation history (one conversation, or all)."""
     _store.forget(key)
+
+
+# --------------------------------------------------------------------------
+# The open question, as something Benham SAID
+# --------------------------------------------------------------------------
+#
+# Gumshoe case 2026-10-17-benham-bot. On 10-15 the ask queue put c46 in his DM
+# at 09:05:06Z and he typed "Leave it. I'll get it eventualy" inside the same
+# minute. The model was told about c46 only in a system-prompt section; its own
+# transcript - which the asks and nudges never enter, because code sends them -
+# ended on a 10-12 argument about something else, so it read "Leave it" as part
+# of that and called nothing. Then two nudges and a bank, for a question he had
+# answered fifteen minutes before the first nudge.
+#
+# So the question now goes into the turn list as what it was: a message Benham
+# sent in this DM, at the moment it was last shown (delivered, or the latest
+# nudge), with how long ago that was. Placed in time among the remembered
+# exchanges, which in the ordinary case - the ask lands, he types back - makes it
+# the last thing Benham said. The system-prompt section stays; this adds the
+# missing half, it does not replace the instructions.
+#
+# Never stored: `_remember` still writes his text and the reply, nothing else, so
+# the question is rebuilt from the record each turn rather than duplicated into
+# memory. Built in the API copy of the turns only.
+
+_NO_EARLIER = ("[harness note, not from him: nothing earlier in this DM is in "
+               "memory]")
+
+
+def _shown_at(conv):
+    """When this question was last put in front of him - delivered, or the
+    latest nudge - as an aware datetime, or None if it never was."""
+    times = [e.get("ts") for e in (conv.get("log") or [])
+             if e.get("event") in ("delivered", "nudged")]
+    times.append(conv.get("delivered_at"))
+    out = []
+    for t in times:
+        try:
+            when = datetime.fromisoformat(str(t))
+        except (TypeError, ValueError):
+            continue
+        out.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+    return max(out) if out else None
+
+
+def _ago(then, now):
+    secs = max(0, int((now - then).total_seconds()))
+    if secs < 60:
+        return "under a minute"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins} min"
+    hours, mins = divmod(mins, 60)
+    if hours < 48:
+        return f"{hours} h {mins} min" if mins else f"{hours} h"
+    return f"{hours // 24} days"
+
+
+def _question_turn(conversation, queue=None, already_bound=False, now=None):
+    """(text, shown_at) for the question(s) waiting on him, as Benham's own
+    message - or None when nothing was ever put in front of him.
+
+    Same candidates the system prompt gets: the whole queue when several are
+    waiting (numbered as the prompt numbers them), else the one conversation.
+    """
+    now = now or datetime.now(timezone.utc)
+    several = (not already_bound) and queue and len(queue) > 1
+    convs = list(queue) if several else ([conversation] if conversation else [])
+    shown = [(c, _shown_at(c)) for c in convs if c]
+    shown = [(c, t) for c, t in shown if t is not None]
+    if not shown:
+        return None
+    last = max(t for _c, t in shown)
+    if several:
+        listing = "\n".join(
+            f"{i}. `{c.get('id')}` - {str(c.get('question', ''))[:300]}"
+            for i, (c, _t) in enumerate(shown, 1))
+        text = (f"[sent by the ask queue in this DM, last shown {_ago(last, now)} "
+                f"ago - {len(shown)} questions waiting on him, numbered as on his "
+                f"screen]\n{listing}")
+    else:
+        c = shown[0][0]
+        state = ("his message below is a Discord reply to it and is already "
+                 "recorded" if already_bound else "still waiting on his answer")
+        nudges = int(c.get("nudges", 0) or 0)
+        nudged = f", nudged {nudges}x" if nudges else ""
+        text = (f"[sent by the ask queue in this DM {_ago(last, now)} ago - "
+                f"question `{c.get('id')}`{nudged}, {state}]\n"
+                f"{str(c.get('question', ''))[:600]}")
+    return text, last
+
+
+def _place_question(turns, text, shown_at):
+    """Put `text` into `turns` as an assistant message at `shown_at`.
+
+    `turns` are stored pairs WITH their `ts` stamps (user, assistant, ...).
+    The question goes after the last exchange that finished before it was
+    shown. Roles must still alternate and the list must still open on a user
+    turn - the API rejects either - so the question is ADDED to the assistant
+    turn it follows (an extra text block), and when nothing precedes it a
+    one-line harness note opens the list instead of a fabricated message from
+    him. Returns a new list; the stored dicts are not touched.
+    """
+    from benham.core import turnmemory
+    idx = 0
+    for i in range(0, len(turns) - 1, 2):
+        when = turnmemory._stamp(turns[i + 1]) or turnmemory._stamp(turns[i])
+        if when is None or when <= shown_at:
+            idx = i + 2
+    block = {"type": "text", "text": text}
+    if idx == 0:
+        return ([{"role": "user", "content": _NO_EARLIER},
+                 {"role": "assistant", "content": [block]}] + list(turns))
+    prev = dict(turns[idx - 1])
+    content = prev.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}] if content else []
+    prev["content"] = list(content or []) + [block]
+    return list(turns[:idx - 1]) + [prev] + list(turns[idx:])
+
+
+def _turns_for(key, conversation=None, queue=None, already_bound=False, now=None):
+    """The remembered turns for this conversation as API turns, with the open
+    question placed among them as something Benham said (see above)."""
+    now = now or datetime.now(timezone.utc)
+    turns = _store.history(key, max_age=_memory_max_age(), now=now, keep_ts=True)
+    q = _question_turn(conversation, queue, already_bound, now)
+    if q is not None:
+        turns = _place_question(turns, *q)
+    return [{"role": t["role"], "content": t["content"]} for t in turns]
 
 
 
@@ -499,7 +641,9 @@ async def respond(client, log, text, actor_id, actor_name, channel_id, guild_id,
         return None, []
     _last_call[conversation_key] = time.monotonic()
 
-    turns = list(_history(conversation_key))
+    # The open question goes in as the last thing Benham said, not only as a
+    # prompt section - see _turns_for and Gumshoe case 2026-10-17-benham-bot.
+    turns = _turns_for(conversation_key, conversation, queue, already_bound)
     # The BLOCKS go to the API and the TEXT goes to history. They differ only
     # when the message carried an image: the blocks hold the picture, the text
     # holds a line saying a picture was there and is no longer visible. Keeping
