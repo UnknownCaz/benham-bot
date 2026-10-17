@@ -1048,6 +1048,25 @@ def engaged(conv):
     return conv.get("state") == ANSWERED or bool(conv.get("answered_at"))
 
 
+def answered_since(counterparty, since):
+    """This person's conversations that got an answer at or after `since`
+    (an aware datetime), oldest answer first.
+
+    Read from the RECORD, not from what a model said: bot.py asks this after an
+    owner turn to learn whether answer_conversation actually bound anything, so
+    the bind mark and the "took that as your answer" line can only ever follow a
+    real binding (Gumshoe case 2026-10-17-benham-bot, fix 2).
+    """
+    out = []
+    for c in _load().values():
+        if int(c.get("counterparty", 0) or 0) != int(counterparty):
+            continue
+        when = _parse(c.get("answered_at"))
+        if when is not None and when >= since:
+            out.append(c)
+    return sorted(out, key=lambda c: c.get("answered_at") or "")
+
+
 def close(cid, outcome, told=False):
     """The loop is shut: they have been told, or are about to be, what happened.
 

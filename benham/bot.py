@@ -710,6 +710,25 @@ async def react(message, emoji):
         pass
 
 
+# THE BIND MARK, and nothing else wears it. Until 2026-10-17 a bound answer got
+# the same ✅ every handled owner message gets, so "it took" and "I read it" were
+# one mark - and on 10-15 c46's typed answer bound nothing while his screen said
+# ✅ (Gumshoe case 2026-10-17-benham-bot, fix 2). ✅ still means handled; this
+# means an answer was recorded against a question, by any route: a Discord
+# reply, a slot number, or a judged answer_conversation that really landed.
+ANSWER_MARK = "📌"
+
+
+def took_lines(convs):
+    """'Took that as your answer to ...' - one line per question really bound."""
+    lines = []
+    for c in convs:
+        q = " ".join(str(c.get("question") or "").split())
+        short = q if len(q) <= 90 else q[:87].rstrip() + "..."
+        lines.append(f"{ANSWER_MARK} Took that as your answer to `{c.get('id')}`: {short}")
+    return "\n".join(lines)
+
+
 class ApprovalView(discord.ui.View):
     """Approve/Deny buttons on a consent prompt.
 
@@ -1378,13 +1397,16 @@ async def file_guest_report(message, category, rtext, log_tag,
             "on disk, sweep will surface it")
 
 
-async def bind_certain(message, text):
+async def bind_certain(message, text, mark=None):
     """The certain half of binding (stage 3 item 10), for whoever is answering.
 
     Returns (bound_conv, bound_all, answer_text, queue). Lifted out of on_message
     unchanged on 2026-10-06 so a guest's answer binds by the same rules as
     Tyler's - until then the block sat inside his owner path, and a guest never
     reached it (bind_guest_answer).
+
+    `mark` is the reaction a bind gets: ANSWER_MARK by default (Tyler's path,
+    where ✅ is the ordinary handled mark), ✅ for a guest (decision 51).
     """
     who = message.author.id
     bound_conv = None
@@ -1417,7 +1439,7 @@ async def bind_certain(message, text):
             answer_text = multi.get(done[0][0], text)
             log(f"answered {len(done)} by slot in one message: "
                 + ", ".join(f"{s}->{c['id']}" for s, c in done))
-            await react(message, "✅")
+            await react(message, mark or ANSWER_MARK)
     if bound_conv is None and len(shown) > 1:
         m = re.match(r"^\s*#?(\d{1,2})\s*[:.)\-]\s*(.+)$", text, re.S)
         if not m:
@@ -1431,7 +1453,7 @@ async def bind_certain(message, text):
                 bound_all = [hit]
                 log(f"conversation {hit['id']}: answered by slot {m.group(1)} "
                     f"- {answer_text[:120]!r}")
-                await react(message, "✅")
+                await react(message, mark or ANSWER_MARK)
 
     ref = message.reference
     ref_id = getattr(ref, "message_id", None) if ref is not None else None
@@ -1454,7 +1476,7 @@ async def bind_certain(message, text):
                 bound_conv = hit
                 log(f"conversation {hit['id']}: answered by reply "
                     f"(msg {ref_id}) - {text[:120]!r}")
-                await react(message, "✅")
+                await react(message, mark or ANSWER_MARK)
             else:
                 log(f"reply to a batch message showing {len(shown)} "
                     f"({len(queue)} still live) - leaving it to the model to "
@@ -1491,7 +1513,12 @@ async def bind_guest_answer(message, typed):
     """
     if not typed:
         return []
-    bound_conv, bound_all, _answer, _queue = await bind_certain(message, typed)
+    # A guest keeps decision 51's ✅: their ordinary messages never get one,
+    # so for them it already means "bound" and nothing else. ANSWER_MARK is
+    # Tyler's, where ✅ is also the handled mark.
+    mark = "✅"
+    bound_conv, bound_all, _answer, _queue = await bind_certain(message, typed,
+                                                                 mark=mark)
     bound = bound_all or ([bound_conv] if bound_conv else [])
     judged = False
     if not bound:
@@ -1510,7 +1537,7 @@ async def bind_guest_answer(message, typed):
                     f"(judged) - {typed[:120]!r}")
             if bound:
                 judged = True
-                await react(message, "✅")
+                await react(message, mark)
     if bound:
         await tell_owner_answered(message, bound, judged)
     return bound
@@ -1911,6 +1938,9 @@ async def on_message(message):
     # The block itself lives in bind_certain since 2026-10-06, so a guest's
     # answer binds by the same rules as his (handle_guest_dm).
     bound_conv = None
+    # Anything the conversation store records as answered from here on was
+    # bound by THIS message - read back after the turn for the bind mark.
+    turn_started = datetime.now(timezone.utc)
     if is_dm:
         bound_conv, _bound_all, _answer_text, queue = await bind_certain(message, text)
 
@@ -1981,7 +2011,28 @@ async def on_message(message):
         log(f"agent failed:\n{traceback.format_exc()}")
         await react(message, "⚠️")
         await reply_in(message.channel, f"My brain threw an error: {type(e).__name__}: {e}")
+        # A reply or a slot may already have bound before the brain failed.
+        took = (took_lines(conversations.answered_since(message.author.id, turn_started))
+                if is_dm else "")
+        if took:
+            await reply_in(message.channel, took)
         return
+
+    # --- the bind mark (Gumshoe case 2026-10-17-benham-bot, fix 2) -----------
+    # Read from the conversation store, never from the reply's wording: what
+    # this message really bound - a reply or slot above, or an
+    # answer_conversation call (or the answer-check round) inside the turn.
+    # Each gets one line he can check at a glance, and the message gets
+    # ANSWER_MARK. bind_certain already marked its own; a judged bind is marked
+    # here. A message that bound nothing gets neither - only the handled mark.
+    if is_dm:
+        bound_now = conversations.answered_since(message.author.id, turn_started)
+        certain = {c["id"] for c in (_bound_all or ([bound_conv] if bound_conv else []))}
+        if any(c["id"] not in certain for c in bound_now):
+            await react(message, ANSWER_MARK)
+        took = took_lines(bound_now)
+        if took:
+            reply = f"{reply}\n\n{took}" if reply else took
 
     # Where an approval goes. In a server it goes to his DMs, and the reply that
     # explains it goes with it - Caz, 2026-10-05: "so they dont see the behind

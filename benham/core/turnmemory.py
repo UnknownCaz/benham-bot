@@ -35,8 +35,18 @@ small JSON file per DM is not a cost worth that.
 """
 
 import threading
+from datetime import datetime, timezone
 
 from benham.core import jsonio
+
+
+def _stamp(turn):
+    """A stored turn's `ts` as an aware datetime, or None if absent/unreadable."""
+    try:
+        when = datetime.fromisoformat(str(turn.get("ts")))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 def is_echo_pair(user_turn, assistant_turn):
@@ -96,9 +106,40 @@ class TurnMemory:
     def path(self, value):
         self._path = value
 
-    def history(self, key):
-        """Stored turns for one conversation, oldest first. [] if none."""
-        return self._read().get(key, [])
+    def history(self, key, max_age=None, now=None, keep_ts=False):
+        """Stored turns for one conversation, oldest first. [] if none.
+
+        Returned as API turns - role and content only. The stored `ts` stamp
+        never leaves this method: the Messages API rejects a key it does not know.
+
+        `max_age` (a timedelta, or None for no limit) drops every exchange older
+        than that, judged by the stamp `remember` writes on each pair. An
+        exchange with NO stamp - everything stored before 2026-10-17 - has an
+        unknown age and is dropped too: the limit exists so an old thread cannot
+        be the context a fresh message is read against (Gumshoe case
+        2026-10-17-benham-bot - the 10-12 argument, 2.5 days old, was the newest
+        thing the model had when c46's answer arrived), and "too old to prove
+        fresh" is the safe reading of "unknown". Nothing is deleted from disk;
+        the count trim in `remember` still owns that. Dropped by PAIR, so what
+        comes back still starts on a user turn and alternates.
+
+        `keep_ts=True` leaves the stamp on, for a caller that needs to place
+        something in time among the turns (agent._turns_for) and strips it
+        itself before anything reaches the API.
+        """
+        turns = self._read().get(key, [])
+        if max_age is not None:
+            cutoff = (now or datetime.now(timezone.utc)) - max_age
+            kept = []
+            for i in range(0, len(turns) - 1, 2):
+                pair = turns[i:i + 2]
+                when = _stamp(pair[-1]) or _stamp(pair[0])
+                if when is not None and when >= cutoff:
+                    kept.extend(pair)
+            turns = kept
+        if keep_ts:
+            return [dict(t) for t in turns]
+        return [{"role": t.get("role"), "content": t.get("content")} for t in turns]
 
     def remember(self, key, user_text, assistant_text):
         """Append one completed exchange.
@@ -119,11 +160,14 @@ class TurnMemory:
         """
         if not (user_text and assistant_text):
             return
+        # Both halves carry the moment the exchange finished, so history() can
+        # age a pair out (see its max_age). UTC ISO, like conversations.json.
+        ts = datetime.now(timezone.utc).isoformat()
         with self._lock:
             mem = self._read()
             turns = list(mem.get(key, []))
-            turns.append({"role": "user", "content": user_text})
-            turns.append({"role": "assistant", "content": assistant_text})
+            turns.append({"role": "user", "content": user_text, "ts": ts})
+            turns.append({"role": "assistant", "content": assistant_text, "ts": ts})
             mem[key] = turns[-self.history_turns * 2:]
             jsonio.write_json(self.path, mem)
 
