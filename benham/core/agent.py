@@ -976,7 +976,8 @@ async def rehearse(client, log, content, where, conversation_key, call_ctx,
     return (reply or None), usage, looked, would
 
 
-async def friend_turn(log, content, where, channel_id, guild_id, names, closing):
+async def friend_turn(log, content, where, channel_id, guild_id, names, closing,
+                      bot_guest=False):
     """One chat-only reply to friends Tyler let into a channel (INTENT 50).
 
     Returns the reply text, or None. The static half of the prompt is the owner
@@ -994,7 +995,12 @@ async def friend_turn(log, content, where, channel_id, guild_id, names, closing)
         return None
     static, _owner_volatile = _system_blocks(where, "caz6666")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    which = ("This is your CLOSING message for this exchange: answer, then wrap it "
+    which = ("They are another AI's bot, and Tyler opened this channel as a "
+             "standing line between you two (control.json bot_guests). Keep it to "
+             "one message; it opens with their ping automatically, so don't add it. "
+             "Replies to them are capped per hour, so make each one count."
+             if bot_guest else
+             "This is your CLOSING message for this exchange: answer, then wrap it "
              "up in a line or two - after it you go quiet with them until Tyler "
              "says otherwise."
              if closing else
@@ -1020,7 +1026,8 @@ async def friend_turn(log, content, where, channel_id, guild_id, names, closing)
         model=MODEL, max_tokens=MAX_TOKENS, system=system,
         messages=[{"role": "user", "content": content}],
         tools=build_tools(), tool_choice={"type": "none"})
-    _log_usage(log, resp, "friend reply" + (" (closing)" if closing else ""))
+    _log_usage(log, resp, ("bot guest reply" if bot_guest else "friend reply")
+               + (" (closing)" if closing else ""))
     return _response_text(resp) or None
 
 

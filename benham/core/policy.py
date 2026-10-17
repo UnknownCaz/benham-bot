@@ -692,6 +692,36 @@ def may_chat_as_guest(ctx):
     return _ALLOW
 
 
+def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
+    """Whether a mention from this non-owner account may get a chat-only reply
+    here WITHOUT Tyler being asked first (INTENT decision 53).
+
+    2026-10-17, Caz: "i want to test and establish this as a line she can take
+    to you so you two can talk about the move itself between yourselves" -
+    Hermes, a bot, talking to Benham in #kestra. It is decision 50's friend turn
+    with the ask pre-answered, for one account in the channels control.json
+    names (`bot_guests`) and nowhere else. Fail-closed: no ids, a DM, an owner,
+    a guild off agent_guilds, or a channel not listed for this account = DENY,
+    and the caller falls through to the ordinary friend path.
+
+    Structural only, like may_chat_as_guest. The hourly reply cap is state, not
+    authority, and lives in core/botguests.py.
+    """
+    try:
+        uid, gid, cid = int(actor_id), int(guild_id), int(channel_id)
+    except (TypeError, ValueError):
+        return _deny("bot_guest_context", "a bot guest needs a user, a guild and a channel")
+    if identity.is_owner(uid, face):
+        return _deny("bot_guest_owner", f"user {uid} is my owner, not a bot guest")
+    if gid not in identity.agent_guilds(face):
+        return _deny("bot_guest_guild", f"guild {gid} is not on agent_guilds in control.json")
+    if cid not in identity.bot_guest_channels(uid, face):
+        return _deny("bot_guest_scope",
+                     f"user {uid} is not a bot guest in channel {cid} "
+                     "(control.json bot_guests)")
+    return _ALLOW
+
+
 def authorize(action, ctx):
     """Decide whether one call may proceed. The single chokepoint.
 

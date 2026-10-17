@@ -188,7 +188,7 @@ DEFAULT_TOKEN_ENV = "BOT_KEY"
 _FACE_KEYS = (
     "token_env", "owner_ids", "destructive_guilds", "agent_guilds",
     "post_guilds", "post_channels", "guest", "agent", "confirm",
-    "presence", "intents", "capabilities", "initiative",
+    "presence", "intents", "capabilities", "initiative", "bot_guests",
 )
 
 def _face_blocks(cfg):
@@ -214,6 +214,37 @@ def face_names():
         names.remove(PRIMARY_FACE)
         names.insert(0, PRIMARY_FACE)
     return names
+
+
+def bot_guest_map(value):
+    """Parse control.json `bot_guests` into {user_id: frozenset(channel_ids)}.
+
+    2026-10-17, Caz: Hermes (another bot) may talk to Benham in ONE channel,
+    #kestra in RadioTower (INTENT decision 53). Two shapes parse, like
+    people_map's:
+        {"1558754129969545338": [1560197136363163650]}
+        {"hermes": {"id": 1558754129969545338, "channels": [1560197136363163650]}}
+    The named form exists so a reader sees a name, not 19 digits. Absent,
+    malformed, or an entry with no channels = nothing granted: a typo here can
+    only turn a bot guest OFF, never widen one to a whole guild.
+    """
+    out = {}
+    if not isinstance(value, dict):
+        return out
+    for key, entry in value.items():
+        try:
+            if isinstance(entry, dict):
+                uid, chans = int(entry.get("id")), entry.get("channels")
+            else:
+                uid, chans = int(key), entry
+            if not isinstance(chans, (list, tuple)):
+                continue
+            channels = frozenset(int(c) for c in chans)
+        except (TypeError, ValueError):
+            continue
+        if channels:
+            out[uid] = channels
+    return out
 
 
 def face_gates(face):
@@ -254,6 +285,7 @@ def face_gates(face):
         "guest": dict(block.get("guest") or {}),
         "token_env": str(block.get("token_env") or DEFAULT_TOKEN_ENV),
         "capabilities": caps,
+        "bot_guests": bot_guest_map(block.get("bot_guests")),
     }
 
 
@@ -301,6 +333,7 @@ def _face_gates_or_empty(face):
             "post_channels": set(), "guest": {},
             "token_env": DEFAULT_TOKEN_ENV,
             "capabilities": frozenset(),
+            "bot_guests": {},
         }
 
 
@@ -516,6 +549,24 @@ def initiative_config(face=None):
     except KeyError:
         return {}
     return dict(block.get("initiative") or {})
+
+
+def bot_guest_channels(user_id, face=None):
+    """The channels where this (bot) account may get a reply from this face.
+
+    Empty for everyone not listed - and for an owner, whose own path must never
+    be downgraded into the bot-guest lane (is_guest's reasoning). A bot guest is
+    not a guest: no DMs, no memory, no tools, only the channels named here.
+    policy.may_answer_bot_guest is the one consumer.
+    """
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return frozenset()
+    gates = _face_gates_or_empty(face)
+    if uid in gates["owner_ids"]:
+        return frozenset()
+    return gates["bot_guests"].get(uid, frozenset())
 
 
 def agent_guilds(face=None):
