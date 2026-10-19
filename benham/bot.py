@@ -202,6 +202,36 @@ def log(msg):
 wire.install(log)
 
 
+def _screen_command_tree():
+    """Run every slash command's name and descriptions through the privacy
+    screen before tree.sync publishes them (issue 11 review: the /server
+    description named the owner and went out on every sync, a route the wire
+    cannot see). Rewrites in place; returns True - and the caller skips the
+    sync, logged - if a term would survive."""
+    def fields(cmd):
+        yield cmd, "description"
+        for prm in getattr(cmd, "parameters", None) or ():
+            yield prm, "description"
+        for sub in getattr(cmd, "commands", None) or ():
+            yield from fields(sub)
+    for cmd in tree.get_commands():
+        for obj, attr in fields(cmd):
+            text = getattr(obj, attr, None)
+            if not text:
+                continue
+            clean, d = policy.screen_text(text)
+            if d.denied:
+                log(f"BLOCKED slash command sync: /{cmd.name} [rule={d.rule}]: {d.reason}")
+                return True
+            if clean != text:
+                try:
+                    setattr(obj, attr, clean)
+                except AttributeError:
+                    log(f"BLOCKED slash command sync: /{cmd.name} text cannot be rewritten")
+                    return True
+    return False
+
+
 def dump_channels():
     """Write channels.json listing all guilds + text channels the bot can see."""
     data = []
@@ -322,11 +352,19 @@ async def server_autocomplete(interaction: discord.Interaction, current: str):
         for sid, cfg in WATCH["servers"].items()
         if sid in allow and cur in cfg["name"].lower()
     ]
-    return out[:25]
+    # Choice names are shown to whoever types the command, and they go out
+    # through the command route, not a send - so the privacy screen is applied
+    # here (issue 11): rewritten, or dropped if a term survives.
+    screened = []
+    for c in out[:25]:
+        name, d = policy.screen_text(c.name)
+        if not d.denied:
+            screened.append(app_commands.Choice(name=name, value=c.value))
+    return screened
 
 
 server_group = app_commands.Group(
-    name="server", description="Control Tyler's exaroton Minecraft servers")
+    name="server", description="Control Caz's exaroton Minecraft servers")
 
 
 @server_group.command(name="status", description="Show a server's current status")
@@ -633,7 +671,8 @@ async def on_ready():
     # Primary only, like the watchdog below it serves: a second face is not in
     # these guilds, and its sync attempts would be one failure log per guild
     # per reconnect, forever.
-    for gid in (COMMAND_GUILDS if FACE == identity.PRIMARY_FACE else ()):
+    blocked = _screen_command_tree()
+    for gid in (COMMAND_GUILDS if FACE == identity.PRIMARY_FACE and not blocked else ()):
         try:
             gobj = discord.Object(id=gid)
             tree.clear_commands(guild=gobj)       # idempotent across reconnects
@@ -704,7 +743,7 @@ async def reply_in(channel, text, reference=None):
     mention_author stays off: the thread line is the point, not a ping.
     """
     first = True
-    for chunk in split_for_discord(text):
+    for chunk in split_for_discord(wire.prescreen(channel, text)):
         if first and reference is not None:
             await channel.send(chunk, reference=reference, mention_author=False)
         else:
@@ -851,7 +890,7 @@ async def send_with_view(channel, text, view, reference=None):
     the view which message it lives on so it can edit itself later. reference
     threads the first chunk to the message this prompt answers."""
     msg = None
-    chunks = split_for_discord(text)
+    chunks = split_for_discord(wire.prescreen(channel, text))
     for i, chunk in enumerate(chunks[:-1]):
         if i == 0 and reference is not None:
             await channel.send(chunk, reference=reference, mention_author=False)

@@ -449,7 +449,14 @@ def privacy_terms():
     raw = _PRIVACY.get("pii") if isinstance(_PRIVACY, dict) else None
     if not isinstance(raw, (list, tuple)):
         return ()
-    terms = {str(t).strip() for t in raw if isinstance(t, str) and str(t).strip()}
+    terms = {" ".join(str(t).split()) for t in raw if isinstance(t, str) and str(t).strip()}
+    # Each word of a multi-word term is a term of its own (review 2026-10-19):
+    # listing "First Last" must also stop "Last" travelling alone. Words under
+    # three letters are left out - they are joiners ("de", "J."), not names.
+    for t in list(terms):
+        for w in t.split():
+            if len(w) >= 3:
+                terms.add(w)
     return tuple(sorted(terms, key=lambda t: (-len(t), t.casefold())))
 
 # Modes this build knows how to run. An unrecognised mode disables guest chat

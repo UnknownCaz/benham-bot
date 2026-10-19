@@ -1176,18 +1176,80 @@ class OutwardBlocked(Exception):
         self.decision = decision
 
 
-def _visible(text):
-    # Format characters (zero-width space/joiner, bidi marks) render as nothing
-    # and would let a name through the survivor check in pieces.
-    return "".join(c for c in text if unicodedata.category(c) != "Cf")
+# Invisible or near-invisible code points that render as nothing (or as a
+# blank) between two letters. Cf covers zero-width space/joiner and bidi
+# marks; Mn/Me cover the combining grapheme joiner and variation selectors;
+# the rest are the Hangul fillers. Found by the 2026-10-19 review.
+_FILLERS = frozenset("\u3164\u115f\u1160\uffa0")
+_MARKUP = re.compile(r"[*_~|`>\\]")
+_TAG = re.compile(r"<[^<>]{0,200}>")
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+|www\.\S+")
+
+
+def _skeleton(text):
+    """The text as a reader would see it: compatibility-folded (fullwidth and
+    math letters become plain), case-folded, invisibles dropped."""
+    s = unicodedata.normalize("NFKC", str(text)).casefold()
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in s
+                   if unicodedata.category(c) not in ("Cf", "Mn", "Me")
+                   and c not in _FILLERS)
+
+
+def _unmarked(text):
+    """A second reading with entities decoded and Discord markdown and inline
+    HTML removed, so "Na**m**e" or "&#78;ame" cannot render the term. Decoded
+    BEFORE the skeleton is taken, so a decoded capital is folded too."""
+    import html
+    return _MARKUP.sub("", _TAG.sub("", _skeleton(html.unescape(str(text)))))
+
+
+def _words(s):
+    return " ".join(s.split())
 
 
 def _term_pattern(term):
-    # Lookarounds instead of \b so a multi-word term ("First Last") and a term
-    # ending in punctuation both match as a unit. A trailing 's stays outside
+    # Lookarounds instead of \b so a multi-word term and a term ending in
+    # punctuation match as a unit. The words of a multi-word term may be
+    # separated by any run of whitespace, "_" or "-" (a double space or a line
+    # break must not let the surname through). A trailing 's stays outside
     # the match, so "Name's" becomes "the owner's".
-    return re.compile(r"(?<![0-9A-Za-z])" + re.escape(term) + r"(?![0-9A-Za-z])",
+    parts = [re.escape(p) for p in str(term).split()]
+    return re.compile(r"(?<![0-9A-Za-z])" + r"[\s_\-]+".join(parts) + r"(?![0-9A-Za-z])",
                       re.IGNORECASE)
+
+
+def _spaced_pattern(term_skel):
+    # "N a m e", "N.a.m.e", "N-a-m-e": every letter of the term with one to
+    # three separators between EACH pair. Requiring a separator at every gap
+    # keeps ordinary words that merely contain the letters from matching.
+    letters = [re.escape(c) for c in term_skel if not c.isspace()]
+    return re.compile(r"(?<![0-9a-z])" + r"[\W_]{1,3}".join(letters) + r"(?![0-9a-z])")
+
+
+SHORT_TERM = 4   # terms shorter than this match whole words only
+
+
+def _survives(s, terms):
+    """True if any term can still be read in `s`. Readings checked: the
+    skeleton, the skeleton with markup removed, and spaced-out letters.
+    Short terms (initials, a nickname) are checked as whole words only - a
+    substring rule would refuse "about" and "pretty" and mute the bot."""
+    readings = (_words(_skeleton(s)), _words(_unmarked(s)))
+    for term in terms:
+        t = _words(_skeleton(term))
+        if not t:
+            continue
+        if len(t.replace(" ", "")) < SHORT_TERM:
+            pat = re.compile(r"(?<![0-9a-z])" + re.escape(t) + r"(?![0-9a-z])")
+            if any(pat.search(r) for r in readings):
+                return True
+            continue
+        if any(t in r for r in readings):
+            return True
+        if " " not in t and len(t) >= SHORT_TERM and _spaced_pattern(t).search(readings[1]):
+            return True
+    return False
 
 
 def screen_text(text, terms=None):
@@ -1203,16 +1265,21 @@ def screen_text(text, terms=None):
     if text is None:
         return text, _ALLOW
     s = str(text)
+    # A term inside a link is refused, not rewritten: "the owner" in a path
+    # breaks the link, and a link that names him should not go at all.
+    for url in _URL.findall(s):
+        if any(_term_pattern(t).search(url) for t in terms) or _survives(url, terms):
+            return s, _deny("privacy_in_url",
+                            "a personal term is inside a link - refusing to send "
+                            "rather than break the link")
     hits = 0
     for term in sorted(terms, key=len, reverse=True):
         s, n = _term_pattern(term).subn(OWNER_PLACEHOLDER, s)
         hits += n
-    folded = _visible(s).casefold()
-    for term in terms:
-        if _visible(term).casefold() in folded:
-            return s, _deny("privacy_survivor",
-                            "a personal term is still in the text after the "
-                            "privacy screen rewrote whole words - refusing to send")
+    if _survives(s, terms):
+        return s, _deny("privacy_survivor",
+                        "a personal term is still in the text after the "
+                        "privacy screen rewrote whole words - refusing to send")
     if hits:
         return s, Decision(Decision.ALLOW, f"{hits} personal term(s) replaced",
                            "privacy_rewrote")
@@ -1273,7 +1340,7 @@ SCREEN_EXEMPT_LOCAL = frozenset({
 # Parameters that are ids, enums, local paths or asset references rather than
 # words someone reads. Their values never reach a reader as text (an asset or
 # URL that IS sent rides inside an embed or a file, which core/wire.py screens).
-_NOT_FREE_TEXT = frozenset({"id", "kind", "category", "color", "status",
+_NOT_FREE_TEXT = frozenset({"id", "kind", "category", "color", "status", "contains",
                             "activity_type", "emoji", "path", "project", "avatar",
                             "banner", "icon", "splash", "image_url", "thumbnail_url",
                             "url"})

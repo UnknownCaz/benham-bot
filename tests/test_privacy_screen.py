@@ -56,13 +56,14 @@ def section(title):
     print(f"\n{title}")
 
 
-TERMS = ("Zebulon Quartermaine", "Zebulon")
+TERMS = ("Zebulon Quartermaine", "Quartermaine", "Zebulon")
 OWNER = int(__import__("json").load(open(_os.path.join(paths.CONFIG_DIR, "control.json"),
                                          encoding="utf-8"))["owner_ids"][0])
 STRANGER = 111000111000111000
 
 section("the fixture carries invented terms, and identity reads them longest first")
-check("privacy_terms from control.json.example", identity.privacy_terms(), TERMS)
+check("privacy_terms from control.json.example, each word of a full name added",
+      identity.privacy_terms(), TERMS)
 check("the owner id the fixture uses is the owner", identity.is_owner(OWNER), True)
 
 
@@ -85,6 +86,36 @@ t, d = policy.screen_text("xZebulonx", TERMS)
 check("glued to other letters: REFUSED", d.denied, True)
 t, d = policy.screen_text("anything", ())
 check("no terms = REFUSED (fail-closed)", (d.denied, d.rule), (True, "privacy_unconfigured"))
+
+
+section("hardening from the 2026-10-19 review - readings a person still sees as the name")
+for label, text in [
+        ("combining grapheme joiner", "Zebu͏lon"),
+        ("variation selector", "Zebu️lon"),
+        ("Hangul filler", "Zebuㅤlon"),
+        ("fullwidth letter", "Ｚebulon"),
+        ("markdown bold inside", "Ze**b**ulon"),
+        ("spoiler inside", "Zeb||ulon||"),
+        ("HTML entity", "&#90;ebulon"),
+        ("empty HTML tag inside", "Ze<b></b>bulon"),
+        ("letters spaced out", "Z e b u l o n"),
+        ("letters dotted out", "Z.e.b.u.l.o.n")]:
+    _, d = policy.screen_text(text, TERMS)
+    check(f"{label}: REFUSED", d.denied, True)
+t, d = policy.screen_text("Zebulon  Quartermaine and Zebulon\nQuartermaine", TERMS)
+check("a full name split by a double space or a line break goes as one unit",
+      t, "the owner and the owner")
+t, d = policy.screen_text("Mr Quartermaine said", TERMS)
+check("the surname alone is a term too", t, "Mr the owner said")
+t, d = policy.screen_text("https://example.com/zebulon/pic.png", TERMS)
+check("a term inside a link is refused, not rewritten", d.rule, "privacy_in_url")
+t, d = policy.screen_text("see https://example.com/a - Zebulon", TERMS)
+check("...a clean link beside a term is fine", (d.allowed, t), (True, "see https://example.com/a - the owner"))
+for text in ("pretty lerp", "about the cab", "zeb ulon the band"):
+    _, d = policy.screen_text(text, TERMS + ("Ab",))
+    check(f"ordinary words still pass: {text!r}", d.allowed, True)
+t, d = policy.screen_text("hi AB, and xab", ("Ab",))
+check("a short term matches as a whole word only", (t, d.allowed), ("hi the owner, and xab", True))
 
 section("screen_value - every string inside a structure")
 v, d = policy.screen_value({"title": "Zebulon", "fields": [{"value": "hi zebulon"}], "n": 3}, TERMS)
@@ -121,7 +152,8 @@ wire._ORIG.clear()
 LOGS = []
 wired = wire.install(LOGS.append)
 check("install wraps send, edit, webhook and interaction responses", wired,
-      ["InteractionResponse.send_message", "Message.edit", "Messageable.send", "Webhook.send"])
+      ["InteractionResponse.edit_message", "InteractionResponse.send_message",
+       "Message.edit", "Messageable.send", "Webhook.send"])
 check("install is idempotent", wire.install(LOGS.append), wired)
 
 
@@ -190,6 +222,34 @@ async def wire_checks():
         raised = e.decision.rule
     check("a file name naming him is refused", raised, "privacy_unrewritable")
 
+    section("the wire - text attachments are read; a term inside refuses the send")
+    import io
+    SENT.clear()
+    raised = None
+    try:
+        await FakeChannel().send(file=discord.File(io.BytesIO(b"notes for Zebulon"), filename="notes.md"))
+    except policy.OutwardBlocked as e:
+        raised = e.decision.rule
+    check("a .md file naming him is refused", (raised, SENT), ("privacy_unrewritable", []))
+    buf = io.BytesIO(b"plain notes")
+    await FakeChannel().send(file=discord.File(buf, filename="notes.txt"))
+    check("a clean text file goes, and is rewound for the upload",
+          (len(SENT), SENT[-1]["file"].fp.read()), (1, b"plain notes"))
+    await FakeChannel().send(file=discord.File(io.BytesIO(b"Zebulon"), filename="pic.png"))
+    check("a binary attachment is not read (out of reach, stated)", len(SENT), 2)
+    raised = None
+    try:
+        await FakeChannel().send(file=discord.File(io.BytesIO(b"x"), filename="a.png",
+                                                   description="photo of Zebulon"))
+    except policy.OutwardBlocked as e:
+        raised = e.decision.rule
+    check("an attachment description naming him is refused", raised, "privacy_unrewritable")
+
+    section("the wire - prescreen rewrites before a caller splits at 2000")
+    long = ("x" * 1990) + " Zebulon"
+    check("prescreen rewrites for a channel", wire.prescreen(FakeChannel(), long).endswith("the owner"), True)
+    check("...and leaves the owner's DM alone", wire.prescreen(dm_with(OWNER), long), long)
+
     section("the wire - the owner's own DM is ring 1 and passes untouched")
     SENT.clear()
     await dm_with(OWNER).send("Zebulon, your build is done")
@@ -214,9 +274,10 @@ async def wire_checks():
     hook = discord.Webhook.__new__(discord.Webhook)
     hook.id = 7
     SENT.clear()
-    await hook.send("Zebulon via webhook", thread_name="Zebulon thread")
-    check("webhook content and thread name rewritten",
-          (SENT[-1]["content"], SENT[-1]["thread_name"]), ("the owner via webhook", "the owner thread"))
+    await hook.send("Zebulon via webhook", thread_name="Zebulon thread", username="Zebulon bot")
+    check("webhook content, thread name and username rewritten",
+          (SENT[-1]["content"], SENT[-1]["thread_name"], SENT[-1]["username"]),
+          ("the owner via webhook", "the owner thread", "the owner bot"))
 
     section("the record knows which capability sent it")
     token = outwardlog.current_action.set("send_message")
@@ -272,6 +333,9 @@ p, d = policy.screen_params(R["dm_user"], {"user_id": str(OWNER), "content": "Ze
 check("a DM to the owner is ring 1 and not screened", p["content"], "Zebulon")
 p, d = policy.screen_params(R["dm_user"], {"user_id": str(STRANGER), "content": "Zebulon"})
 check("a DM to anyone else is", p["content"], "the owner")
+p, d = policy.screen_params(R["purge_messages"], {"channel_id": "1", "contains": "Zebulon"})
+check("a purge filter is local and is NOT rewritten (it would purge the wrong messages)",
+      p["contains"], "Zebulon")
 p, d = policy.screen_params(R["read_channel"], {"channel_id": "1"})
 check("read-only capabilities are not screened", d.allowed, True)
 _saved = identity._PRIVACY
@@ -317,6 +381,33 @@ async def run_checks():
 
 
 asyncio.run(run_checks())
+
+
+section("slash commands: what tree.sync publishes is screened first")
+from benham import bot  # noqa: E402 - wire.install is idempotent, the stubs stay
+_orig_desc = bot.server_group.description
+check("the shipped /server description names nobody",
+      policy.screen_text(_orig_desc, TERMS)[1].rule, "")
+bot.server_group.description = "Control Zebulon's servers"
+check("a description naming him is rewritten in place, and the sync goes on",
+      (bot._screen_command_tree(), bot.server_group.description),
+      (False, "Control the owner's servers"))
+bot.server_group.description = "Control Zebulonia"
+check("a survivor stops the sync (logged)", bot._screen_command_tree(), True)
+bot.server_group.description = _orig_desc
+check("...and the real tree passes", bot._screen_command_tree(), False)
+
+_watch = bot.WATCH
+bot.WATCH = {"servers": {"a": {"name": "Zebulon's SMP"}, "b": {"name": "Zebulonia"},
+                         "c": {"name": "Survival"}}}
+_allowed = bot.allowed_servers
+bot.allowed_servers = lambda gid: {"a", "b", "c"}
+try:
+    _choices = asyncio.run(bot.server_autocomplete(type("I", (), {"guild_id": 1})(), ""))
+finally:
+    bot.WATCH, bot.allowed_servers = _watch, _allowed
+check("autocomplete choices: rewritten, or dropped if a term survives",
+      sorted(c.name for c in _choices), ["Survival", "the owner's SMP"])
 
 print()
 if _fails:
