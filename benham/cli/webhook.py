@@ -115,7 +115,19 @@ def main(argv):
         return 2
 
     url, label = resolve_url(cfg, args.target, args.url)
-    status, body = post(url, build_payload(args))
+    # The privacy screen (issue 11): a webhook post leaves the machine like any
+    # other, so it passes the same policy function the bot's wire uses.
+    from benham.core import outwardlog, policy
+    payload, verdict = policy.screen_value(build_payload(args))
+    if verdict.denied:
+        outwardlog.record("webhook", label, json.dumps(payload, ensure_ascii=False),
+                          verdict="blocked", rule=verdict.rule)
+        print(f"BLOCKED ({label}) [rule={verdict.rule}]: {verdict.reason}", file=sys.stderr)
+        return 3
+    status, body = post(url, payload)
+    outwardlog.record("webhook", label, json.dumps(payload, ensure_ascii=False),
+                      verdict="sent" if status == 204 else f"http {status}",
+                      rule=verdict.rule)
     if status == 204:
         print(f"Delivered to {label} (HTTP 204)")
         return 0

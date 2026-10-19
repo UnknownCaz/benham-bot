@@ -52,7 +52,7 @@ import time
 from datetime import date, datetime, timezone
 
 from benham import paths
-from benham.core import identity
+from benham.core import identity, outwardlog, policy
 from benham.core import jsonio
 from benham.core import msgparts
 
@@ -674,7 +674,18 @@ def file_issue(category, title, quote, *, guest_id=None, guest_name=None,
         labels.append(f"project:{proj}")
     body = build_body(category, quote, guest_name=guest_name, guest_id=guest_id,
                       filed_by=filed_by, context=context)
-    args = ["issue", "create", "--repo", REPO, "--title", prefix + title,
+    # The privacy screen (issue 11), last thing before the text leaves the
+    # machine - after build_body, so the header and any context are screened
+    # too, and every door into this function (the owner's file_issue, a
+    # guest's bug.., retry_unsent) passes it. A refusal files nothing and is
+    # recorded locally with the words that were refused.
+    full_title = prefix + title
+    (full_title, body), verdict = policy.screen_value((full_title, body))
+    if verdict.denied:
+        outwardlog.record("issue", REPO, f"{full_title}\n\n{body}", verdict="blocked",
+                          rule=verdict.rule, extra={"labels": labels})
+        return False, f"privacy screen refused the filing: {verdict.reason}"
+    args = ["issue", "create", "--repo", REPO, "--title", full_title,
             "--body", body]
     for lab in labels:
         args += ["--label", lab]
@@ -684,6 +695,10 @@ def file_issue(category, title, quote, *, guest_id=None, guest_name=None,
         return False, f"couldn't reach the tracker ({e})"
     if not url.startswith("http"):
         url = url.splitlines()[-1] if url else ""
+    # The full text that was filed, kept locally (never on GitHub) so a filing
+    # can be audited after the fact - the record issue 11 found missing.
+    outwardlog.record("issue", REPO, f"{full_title}\n\n{body}", verdict="sent",
+                      rule=verdict.rule, extra={"labels": labels, "url": url})
 
     entry = {"ts": datetime.now(timezone.utc).isoformat(),
              "day": date.today().isoformat(),

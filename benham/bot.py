@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 
 from benham.core import agent
 from benham.core import botguests
+from benham.core import wire
 from benham.core import capabilities
 from benham.core import channelread
 from benham.core import confirm
@@ -193,6 +194,12 @@ def log(msg):
             print(line.encode(enc, "backslashreplace").decode(enc, "replace"), flush=True)
         except Exception:  # noqa: BLE001 — give up silently rather than propagate
             pass
+
+
+# The privacy screen at the wire (issue 11): every discord send and edit this
+# process makes passes policy.screen_value and is recorded in outwardlog.
+# Installed at import, before any client exists, so nothing can send first.
+wire.install(log)
 
 
 def dump_channels():
@@ -535,6 +542,10 @@ async def on_ready():
         f", agent guilds {sorted(_gates['agent_guilds'])} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
     log(f"Destructive actions allowed in guilds: {sorted(_gates['destructive_guilds']) or 'NONE'}")
+    _terms = len(identity.privacy_terms())
+    log(f"Privacy screen: {_terms} term(s) on {wire.installed()}"
+        + ("" if _terms else " - NOT CONFIGURED: every send to anyone but the owner, "
+           "and every filing, is refused until control.json privacy.pii is set"))
     # Every other safety-relevant setting gets a banner line, and this one is a
     # gate that can be turned OFF from config - so a deployment running without
     # it must not be indistinguishable in the log from one running with it.

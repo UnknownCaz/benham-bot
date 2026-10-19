@@ -70,6 +70,10 @@ LOG = "\n".join([
 def main():
     tmp = tempfile.mkdtemp(prefix="benham-selfrecord-")
     real_log_dir = paths.LOG_DIR
+    real_state_dir = paths.STATE_DIR
+    # The outward record (core/outwardlog.py) lives under the state dir; a
+    # test that read the real one would pass or fail on what the bot sent.
+    paths.STATE_DIR = tmp
     try:
         with open(os.path.join(tmp, "supervise.log"), "w", encoding="utf-8") as fh:
             fh.write(LOG)
@@ -174,6 +178,7 @@ def main():
         check("declaring a reserved param refuses to register", registered, False)
     finally:
         paths.LOG_DIR = real_log_dir
+        paths.STATE_DIR = real_state_dir
         capabilities.REGISTRY.pop("_bad_test_action", None)
         shutil.rmtree(tmp, ignore_errors=True)
 

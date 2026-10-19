@@ -1123,3 +1123,175 @@ def authorize_crowd_ping(action, params):
     return _confirm("crowd_ping",
                     "it would ping a crowd (@everyone, @here or a role) - that only "
                     "happens when Tyler says so, so it waits for his approval")
+
+
+# ==========================================================================
+# The privacy screen - may this text leave the machine? (issue 11, 2026-10-19)
+# ==========================================================================
+#
+# On 2026-10-19 file_issue put the owner's legal name into two tracker issues.
+# Nothing was wrong with any one call: the persona and the tool descriptions
+# name him, the brain repeated what it read, and no line between the brain and
+# the wire looked at the words. "The model should know better" is the bet
+# INTENT 3.3 already lost three times, so this is code, and it is at the WIRE:
+# core/wire.py runs every Discord send and edit through screen_value, and
+# issues.file_issue runs title and body through it right before gh. A path
+# added next year inherits the screen because it cannot reach Discord or the
+# tracker without passing it.
+#
+# What it does, in order:
+#   1. No terms configured (control.json privacy.pii) -> DENY. An empty list
+#      is "cannot screen", not "nothing to screen"; fail-closed like the rest.
+#   2. Every whole-word match of a term, any case, becomes "the owner".
+#   3. If any term still appears ANYWHERE - inside a longer word, split by a
+#      zero-width character - DENY. The rewrite in step 2 is a convenience;
+#      this check is the guarantee, and it does not trust step 2.
+#
+# The one exemption is decided by the CALLER, not here: text whose only reader
+# is the owner (his own DM) is ring 1, and is not screened. Everything else -
+# a guild channel, a thread, a guest's DM, the tracker, a webhook - is.
+
+import unicodedata
+
+OWNER_PLACEHOLDER = "the owner"
+
+
+class OutwardBlocked(Exception):
+    """Raised by a wire that refused to send. `.decision` carries the rule."""
+
+    def __init__(self, decision):
+        super().__init__(decision.reason)
+        self.decision = decision
+
+
+def _visible(text):
+    # Format characters (zero-width space/joiner, bidi marks) render as nothing
+    # and would let a name through the survivor check in pieces.
+    return "".join(c for c in text if unicodedata.category(c) != "Cf")
+
+
+def _term_pattern(term):
+    # Lookarounds instead of \b so a multi-word term ("First Last") and a term
+    # ending in punctuation both match as a unit. A trailing 's stays outside
+    # the match, so "Name's" becomes "the owner's".
+    return re.compile(r"(?<![0-9A-Za-z])" + re.escape(term) + r"(?![0-9A-Za-z])",
+                      re.IGNORECASE)
+
+
+def screen_text(text, terms=None):
+    """(clean_text, Decision) for one string bound for somewhere off the machine.
+
+    `terms` defaults to identity.privacy_terms(); tests pass their own."""
+    terms = identity.privacy_terms() if terms is None else tuple(terms)
+    if not terms:
+        return text, _deny("privacy_unconfigured",
+                           "nothing leaves the machine until control.json "
+                           "privacy.pii lists the owner's personal terms - the "
+                           "privacy screen has nothing to check against")
+    if text is None:
+        return text, _ALLOW
+    s = str(text)
+    hits = 0
+    for term in sorted(terms, key=len, reverse=True):
+        s, n = _term_pattern(term).subn(OWNER_PLACEHOLDER, s)
+        hits += n
+    folded = _visible(s).casefold()
+    for term in terms:
+        if _visible(term).casefold() in folded:
+            return s, _deny("privacy_survivor",
+                            "a personal term is still in the text after the "
+                            "privacy screen rewrote whole words - refusing to send")
+    if hits:
+        return s, Decision(Decision.ALLOW, f"{hits} personal term(s) replaced",
+                           "privacy_rewrote")
+    return s, _ALLOW
+
+
+def screen_value(value, terms=None):
+    """screen_text over every string inside a str/dict/list/tuple.
+
+    Returns (clean_value, Decision). The first DENY wins; the rewrite count of
+    every string is summed so the caller can log that something was replaced."""
+    terms = identity.privacy_terms() if terms is None else tuple(terms)
+    total = 0
+    denied = None
+
+    def walk(v):
+        nonlocal total, denied
+        if isinstance(v, str):
+            clean, d = screen_text(v, terms)
+            if d.denied and denied is None:
+                denied = d
+            if d.rule == "privacy_rewrote":
+                total += 1
+            return clean
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, tuple):
+            return tuple(walk(x) for x in v)
+        return v
+
+    if not terms:
+        return value, screen_text("", terms)[1]
+    clean = walk(value)
+    if denied is not None:
+        return clean, denied
+    if total:
+        return clean, Decision(Decision.ALLOW, f"{total} string(s) rewritten",
+                               "privacy_rewrote")
+    return clean, _ALLOW
+
+
+# Capabilities whose text stays on this machine (or, for file_issue, is
+# screened at its own wire in issues.file_issue). Everything else at tier 1 and
+# up that takes a string may put it where other people read it - a channel
+# name, a topic, a nickname, a presence line, an audit-log reason, a forum
+# post's first message - and most of those never pass discord's send methods,
+# so core/wire.py cannot see them. screen_params is that second net.
+SCREEN_EXEMPT_LOCAL = frozenset({
+    "answer_conversation",   # the owner's answer, stored in the conversation record
+    "create_room", "post_room", "read_room",   # rooms live in state/ on this machine
+    "file_issue",            # screened in issues.file_issue, right before gh
+    "notify_owner",          # its only reader is the owner
+})
+
+
+# Parameters that are ids, enums, local paths or asset references rather than
+# words someone reads. Their values never reach a reader as text (an asset or
+# URL that IS sent rides inside an embed or a file, which core/wire.py screens).
+_NOT_FREE_TEXT = frozenset({"id", "kind", "category", "color", "status",
+                            "activity_type", "emoji", "path", "project", "avatar",
+                            "banner", "icon", "splash", "image_url", "thumbnail_url",
+                            "url"})
+
+
+def _not_free_text(key):
+    return key in _NOT_FREE_TEXT or key.endswith("_id")
+
+
+def screen_params(action, params, terms=None):
+    """(clean_params, Decision) for one capability call, before its handler.
+
+    Read-only capabilities (tier 0) and the local set above pass untouched, and
+    so does a DM whose target is the owner (ring 1). Every other string
+    parameter is screened; one survivor refuses the call."""
+    if action.tier == identity.READ or action.name in SCREEN_EXEMPT_LOCAL:
+        return params, _ALLOW
+    if action.name == "dm_user":
+        try:
+            if identity.is_owner(int(params.get("user_id"))):
+                return params, _ALLOW
+        except (TypeError, ValueError):
+            pass
+    strs = {k: v for k, v in params.items()
+            if isinstance(v, str) and v and not _not_free_text(k)}
+    if not strs:
+        return params, _ALLOW
+    clean, decision = screen_value(strs, terms)
+    if decision.denied:
+        return params, decision
+    out = dict(params)
+    out.update(clean)
+    return out, decision

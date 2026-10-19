@@ -65,6 +65,14 @@ issues.ISSUER_IDS = {DOOM}
 issues.DAILY_CAP = 3
 issues.PROJECTS = {"storyizier", "benham"}
 
+# The privacy screen (issue 11) reads its terms through identity and writes its
+# record under the state dir; both point at this test's scratch. The terms are
+# invented - a real name never goes in a tracked file.
+from benham import paths as _p
+from benham.core import identity as _identity, outwardlog as _outwardlog
+_p.STATE_DIR = _tmp
+_identity._PRIVACY = {"pii": ["Zebulon Quartermaine", "Zebulon"]}
+
 
 class GhStub:
     """Records every call; answers with a fixed URL or raises on demand."""
@@ -442,6 +450,59 @@ check("...and it must not hand-send what loop-close already sends",
       "do not promise to go back and tell someone" in _owner, True)
 check("the guest prefixes are named as THEIR door, not the owner's",
       "you never use those on their behalf" in _owner, True)
+
+
+section("the privacy screen - file_issue never sends a personal term (issue 11)")
+# 2026-10-19: two owner filings carried his legal name. Every door into
+# file_issue - the owner capability, a guest's bug.., retry_unsent - now passes
+# policy.screen_value right before gh. Whole words are rewritten; anything left
+# refuses the filing; both outcomes are recorded locally with the full text.
+gh.calls.clear()
+_before = len(_outwardlog.entries())
+ok, url = issues.file_issue("bug", "Zebulon's bot asks Zebulon first",
+                            "zebulon approved it and ZEBULON QUARTERMAINE saw it land",
+                            filed_by="Caz (owner/CLI)")
+check("a filing that names him still goes, rewritten", ok, True)
+_args = gh.calls[-1]
+_title = _args[_args.index("--title") + 1]
+_body = _args[_args.index("--body") + 1]
+check("the title reaches gh with the term replaced",
+      _title, "[Bug] the owner's bot asks the owner first")
+check("the body reaches gh with every case and the full name replaced",
+      "the owner approved it and the owner saw it land" in _body, True)
+check("no form of the term reaches gh at all",
+      "zebulon" in (_title + _body).lower(), False)
+_rec = _outwardlog.entries()[_before:]
+check("the full sent text is recorded locally", len(_rec), 1)
+check("...as sent, with its url, and the words that went",
+      (_rec[0]["verdict"], _rec[0]["url"], "the owner approved" in _rec[0]["text"]),
+      ("sent", "https://github.com/example/intake/issues/7", True))
+
+gh.calls.clear()
+ok, why = issues.file_issue("bug", "Zebulons everywhere",
+                            "the report text", filed_by="Caz (owner/CLI)")
+check("a term inside a longer word is not rewritten, so the filing is REFUSED", ok, False)
+check("...and gh is never called", gh.calls, [])
+check("...and the refusal says why", "privacy screen refused" in why, True)
+_rec = _outwardlog.entries()[-1]
+check("the refusal is recorded locally with its rule",
+      (_rec["verdict"], _rec["rule"]), ("blocked", "privacy_survivor"))
+
+ok, why = issues.file_issue("bug", "plain title",
+                            "Zebu\u200blon split by a zero-width space",
+                            guest_id=DOOM, guest_name="doomassassin1",
+                            count_against_cap=False)
+check("a guest's quote is screened too, and a zero-width split is caught",
+      (ok, "privacy screen refused" in why), (False, True))
+
+_saved = _identity._PRIVACY
+_identity._PRIVACY = {}
+gh.calls.clear()
+ok, why = issues.file_issue("bug", "anything", "anything at all",
+                            filed_by="Caz (owner/CLI)")
+check("no terms configured = nothing is filed (fail-closed)", (ok, gh.calls), (False, []))
+check("...and the refusal names the missing config", "privacy.pii" in why, True)
+_identity._PRIVACY = _saved
 
 print()
 if _fails:

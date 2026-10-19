@@ -33,6 +33,7 @@ from benham.core import lookimage
 from benham.core import pathsafe
 from benham.core import policy
 from benham.core import rooms
+from benham.core import wire
 
 REGISTRY = {}
 
@@ -3137,6 +3138,15 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         raise ActionError(decision.reason)
 
     clean = validate(act, params or {})
+    # The privacy screen over the parameters (issue 11): a channel name, a
+    # nickname, a presence line or an audit reason reaches other people without
+    # passing discord's send methods, so core/wire.py alone cannot see it.
+    clean, privacy = policy.screen_params(act, clean)
+    if privacy.denied:
+        log(f"DENIED {name} by {actor_id or 'code-session'} [rule={privacy.rule}]")
+        raise ActionError(f"`{name}` was not run: {privacy.reason}")
+    if privacy.rule == "privacy_rewrote":
+        log(f"privacy screen: {privacy.reason} in the parameters of {name}")
     ctx = Ctx(client, log, dry_run=False, actor_id=actor_id, on_progress=on_progress,
               source_channel_id=getattr(call_ctx, "channel_id", None),
               source_message_id=source_message_id, on_attach=on_attach)
@@ -3189,8 +3199,16 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
             f"(guild {gid}) [rule={target_decision.rule}]: {preview.get('summary', '?')}")
         return None, preview
 
+    # wire.current_action tags every Discord send this handler makes, so the
+    # outward record knows it already has an "action" line here (issue 10).
+    token = wire.current_action.set(name)
     try:
         result = await act.handler(ctx, clean)
+    except policy.OutwardBlocked as e:
+        # The privacy screen refused a send inside the handler (issue 11). The
+        # wire has logged it; the caller gets an ordinary refusal to report.
+        log(f"DENIED {name} by {actor_id or 'code-session'} [rule={e.decision.rule}]")
+        raise ActionError(f"`{name}` was not sent: {e.decision.reason}")
     except discord.Forbidden as e:
         raise ActionError(
             f"Discord refused `{name}`: this bot's role lacks the permission for it "
@@ -3198,6 +3216,8 @@ async def run(client, log, name, params, actor_id=None, dry_run=False, force=Fal
         )
     except discord.HTTPException as e:
         raise ActionError(f"Discord rejected `{name}`: {e.text or e}")
+    finally:
+        wire.current_action.reset(token)
 
     # Never log a result field the handler flagged as a credential (webhook URLs).
     loggable = {k: v for k, v in result.items()
