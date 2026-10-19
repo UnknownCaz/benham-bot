@@ -356,6 +356,68 @@ check("reopens once the oldest reply is an hour old",
 check("the budget is per channel",
       botguests.take(GENERAL, HERMES_ID, now=t0 + 60), (True, 1))
 
+
+# --------------------------------------------------------------------------
+section("A thread counts as its parent channel (issue 9, 2026-10-19)")
+# Hermes answers inside a thread under the message that pinged it. To Discord
+# a thread is its own channel, so the channel-id list never matched it and Caz
+# got the friend ask for his own bot. Only discord.Thread carries parent_id.
+
+
+class _Thread(_Channel):
+    def __init__(self, cid, name, guild, parent_id):
+        super().__init__(cid, name, guild)
+        self.parent_id = parent_id
+
+
+KESTRA_THREAD = 600000000000000401          # invented
+GENERAL_THREAD = 600000000000000402
+k_thread = _Thread(KESTRA_THREAD, "Greet a user by ID", testing, KESTRA)
+g_thread = _Thread(GENERAL_THREAD, "elsewhere", testing, GENERAL)
+off_thread = _Thread(600000000000000403, "off", offlist, KESTRA)
+bot.client.channels.update({KESTRA_THREAD: k_thread, GENERAL_THREAD: g_thread})
+
+grant()
+check("policy: a thread under #kestra is allowed",
+      may(HERMES_ID, TESTING, KESTRA_THREAD, parent_id=KESTRA).allowed, True)
+check("policy: a thread under #general is not",
+      may(HERMES_ID, TESTING, GENERAL_THREAD, parent_id=GENERAL).rule, "bot_guest_scope")
+check("policy: without the parent id the thread id alone does not match",
+      may(HERMES_ID, TESTING, KESTRA_THREAD).rule, "bot_guest_scope")
+check("policy: someone else in a #kestra thread is not",
+      may(ALEX.id, TESTING, KESTRA_THREAD, parent_id=KESTRA).rule, "bot_guest_scope")
+check("policy: a #kestra-id thread in a guild off agent_guilds is not",
+      may(HERMES_ID, OFF_LIST, 600000000000000403, parent_id=KESTRA).rule, "bot_guest_guild")
+check("policy: a garbage parent id is ignored, not trusted",
+      may(HERMES_ID, TESTING, KESTRA_THREAD, parent_id="abc").rule, "bot_guest_scope")
+
+model = fresh("hi Hermes, Benham here.")
+for ch in (k_thread, g_thread, off_thread):
+    ch.said.clear()
+    ch.sent.clear()
+msg = say(HERMES, "Hey Benham, Caz asked me to say hi", k_thread)
+check("live: Hermes in a #kestra thread gets a reply, in the thread",
+      (len(model.seen), len(k_thread.sent)), (1, 1))
+check("...opening with Hermes's ping",
+      (k_thread.sent[0] or "").startswith(f"<@{HERMES_ID}>") if k_thread.sent else False, True)
+check("...and Caz is NOT asked in DMs", CAZ.dm_channel.sent, [])
+check("...nothing lands in #kestra itself", kestra.sent, [])
+
+model = fresh()
+say(HERMES, "hi from a general thread", g_thread)
+check("live: a thread under #general still takes the friend path", model.seen, [])
+check("...Caz is asked, as before", len(CAZ.dm_channel.sent), 1)
+check("...and the thread hears nothing", g_thread.sent, [])
+
+model = fresh()
+for i in range(botguests.CAP):
+    say(HERMES, f"parent {i}", kestra)
+k_thread.sent.clear()
+say(HERMES, "one more, in a thread", k_thread)
+check("the cap is shared: a thread spends its parent's hour, so a new thread "
+      "never buys a fresh budget", (len(model.seen), k_thread.sent),
+      (botguests.CAP, []))
+
 grant(None)
 
 print()

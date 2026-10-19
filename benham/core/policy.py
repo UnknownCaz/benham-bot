@@ -692,7 +692,7 @@ def may_chat_as_guest(ctx):
     return _ALLOW
 
 
-def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
+def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None, parent_id=None):
     """Whether a mention from this non-owner account may get a chat-only reply
     here WITHOUT Tyler being asked first (INTENT decision 53).
 
@@ -703,6 +703,13 @@ def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
     names (`bot_guests`) and nowhere else. Fail-closed: no ids, a DM, an owner,
     a guild off agent_guilds, or a channel not listed for this account = DENY,
     and the caller falls through to the ordinary friend path.
+
+    A THREAD counts as its parent channel (issue 9, 2026-10-19): Hermes answers
+    inside a thread under the message that pinged it, and to Discord a thread is
+    a channel of its own, so a channel-id list never matched and Caz got the
+    friend ask for his own bot. `parent_id` is the thread's parent; pass it only
+    for a thread (only discord.Thread carries one). A thread under a listed
+    channel is allowed; a thread under any other channel is not.
 
     Structural only, like may_chat_as_guest. The hourly reply cap is state, not
     authority, and lives in core/botguests.py.
@@ -715,7 +722,12 @@ def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
         return _deny("bot_guest_owner", f"user {uid} is my owner, not a bot guest")
     if gid not in identity.agent_guilds(face):
         return _deny("bot_guest_guild", f"guild {gid} is not on agent_guilds in control.json")
-    if cid not in identity.bot_guest_channels(uid, face):
+    listed = identity.bot_guest_channels(uid, face)
+    try:
+        pid = int(parent_id) if parent_id is not None else None
+    except (TypeError, ValueError):
+        pid = None
+    if cid not in listed and (pid is None or pid not in listed):
         return _deny("bot_guest_scope",
                      f"user {uid} is not a bot guest in channel {cid} "
                      "(control.json bot_guests)")

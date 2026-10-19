@@ -1804,7 +1804,8 @@ async def on_message(message):
             await handle_guest_dm(message)
             return
         if (not is_dm and agent.ENABLED and policy.may_answer_bot_guest(
-                message.author.id, message.guild.id, message.channel.id).allowed):
+                message.author.id, message.guild.id, message.channel.id,
+                parent_id=getattr(message.channel, "parent_id", None)).allowed):
             # A bot guest (Hermes in #kestra, INTENT decision 53): decision 50's
             # chat-only friend turn with the ask pre-answered by control.json,
             # for that account in the channels listed for it and nowhere else.
@@ -2173,7 +2174,9 @@ async def handle_bot_guest_mention(message):
     the hourly budget (core/botguests.py) and answers chat-only, the reply
     opening with the bot's inline mention so its own gate will hear it."""
     ch, who = message.channel, message.author
-    allowed, used = botguests.take(ch.id, who.id)
+    # The cap counts per listed channel: replies in a thread spend its parent's
+    # budget, so opening a new thread never buys a fresh hour (issue 9).
+    allowed, used = botguests.take(getattr(ch, "parent_id", None) or ch.id, who.id)
     if not allowed:
         log(f"bot guest @ from {who} in #{ch}: hourly cap reached "
             f"({botguests.CAP} per {botguests.WINDOW // 60} min) - staying quiet")
