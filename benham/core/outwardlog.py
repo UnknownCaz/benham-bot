@@ -47,7 +47,7 @@ def record(route, target, text, *, verdict="sent", rule="", via=None, extra=None
     via: the capability that sent it; defaults to current_action."""
     if via is None:
         via = current_action.get()
-    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
              "route": route, "target": str(target)[:200], "verdict": verdict,
              "rule": rule, "via": via, "text": text}
     if extra:

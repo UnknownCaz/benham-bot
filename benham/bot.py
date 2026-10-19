@@ -2221,6 +2221,11 @@ async def answer_friends(channel, people, closing, bot_guest=None):
         if bot_guest:
             reply = botguests.lead_with_mention(reply, bot_guest)
         await reply_in(channel, reply)
+        # Issue 10: this reply used to leave no trace a reader of the log could
+        # find. The wire now records every send (outwardlog, read by what_i_did);
+        # this line is for a human reading benham.log.
+        log(f"{'bot guest' if bot_guest else 'friend'} reply sent in #{channel}"
+            f"{' (closing message)' if closing else ''}: {len(reply)} chars")
 
 
 async def invite_pinged(channel, pinged):

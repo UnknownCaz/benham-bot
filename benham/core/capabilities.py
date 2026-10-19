@@ -963,6 +963,13 @@ async def _what_i_did(ctx, p):
         action=p.get("only") or None,
         since_minutes=(int(p["since_minutes"]) if p.get("since_minutes") else None),
         actor=p.get("actor") or None)
+    # Issue 10: the record now holds sends that never passed this file. Said
+    # in the payload, not the description - the description is printed by
+    # `benham.py do --list`, whose words are a pinned contract (decision 38).
+    out["kinds"] = ("action/DENIED/PROPOSED: capability runs. sent: a message that "
+                    "left by a route with no capability (a chat reply, a reply to a "
+                    "friend or a bot guest, a nudge). BLOCKED: a send the privacy "
+                    "screen refused.")
     if not out["entries"]:
         # Say which of the two silences this is, in the payload itself, rather than
         # leaving the model to infer it from a bare empty list. Inferring it wrong
