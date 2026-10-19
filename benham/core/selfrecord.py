@@ -33,6 +33,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from benham import paths
+from benham.core import outwardlog
 
 # The bot's log() prefix, and the three shapes capabilities.run emits.
 _STAMP = r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z)\]"
@@ -127,6 +128,33 @@ def read(limit=20, action=None, since_minutes=None, actor=None, max_detail=400, 
                     entries.append(e)
         except OSError:
             continue
+
+    # The outward record (issue 10, 2026-10-19). An approved reply to a bot's
+    # mention went out and left no "action" line, because only
+    # capabilities.run writes those and that reply never passed it. Every
+    # send and filing is now recorded at the wire (core/wire.py,
+    # issues.file_issue); the ones that carry a capability (`via`) are
+    # skipped here because their action line above already says it, so one
+    # send never reads as two.
+    for o in outwardlog.entries():
+        if o.get("via"):
+            continue
+        try:
+            ts = datetime.fromisoformat(str(o.get("ts")))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if first_ts is None or ts < first_ts:
+            first_ts = ts
+        if last_ts is None or ts > last_ts:
+            last_ts = ts
+        blocked = o.get("verdict") == "blocked"
+        name = "file_issue" if o.get("route") == "issue" else (o.get("kind") or o.get("route"))
+        detail = (f"{'REFUSED by ' + str(o.get('rule')) + ' - ' if blocked else ''}"
+                  f"to {o.get('target')}: {o.get('text') or ''}")
+        entries.append({"ts": ts, "kind": "BLOCKED" if blocked else "sent",
+                        "name": name, "actor": "benham", "detail": detail})
 
     cutoff = None
     if since_minutes is not None:

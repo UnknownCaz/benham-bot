@@ -692,7 +692,7 @@ def may_chat_as_guest(ctx):
     return _ALLOW
 
 
-def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
+def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None, parent_id=None):
     """Whether a mention from this non-owner account may get a chat-only reply
     here WITHOUT Tyler being asked first (INTENT decision 53).
 
@@ -703,6 +703,13 @@ def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
     names (`bot_guests`) and nowhere else. Fail-closed: no ids, a DM, an owner,
     a guild off agent_guilds, or a channel not listed for this account = DENY,
     and the caller falls through to the ordinary friend path.
+
+    A THREAD counts as its parent channel (issue 9, 2026-10-19): Hermes answers
+    inside a thread under the message that pinged it, and to Discord a thread is
+    a channel of its own, so a channel-id list never matched and Caz got the
+    friend ask for his own bot. `parent_id` is the thread's parent; pass it only
+    for a thread (only discord.Thread carries one). A thread under a listed
+    channel is allowed; a thread under any other channel is not.
 
     Structural only, like may_chat_as_guest. The hourly reply cap is state, not
     authority, and lives in core/botguests.py.
@@ -715,7 +722,12 @@ def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None):
         return _deny("bot_guest_owner", f"user {uid} is my owner, not a bot guest")
     if gid not in identity.agent_guilds(face):
         return _deny("bot_guest_guild", f"guild {gid} is not on agent_guilds in control.json")
-    if cid not in identity.bot_guest_channels(uid, face):
+    listed = identity.bot_guest_channels(uid, face)
+    try:
+        pid = int(parent_id) if parent_id is not None else None
+    except (TypeError, ValueError):
+        pid = None
+    if cid not in listed and (pid is None or pid not in listed):
         return _deny("bot_guest_scope",
                      f"user {uid} is not a bot guest in channel {cid} "
                      "(control.json bot_guests)")
@@ -1123,3 +1135,242 @@ def authorize_crowd_ping(action, params):
     return _confirm("crowd_ping",
                     "it would ping a crowd (@everyone, @here or a role) - that only "
                     "happens when Tyler says so, so it waits for his approval")
+
+
+# ==========================================================================
+# The privacy screen - may this text leave the machine? (issue 11, 2026-10-19)
+# ==========================================================================
+#
+# On 2026-10-19 file_issue put the owner's legal name into two tracker issues.
+# Nothing was wrong with any one call: the persona and the tool descriptions
+# name him, the brain repeated what it read, and no line between the brain and
+# the wire looked at the words. "The model should know better" is the bet
+# INTENT 3.3 already lost three times, so this is code, and it is at the WIRE:
+# core/wire.py runs every Discord send and edit through screen_value, and
+# issues.file_issue runs title and body through it right before gh. A path
+# added next year inherits the screen because it cannot reach Discord or the
+# tracker without passing it.
+#
+# What it does, in order:
+#   1. No terms configured (control.json privacy.pii) -> DENY. An empty list
+#      is "cannot screen", not "nothing to screen"; fail-closed like the rest.
+#   2. Every whole-word match of a term, any case, becomes "the owner".
+#   3. If any term still appears ANYWHERE - inside a longer word, split by a
+#      zero-width character - DENY. The rewrite in step 2 is a convenience;
+#      this check is the guarantee, and it does not trust step 2.
+#
+# The one exemption is decided by the CALLER, not here: text whose only reader
+# is the owner (his own DM) is ring 1, and is not screened. Everything else -
+# a guild channel, a thread, a guest's DM, the tracker, a webhook - is.
+
+import unicodedata
+
+OWNER_PLACEHOLDER = "the owner"
+
+
+class OutwardBlocked(Exception):
+    """Raised by a wire that refused to send. `.decision` carries the rule."""
+
+    def __init__(self, decision):
+        super().__init__(decision.reason)
+        self.decision = decision
+
+
+# Invisible or near-invisible code points that render as nothing (or as a
+# blank) between two letters. Cf covers zero-width space/joiner and bidi
+# marks; Mn/Me cover the combining grapheme joiner and variation selectors;
+# the rest are the Hangul fillers. Found by the 2026-10-19 review.
+_FILLERS = frozenset("\u3164\u115f\u1160\uffa0")
+_MARKUP = re.compile(r"[*_~|`>\\]")
+_TAG = re.compile(r"<[^<>]{0,200}>")
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+|www\.\S+")
+
+
+def _skeleton(text):
+    """The text as a reader would see it: compatibility-folded (fullwidth and
+    math letters become plain), case-folded, invisibles dropped."""
+    s = unicodedata.normalize("NFKC", str(text)).casefold()
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in s
+                   if unicodedata.category(c) not in ("Cf", "Mn", "Me")
+                   and c not in _FILLERS)
+
+
+def _unmarked(text):
+    """A second reading with entities decoded and Discord markdown and inline
+    HTML removed, so "Na**m**e" or "&#78;ame" cannot render the term. Decoded
+    BEFORE the skeleton is taken, so a decoded capital is folded too."""
+    import html
+    return _MARKUP.sub("", _TAG.sub("", _skeleton(html.unescape(str(text)))))
+
+
+def _words(s):
+    return " ".join(s.split())
+
+
+def _term_pattern(term):
+    # Lookarounds instead of \b so a multi-word term and a term ending in
+    # punctuation match as a unit. The words of a multi-word term may be
+    # separated by any run of whitespace, "_" or "-" (a double space or a line
+    # break must not let the surname through). A trailing 's stays outside
+    # the match, so "Name's" becomes "the owner's".
+    parts = [re.escape(p) for p in str(term).split()]
+    return re.compile(r"(?<![0-9A-Za-z])" + r"[\s_\-]+".join(parts) + r"(?![0-9A-Za-z])",
+                      re.IGNORECASE)
+
+
+def _spaced_pattern(term_skel):
+    # "N a m e", "N.a.m.e", "N-a-m-e": every letter of the term with one to
+    # three separators between EACH pair. Requiring a separator at every gap
+    # keeps ordinary words that merely contain the letters from matching.
+    letters = [re.escape(c) for c in term_skel if not c.isspace()]
+    return re.compile(r"(?<![0-9a-z])" + r"[\W_]{1,3}".join(letters) + r"(?![0-9a-z])")
+
+
+SHORT_TERM = 4   # terms shorter than this match whole words only
+
+
+def _survives(s, terms):
+    """True if any term can still be read in `s`. Readings checked: the
+    skeleton, the skeleton with markup removed, and spaced-out letters.
+    Short terms (initials, a nickname) are checked as whole words only - a
+    substring rule would refuse "about" and "pretty" and mute the bot."""
+    readings = (_words(_skeleton(s)), _words(_unmarked(s)))
+    for term in terms:
+        t = _words(_skeleton(term))
+        if not t:
+            continue
+        if len(t.replace(" ", "")) < SHORT_TERM:
+            pat = re.compile(r"(?<![0-9a-z])" + re.escape(t) + r"(?![0-9a-z])")
+            if any(pat.search(r) for r in readings):
+                return True
+            continue
+        if any(t in r for r in readings):
+            return True
+        if " " not in t and len(t) >= SHORT_TERM and _spaced_pattern(t).search(readings[1]):
+            return True
+    return False
+
+
+def screen_text(text, terms=None):
+    """(clean_text, Decision) for one string bound for somewhere off the machine.
+
+    `terms` defaults to identity.privacy_terms(); tests pass their own."""
+    terms = identity.privacy_terms() if terms is None else tuple(terms)
+    if not terms:
+        return text, _deny("privacy_unconfigured",
+                           "nothing leaves the machine until control.json "
+                           "privacy.pii lists the owner's personal terms - the "
+                           "privacy screen has nothing to check against")
+    if text is None:
+        return text, _ALLOW
+    s = str(text)
+    # A term inside a link is refused, not rewritten: "the owner" in a path
+    # breaks the link, and a link that names him should not go at all.
+    for url in _URL.findall(s):
+        if any(_term_pattern(t).search(url) for t in terms) or _survives(url, terms):
+            return s, _deny("privacy_in_url",
+                            "a personal term is inside a link - refusing to send "
+                            "rather than break the link")
+    hits = 0
+    for term in sorted(terms, key=len, reverse=True):
+        s, n = _term_pattern(term).subn(OWNER_PLACEHOLDER, s)
+        hits += n
+    if _survives(s, terms):
+        return s, _deny("privacy_survivor",
+                        "a personal term is still in the text after the "
+                        "privacy screen rewrote whole words - refusing to send")
+    if hits:
+        return s, Decision(Decision.ALLOW, f"{hits} personal term(s) replaced",
+                           "privacy_rewrote")
+    return s, _ALLOW
+
+
+def screen_value(value, terms=None):
+    """screen_text over every string inside a str/dict/list/tuple.
+
+    Returns (clean_value, Decision). The first DENY wins; the rewrite count of
+    every string is summed so the caller can log that something was replaced."""
+    terms = identity.privacy_terms() if terms is None else tuple(terms)
+    total = 0
+    denied = None
+
+    def walk(v):
+        nonlocal total, denied
+        if isinstance(v, str):
+            clean, d = screen_text(v, terms)
+            if d.denied and denied is None:
+                denied = d
+            if d.rule == "privacy_rewrote":
+                total += 1
+            return clean
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, tuple):
+            return tuple(walk(x) for x in v)
+        return v
+
+    if not terms:
+        return value, screen_text("", terms)[1]
+    clean = walk(value)
+    if denied is not None:
+        return clean, denied
+    if total:
+        return clean, Decision(Decision.ALLOW, f"{total} string(s) rewritten",
+                               "privacy_rewrote")
+    return clean, _ALLOW
+
+
+# Capabilities whose text stays on this machine (or, for file_issue, is
+# screened at its own wire in issues.file_issue). Everything else at tier 1 and
+# up that takes a string may put it where other people read it - a channel
+# name, a topic, a nickname, a presence line, an audit-log reason, a forum
+# post's first message - and most of those never pass discord's send methods,
+# so core/wire.py cannot see them. screen_params is that second net.
+SCREEN_EXEMPT_LOCAL = frozenset({
+    "answer_conversation",   # the owner's answer, stored in the conversation record
+    "create_room", "post_room", "read_room",   # rooms live in state/ on this machine
+    "file_issue",            # screened in issues.file_issue, right before gh
+    "notify_owner",          # its only reader is the owner
+})
+
+
+# Parameters that are ids, enums, local paths or asset references rather than
+# words someone reads. Their values never reach a reader as text (an asset or
+# URL that IS sent rides inside an embed or a file, which core/wire.py screens).
+_NOT_FREE_TEXT = frozenset({"id", "kind", "category", "color", "status", "contains",
+                            "activity_type", "emoji", "path", "project", "avatar",
+                            "banner", "icon", "splash", "image_url", "thumbnail_url",
+                            "url"})
+
+
+def _not_free_text(key):
+    return key in _NOT_FREE_TEXT or key.endswith("_id")
+
+
+def screen_params(action, params, terms=None):
+    """(clean_params, Decision) for one capability call, before its handler.
+
+    Read-only capabilities (tier 0) and the local set above pass untouched, and
+    so does a DM whose target is the owner (ring 1). Every other string
+    parameter is screened; one survivor refuses the call."""
+    if action.tier == identity.READ or action.name in SCREEN_EXEMPT_LOCAL:
+        return params, _ALLOW
+    if action.name == "dm_user":
+        try:
+            if identity.is_owner(int(params.get("user_id"))):
+                return params, _ALLOW
+        except (TypeError, ValueError):
+            pass
+    strs = {k: v for k, v in params.items()
+            if isinstance(v, str) and v and not _not_free_text(k)}
+    if not strs:
+        return params, _ALLOW
+    clean, decision = screen_value(strs, terms)
+    if decision.denied:
+        return params, decision
+    out = dict(params)
+    out.update(clean)
+    return out, decision

@@ -432,6 +432,33 @@ def issues_config():
     effect on the next restart, and the restart is the kill switch."""
     return dict(ISSUES)
 
+
+# The privacy screen's word list (issue 11, 2026-10-19). Personal identifiers
+# that must never leave the machine in Benham's words: the owner's legal name,
+# and anything else the owner lists. Project truth, so it sits beside `issues`
+# (top level in the legacy shape, under `shared` in the faces shape). It lives
+# ONLY in the untracked control.json - the tracked tree and the test fixture
+# carry invented words, never the real ones. policy.screen_text is the reader
+# that matters; this only parses. An absent or empty list is returned as
+# empty, and policy treats empty as "cannot screen" and refuses (fail-closed).
+_PRIVACY = _SHARED.get("privacy") or {}
+
+
+def privacy_terms():
+    """The configured personal terms, longest first, as a tuple of str."""
+    raw = _PRIVACY.get("pii") if isinstance(_PRIVACY, dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    terms = {" ".join(str(t).split()) for t in raw if isinstance(t, str) and str(t).strip()}
+    # Each word of a multi-word term is a term of its own (review 2026-10-19):
+    # listing "First Last" must also stop "Last" travelling alone. Words under
+    # three letters are left out - they are joiners ("de", "J."), not names.
+    for t in list(terms):
+        for w in t.split():
+            if len(w) >= 3:
+                terms.add(w)
+    return tuple(sorted(terms, key=lambda t: (-len(t), t.casefold())))
+
 # Modes this build knows how to run. An unrecognised mode disables guest chat
 # rather than falling back to one, because the failure being guarded against is a
 # config written for a newer build than the code - where guessing which mode was

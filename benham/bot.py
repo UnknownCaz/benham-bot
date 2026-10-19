@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 
 from benham.core import agent
 from benham.core import botguests
+from benham.core import wire
 from benham.core import capabilities
 from benham.core import channelread
 from benham.core import confirm
@@ -195,6 +196,42 @@ def log(msg):
             pass
 
 
+# The privacy screen at the wire (issue 11): every discord send and edit this
+# process makes passes policy.screen_value and is recorded in outwardlog.
+# Installed at import, before any client exists, so nothing can send first.
+wire.install(log)
+
+
+def _screen_command_tree():
+    """Run every slash command's name and descriptions through the privacy
+    screen before tree.sync publishes them (issue 11 review: the /server
+    description named the owner and went out on every sync, a route the wire
+    cannot see). Rewrites in place; returns True - and the caller skips the
+    sync, logged - if a term would survive."""
+    def fields(cmd):
+        yield cmd, "description"
+        for prm in getattr(cmd, "parameters", None) or ():
+            yield prm, "description"
+        for sub in getattr(cmd, "commands", None) or ():
+            yield from fields(sub)
+    for cmd in tree.get_commands():
+        for obj, attr in fields(cmd):
+            text = getattr(obj, attr, None)
+            if not text:
+                continue
+            clean, d = policy.screen_text(text)
+            if d.denied:
+                log(f"BLOCKED slash command sync: /{cmd.name} [rule={d.rule}]: {d.reason}")
+                return True
+            if clean != text:
+                try:
+                    setattr(obj, attr, clean)
+                except AttributeError:
+                    log(f"BLOCKED slash command sync: /{cmd.name} text cannot be rewritten")
+                    return True
+    return False
+
+
 def dump_channels():
     """Write channels.json listing all guilds + text channels the bot can see."""
     data = []
@@ -315,11 +352,19 @@ async def server_autocomplete(interaction: discord.Interaction, current: str):
         for sid, cfg in WATCH["servers"].items()
         if sid in allow and cur in cfg["name"].lower()
     ]
-    return out[:25]
+    # Choice names are shown to whoever types the command, and they go out
+    # through the command route, not a send - so the privacy screen is applied
+    # here (issue 11): rewritten, or dropped if a term survives.
+    screened = []
+    for c in out[:25]:
+        name, d = policy.screen_text(c.name)
+        if not d.denied:
+            screened.append(app_commands.Choice(name=name, value=c.value))
+    return screened
 
 
 server_group = app_commands.Group(
-    name="server", description="Control Tyler's exaroton Minecraft servers")
+    name="server", description="Control Caz's exaroton Minecraft servers")
 
 
 @server_group.command(name="status", description="Show a server's current status")
@@ -535,6 +580,10 @@ async def on_ready():
         f", agent guilds {sorted(_gates['agent_guilds'])} (+ owner DMs always)"
         f"{', web search on' if agent.ENABLED and agent.WEB_SEARCH else ''}")
     log(f"Destructive actions allowed in guilds: {sorted(_gates['destructive_guilds']) or 'NONE'}")
+    _terms = len(identity.privacy_terms())
+    log(f"Privacy screen: {_terms} term(s) on {wire.installed()}"
+        + ("" if _terms else " - NOT CONFIGURED: every send to anyone but the owner, "
+           "and every filing, is refused until control.json privacy.pii is set"))
     # Every other safety-relevant setting gets a banner line, and this one is a
     # gate that can be turned OFF from config - so a deployment running without
     # it must not be indistinguishable in the log from one running with it.
@@ -622,7 +671,8 @@ async def on_ready():
     # Primary only, like the watchdog below it serves: a second face is not in
     # these guilds, and its sync attempts would be one failure log per guild
     # per reconnect, forever.
-    for gid in (COMMAND_GUILDS if FACE == identity.PRIMARY_FACE else ()):
+    blocked = _screen_command_tree()
+    for gid in (COMMAND_GUILDS if FACE == identity.PRIMARY_FACE and not blocked else ()):
         try:
             gobj = discord.Object(id=gid)
             tree.clear_commands(guild=gobj)       # idempotent across reconnects
@@ -693,7 +743,7 @@ async def reply_in(channel, text, reference=None):
     mention_author stays off: the thread line is the point, not a ping.
     """
     first = True
-    for chunk in split_for_discord(text):
+    for chunk in split_for_discord(wire.prescreen(channel, text)):
         if first and reference is not None:
             await channel.send(chunk, reference=reference, mention_author=False)
         else:
@@ -840,7 +890,7 @@ async def send_with_view(channel, text, view, reference=None):
     the view which message it lives on so it can edit itself later. reference
     threads the first chunk to the message this prompt answers."""
     msg = None
-    chunks = split_for_discord(text)
+    chunks = split_for_discord(wire.prescreen(channel, text))
     for i, chunk in enumerate(chunks[:-1]):
         if i == 0 and reference is not None:
             await channel.send(chunk, reference=reference, mention_author=False)
@@ -1793,7 +1843,8 @@ async def on_message(message):
             await handle_guest_dm(message)
             return
         if (not is_dm and agent.ENABLED and policy.may_answer_bot_guest(
-                message.author.id, message.guild.id, message.channel.id).allowed):
+                message.author.id, message.guild.id, message.channel.id,
+                parent_id=getattr(message.channel, "parent_id", None)).allowed):
             # A bot guest (Hermes in #kestra, INTENT decision 53): decision 50's
             # chat-only friend turn with the ask pre-answered by control.json,
             # for that account in the channels listed for it and nowhere else.
@@ -2162,7 +2213,9 @@ async def handle_bot_guest_mention(message):
     the hourly budget (core/botguests.py) and answers chat-only, the reply
     opening with the bot's inline mention so its own gate will hear it."""
     ch, who = message.channel, message.author
-    allowed, used = botguests.take(ch.id, who.id)
+    # The cap counts per listed channel: replies in a thread spend its parent's
+    # budget, so opening a new thread never buys a fresh hour (issue 9).
+    allowed, used = botguests.take(getattr(ch, "parent_id", None) or ch.id, who.id)
     if not allowed:
         log(f"bot guest @ from {who} in #{ch}: hourly cap reached "
             f"({botguests.CAP} per {botguests.WINDOW // 60} min) - staying quiet")
@@ -2207,6 +2260,11 @@ async def answer_friends(channel, people, closing, bot_guest=None):
         if bot_guest:
             reply = botguests.lead_with_mention(reply, bot_guest)
         await reply_in(channel, reply)
+        # Issue 10: this reply used to leave no trace a reader of the log could
+        # find. The wire now records every send (outwardlog, read by what_i_did);
+        # this line is for a human reading benham.log.
+        log(f"{'bot guest' if bot_guest else 'friend'} reply sent in #{channel}"
+            f"{' (closing message)' if closing else ''}: {len(reply)} chars")
 
 
 async def invite_pinged(channel, pinged):
