@@ -734,6 +734,109 @@ def may_answer_bot_guest(actor_id, guild_id, channel_id, face=None, parent_id=No
     return _ALLOW
 
 
+# --------------------------------------------------------------------------
+# Who a message is FOR, when it names more than one bot (INTENT decision 57,
+# tracker issue 18). Caz, 2026-10-20, set in stone after #kestra on 10-19,
+# where "<@Hermes> Say hi to <@Benham> pls." got an answer from both bots:
+#
+#   A. ADDRESSEE - the first mention in a message is the addressee; any bot
+#      mentioned later is a SUBJECT and stays silent until the addressee @'s it.
+#   B. TURN PASS - each reply @'s the other bot; the caps are the loop guard.
+#   C. CLOSE - a reply with NO @ ends the exchange; Benham does not answer it.
+#
+# "Bot" here means an account listed in control.json bot_guests and nothing
+# else: the order of mentions only changes what Benham does when the first one
+# is a bot it holds a standing line with. A person named first ("@Doom @Benham
+# look") is decision 49/50's ordinary group chat and is not touched. Inline
+# mentions only - a Discord reply-ping puts the replied-to author in
+# message.mentions without a word in the text, and that is exactly the shape
+# of a close.
+# --------------------------------------------------------------------------
+
+import re as _re
+
+_INLINE_MENTION = _re.compile(r"<@!?(\d+)>|<@&(\d+)>")
+
+
+def mention_order(content):
+    """Ids mentioned INLINE in `content` (users and roles), first appearance
+    first, each once. A reply-ping is not in the text and is not here."""
+    out = []
+    for m in _INLINE_MENTION.finditer(content or ""):
+        uid = int(m.group(1) or m.group(2))
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def is_bot_guest(user_id, face=None):
+    """Listed in bot_guests for at least one channel."""
+    try:
+        return bool(identity.bot_guest_channels(int(user_id), face))
+    except (TypeError, ValueError):
+        return False
+
+
+def bot_guest_listed_here(user_id, channel_id, parent_id=None, face=None):
+    """This bot guest's standing line covers this channel, or this thread's parent."""
+    try:
+        listed = identity.bot_guest_channels(int(user_id), face)
+    except (TypeError, ValueError):
+        return False
+    ids = set()
+    for v in (channel_id, parent_id):
+        try:
+            if v is not None:
+                ids.add(int(v))
+        except (TypeError, ValueError):
+            pass
+    return bool(ids & listed)
+
+
+def may_answer_addressee(content, self_ids, face=None):
+    """Rule A: DENY when a listed bot guest is mentioned before Benham.
+
+    `self_ids` are the ids that mean Benham here (its user id and its own
+    managed role). ALLOW when Benham is not mentioned inline at all - whether
+    to engage is the caller's business - when Benham comes first, or when what
+    comes first is not a listed bot guest."""
+    order = mention_order(content)
+    mine = {int(i) for i in self_ids if i is not None}
+    first_mine = next((n for n, uid in enumerate(order) if uid in mine), None)
+    if first_mine is None or first_mine == 0:
+        return _ALLOW
+    addressee = order[0]
+    if is_bot_guest(addressee, face):
+        return _deny("bot_subject",
+                     f"the message is addressed to bot {addressee}, which was "
+                     "mentioned first - I am only its subject until it @'s me")
+    return _ALLOW
+
+
+def bot_guest_turn_open(content, self_ids):
+    """Rule C: a bot guest's message that does not @ Benham inline is a close
+    (a reply-ping alone is a close too). DENY = say nothing."""
+    mine = {int(i) for i in self_ids if i is not None}
+    if mine & set(mention_order(content)):
+        return _ALLOW
+    return _deny("bot_close",
+                 "no inline @ of me in the bot's message - that closes the exchange")
+
+
+def turn_pass_to(content, self_ids, channel_id, parent_id=None, face=None):
+    """Rule B for a message that addressed Benham first: the listed bot guest
+    (with a line in this channel or its parent) mentioned after Benham, whose
+    turn Benham's reply hands over by @'ing it. None when there is none."""
+    mine = {int(i) for i in self_ids if i is not None}
+    order = mention_order(content)
+    if not order or order[0] not in mine:
+        return None
+    for uid in order[1:]:
+        if uid not in mine and bot_guest_listed_here(uid, channel_id, parent_id, face):
+            return uid
+    return None
+
+
 def authorize(action, ctx):
     """Decide whether one call may proceed. The single chokepoint.
 

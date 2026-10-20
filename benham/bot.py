@@ -982,6 +982,15 @@ def _addressed(message, user):
     return user in message.mentions or bool(_own_roles(message, user))
 
 
+def _self_ids(message):
+    """The ids that mean Benham in this message: its user id and its own
+    managed role (the two forms _addressed accepts)."""
+    me = client.user
+    if not me:
+        return []
+    return [me.id] + [r.id for r in _own_roles(message, me)]
+
+
 def strip_mention(message):
     """The message text with Benham's own mention removed."""
     text = message.content or ""
@@ -1825,6 +1834,17 @@ async def on_message(message):
     if not (is_dm or mentioned):
         return  # Benham reads everything, but only engages when addressed.
 
+    # Rule A (INTENT decision 57, issue 18): the FIRST mention is the
+    # addressee. When a bot Benham holds a standing line with (bot_guests) is
+    # named before Benham, the message is that bot's to answer and Benham is
+    # only its subject - silent until the bot @'s it. Before the owner gate on
+    # purpose: Caz's own "<@Hermes> say hi to <@Benham>" is the case it is for.
+    if not is_dm:
+        addressee = policy.may_answer_addressee(message.content, _self_ids(message))
+        if addressee.denied:
+            log(f"quiet in #{message.channel}: {addressee.reason} (INTENT 57, rule A)")
+            return
+
     # The owner gate. Everyone else can talk TO Benham; nobody else directs it.
     #
     # Guests are handled HERE, inside the gate, and every branch returns. That
@@ -1842,13 +1862,29 @@ async def on_message(message):
         if is_dm and guest.is_known_guest(message.author.id):
             await handle_guest_dm(message)
             return
+        parent_id = getattr(message.channel, "parent_id", None)
         if (not is_dm and agent.ENABLED and policy.may_answer_bot_guest(
                 message.author.id, message.guild.id, message.channel.id,
-                parent_id=getattr(message.channel, "parent_id", None)).allowed):
+                parent_id=parent_id).allowed):
             # A bot guest (Hermes in #kestra, INTENT decision 53): decision 50's
             # chat-only friend turn with the ask pre-answered by control.json,
             # for that account in the channels listed for it and nowhere else.
+            # Rule C (decision 57): a message with no inline @ of Benham - a
+            # bare reply-ping included - closes the exchange; it gets nothing.
+            turn = policy.bot_guest_turn_open(message.content, _self_ids(message))
+            if turn.denied:
+                log(f"bot guest {message.author} in #{message.channel}: "
+                    f"{turn.reason} - quiet (INTENT 57, rule C)")
+                return
             await handle_bot_guest_mention(message)
+            return
+        if not is_dm and policy.bot_guest_listed_here(
+                message.author.id, message.channel.id, parent_id):
+            # A listed bot in its own channel whose turn the gate refused (a
+            # guild off agent_guilds, the agent switched off). Never a DM ask
+            # to Caz about his own bot (decision 57): silence, logged.
+            log(f"bot guest {message.author} in #{message.channel}: not answering "
+                "and not asking - its line is here, but the gate said no (INTENT 57)")
             return
         if not is_dm and agent.ENABLED and message.guild.id in identity.agent_guilds():
             # A friend @mentioning Benham in a server he answers in. Never a model
@@ -2101,6 +2137,14 @@ async def on_message(message):
         pinged = {}
         if channel is message.channel and room is not None and room.read is not None:
             reply, pinged = channelread.apply_pings(reply, room.read.people)
+        if channel is message.channel and not is_dm:
+            # Rule B (decision 57): Caz addressed Benham first and named a bot
+            # Benham has a line with here - the reply hands that bot its turn.
+            pass_to = policy.turn_pass_to(message.content, _self_ids(message),
+                                          message.channel.id,
+                                          getattr(message.channel, "parent_id", None))
+            if pass_to:
+                reply = botguests.lead_with_mention(reply, pass_to)
         await reply_in(channel, reply)
         if pinged:
             await invite_pinged(message.channel, pinged)

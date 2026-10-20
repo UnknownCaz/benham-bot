@@ -418,6 +418,135 @@ check("the cap is shared: a thread spends its parent's hour, so a new thread "
       "never buys a fresh budget", (len(model.seen), k_thread.sent),
       (botguests.CAP, []))
 
+# --------------------------------------------------------------------------
+section("Who a two-bot message is for (INTENT decision 57, issue 18)")
+# Caz, 2026-10-20, set in stone: A - the FIRST mention is the addressee, a bot
+# mentioned later is its subject and stays silent; B - each reply @'s the other
+# bot; C - a reply with no @ closes the exchange. 10-19 in #kestra, his
+# "<@Hermes> Say hi to <@Benham> pls." got an answer from both bots.
+
+
+class _Raw(_Mention):
+    """A message whose text and mention list are given exactly."""
+
+    def __init__(self, author, content, channel, mentions):
+        super().__init__(author, "", channel)
+        self.content = content
+        self.clean_content = content
+        self.mentions = list(mentions)
+
+
+def say_raw(author, content, channel, mentions):
+    msg = _Raw(author, content, channel, mentions)
+    asyncio.run(bot.on_message(msg))
+    return msg
+
+
+owner_turns = []
+_real_respond = bot.agent.respond
+
+
+async def _fake_respond(*a, **kw):
+    owner_turns.append(kw)
+    return "hello both", None
+
+bot.agent.respond = _fake_respond
+grant()
+try:
+    p = policy
+    me = [BOT_ID]
+    check("policy: Hermes first, Benham second - DENY, Benham is the subject",
+          p.may_answer_addressee(f"<@{HERMES_ID}> say hi to <@{BOT_ID}> pls.", me).rule,
+          "bot_subject")
+    check("policy: Benham first - ALLOW",
+          p.may_answer_addressee(f"<@{BOT_ID}> say hi to <@{HERMES_ID}>", me).allowed, True)
+    check("policy: a PERSON first is ordinary group chat - ALLOW",
+          p.may_answer_addressee(f"<@{ALEX.id}> <@{BOT_ID}> look at this", me).allowed, True)
+    check("policy: an unlisted bot account first is not a bot guest - ALLOW",
+          p.may_answer_addressee(f"<@{OFF_LIST}> <@{BOT_ID}>", me).allowed, True)
+    check("policy: Benham's managed role counts as Benham",
+          p.may_answer_addressee(f"<@{HERMES_ID}> and <@&4242>", me + [4242]).rule,
+          "bot_subject")
+    check("policy: a reply-ping only (no inline @) is a close",
+          p.bot_guest_turn_open("thanks, that's all", me).rule, "bot_close")
+    check("policy: an inline @ anywhere keeps the turn open",
+          p.bot_guest_turn_open(f"ok - over to you <@{BOT_ID}>", me).allowed, True)
+    check("policy: turn pass goes to the listed bot named after Benham",
+          p.turn_pass_to(f"<@{BOT_ID}> say hi to <@{HERMES_ID}>", me, KESTRA), HERMES_ID)
+    check("policy: ...also in a thread under the listed channel",
+          p.turn_pass_to(f"<@{BOT_ID}> hi <@{HERMES_ID}>", me, KESTRA_THREAD, KESTRA), HERMES_ID)
+    check("policy: ...not where the bot has no line",
+          p.turn_pass_to(f"<@{BOT_ID}> hi <@{HERMES_ID}>", me, GENERAL), None)
+    check("policy: ...and not to a person",
+          p.turn_pass_to(f"<@{BOT_ID}> hi <@{ALEX.id}>", me, KESTRA), None)
+
+    # A, live: Caz's exact message shape. Benham is the subject - nothing at all.
+    model = fresh()
+    owner_turns.clear()
+    say_raw(CAZ, f"<@{HERMES_ID}> Say hi to <@{BOT_ID}> pls.", kestra, [HERMES, BENHAM])
+    check("live A: Caz names Hermes first - no owner turn", owner_turns, [])
+    check("...no reply in #kestra", kestra.sent, [])
+    check("...and no DM to Caz", CAZ.dm_channel.sent, [])
+
+    model = fresh()
+    say_raw(ALEX, f"<@{HERMES_ID}> <@{BOT_ID}> both of you?", kestra, [HERMES, BENHAM])
+    check("live A: a friend names Hermes first - no model turn, no ask",
+          (model.seen, kestra.sent, CAZ.dm_channel.sent), ([], [], []))
+
+    # B, live: Caz names Benham first - Benham answers and hands Hermes the turn.
+    model = fresh()
+    owner_turns.clear()
+    say_raw(CAZ, f"<@{BOT_ID}> say hi to <@{HERMES_ID}>", kestra, [BENHAM, HERMES])
+    check("live B: Caz names Benham first - one owner turn", len(owner_turns), 1)
+    check("...the reply opens with Hermes's ping (the turn pass)",
+          (kestra.sent[0] or "").startswith(f"<@{HERMES_ID}> hello both")
+          if kestra.sent else False, True)
+    model = fresh()
+    owner_turns.clear()
+    say_raw(CAZ, f"<@{BOT_ID}> say hi to <@{HERMES_ID}>", general, [BENHAM, HERMES])
+    check("...where Hermes has no line, the reply is not handed to it",
+          general.sent, ["hello both"])
+
+    # The thread exchange: Hermes passes, Benham passes back, Hermes closes.
+    model = fresh("hi Hermes, Benham here.")
+    k_thread.sent.clear()
+    say_raw(HERMES, f"Hey <@{BOT_ID}>, Caz asked me to say hi", k_thread, [BENHAM])
+    check("live: Hermes @'s Benham in the thread - Benham answers there",
+          (len(model.seen), len(k_thread.sent)), (1, 1))
+    check("...passing the turn back with Hermes's ping",
+          (k_thread.sent[0] or "").startswith(f"<@{HERMES_ID}>") if k_thread.sent else False,
+          True)
+
+    # C, live: Hermes's close - a Discord reply to Benham with no inline @.
+    model = fresh()
+    k_thread.sent.clear()
+    say_raw(HERMES, "Nice to meet you, that's all from me.", k_thread, [BENHAM])
+    check("live C: a reply-ping with no inline @ - Benham says nothing",
+          (model.seen, k_thread.sent), ([], []))
+    check("...and Caz is not asked", CAZ.dm_channel.sent, [])
+    check("...and it spent none of the hour", botguests.take(KESTRA, HERMES_ID)[1], 1)
+
+    # The cap still holds under the new rules.
+    model = fresh()
+    for i in range(botguests.CAP + 2):
+        say_raw(HERMES, f"<@{BOT_ID}> turn {i}", k_thread, [BENHAM])
+    check(f"the cap still holds: {botguests.CAP} replies, then silence",
+          (len(model.seen), len(k_thread.sent)), (botguests.CAP, botguests.CAP))
+    check("...and no DM ask when it runs out", CAZ.dm_channel.sent, [])
+
+    # Never a DM ask about a listed bot in its own channel, whatever the gate says.
+    model = fresh()
+    _gates = identity.agent_guilds
+    identity.agent_guilds = lambda face=None: frozenset()
+    try:
+        say_raw(HERMES, f"<@{BOT_ID}> hi", kestra, [BENHAM])
+    finally:
+        identity.agent_guilds = _gates
+    check("gate refuses a listed bot in its own channel: silence, no DM ask",
+          (model.seen, kestra.sent, CAZ.dm_channel.sent), ([], [], []))
+finally:
+    bot.agent.respond = _real_respond
+
 grant(None)
 
 print()
