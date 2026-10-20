@@ -842,5 +842,25 @@ check("nothing was parked", confirm.current(), None)
 check("nothing was remembered", list(agent._history(f"ch:{GENERAL}")), [])
 
 
+section("the message being answered is shown whole (2026-10-20, #kestra)")
+# Hermes's 667-character turn was cut at 400 and Benham said "your message got
+# cut off at 'If you...'" about a message that was complete.
+_long_old = _Said(ALEX, "old " + "o" * 600, ago=5)
+_long_new = _Said(ALEX, "Who are you? " + "n" * 600 + " END-OF-TURN", ago=1)
+_ch = _Channel(history=[_long_old, _long_new])
+_r = asyncio.run(channelread.read(_ch, is_owner=lambda u: False, self_id=BOT_ID,
+                                  tag="t", now=NOW))
+_text = "\n".join(_r.lines)
+check("before=None: the newest message (the one answered) arrives whole",
+      "END-OF-TURN" in _text, True)
+check("...older lines are still cut at MAX_LINE",
+      any(l.endswith("...") and "old " in l for l in _r.lines), True)
+_r = asyncio.run(channelread.read(_ch, is_owner=lambda u: False, self_id=BOT_ID,
+                                  tag="t", now=NOW, answering=_long_old.id))
+check("answering=<id>: that message arrives whole",
+      any("old " in l and not l.endswith("...") for l in _r.lines), True)
+check("...and the newest is cut, since it is not the one being answered",
+      "END-OF-TURN" in "\n".join(_r.lines), False)
+
 print(f"\n{'ALL PASS' if not _fails else str(len(_fails)) + ' FAILED: ' + ', '.join(_fails)}")
 sys.exit(1 if _fails else 0)
