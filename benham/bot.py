@@ -2212,7 +2212,7 @@ async def handle_friend_mention(message):
         log(f"friend @ from {who} in #{ch}: answering on an open invite"
             + (" (closing message)" if closing else ""))
         await react(message, "👀")
-        await answer_friends(ch, {who.id: _display(who)}, closing)
+        await answer_friends(ch, {who.id: _display(who)}, closing, answering=message.id)
         return
     if invites.quiet(ch.id):
         log(f"friend @ from {who} in #{ch}: quiet after an Ignore - not asking again yet")
@@ -2266,10 +2266,11 @@ async def handle_bot_guest_mention(message):
         return
     log(f"bot guest @ from {who} in #{ch}: answering ({used}/{botguests.CAP} this hour)")
     await react(message, "\N{EYES}")
-    await answer_friends(ch, {who.id: _display(who)}, closing=False, bot_guest=who.id)
+    await answer_friends(ch, {who.id: _display(who)}, closing=False, bot_guest=who.id,
+                         answering=message.id)
 
 
-async def answer_friends(channel, people, closing, bot_guest=None):
+async def answer_friends(channel, people, closing, bot_guest=None, answering=None):
     """One chat-only reply in `channel` to friends Tyler let in.
 
     Reads the room fresh - the friend's message is the newest line of it, fenced
@@ -2281,7 +2282,7 @@ async def answer_friends(channel, people, closing, bot_guest=None):
     read = await channelread.read(
         channel, before=None, now=datetime.now(timezone.utc),
         is_owner=identity.is_owner, self_id=getattr(client.user, "id", None),
-        tag=tag, log=log)
+        tag=tag, log=log, answering=answering)
     names = ", ".join(sorted(set(people.values())))
     note = (channelread.bot_guest_note(names) if bot_guest
             else channelread.friend_note(names, closing))

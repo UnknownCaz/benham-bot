@@ -72,6 +72,12 @@ IMAGES = int(_cfg.get("mention_read_images", 3))
 ELSEWHERE = int(_cfg.get("mention_read_elsewhere", 3))
 
 MAX_LINE = 400       # characters of one message's own text
+# ...except the message being ANSWERED, which is shown whole (2026-10-20,
+# #kestra: Hermes's 667-character turn was cut at 400 and Benham told it "your
+# message got cut off at 'If you...'" about a message that was complete). The
+# room is context; the message he is replying to is the point. 4000 is
+# Discord's own ceiling for one message, so in practice this is "all of it".
+ANSWER_LINE = 4000
 MAX_CHARS = 12000    # the whole read; the oldest lines are the ones left out
 SNIPPET = 80         # a replied-to message, quoted on the line that replies
 STALE_DAYS = 3       # a channel quiet longer than this is not "what else is going on"
@@ -125,14 +131,18 @@ class Room:
 
 
 async def read(channel, *, is_owner, self_id, tag, before=None, now=None,
-               limit=None, image_budget=None, glance=None, log=None):
+               limit=None, image_budget=None, glance=None, log=None,
+               answering=None):
     """Read the channel's recent messages and render them. Never raises.
 
     `before` is the mention itself, so the read ends just before it - what he
     typed reaches the model as his own block, not as one more line of chat.
     None reads up to the newest message, which is what a rehearsal wants.
     `glance` is how many other channels to show the newest message of (None =
-    ELSEWHERE, 0 = none).
+    ELSEWHERE, 0 = none). `answering` is the id of the message being replied
+    to; that one line is shown whole (ANSWER_LINE) instead of cut at MAX_LINE.
+    With `before` None and no id given, the newest message is the one being
+    answered.
 
     A failed read comes back as a Read with `error` set. Losing his turn over a
     missing Read Message History permission would be a worse answer than saying
@@ -185,11 +195,15 @@ async def read(channel, *, is_owner, self_id, tag, before=None, now=None,
                        f"{who(m.author)}, {_ago(m.created_at, now)}")
 
     lines = []
+    last = len(msgs) - 1
     for i, m in enumerate(msgs):
         _know(r.people, getattr(m, "author", None), self_id)
         target = getattr(getattr(m, "reference", None), "resolved", None)
         _know(r.people, getattr(target, "author", None), self_id)
-        line = _line(m, i, now=now, who=who, numbers=numbers)
+        whole = ((answering is not None and getattr(m, "id", None) == answering)
+                 or (answering is None and before is None and i == last))
+        line = _line(m, i, now=now, who=who, numbers=numbers,
+                     max_line=ANSWER_LINE if whole else MAX_LINE)
         if line is None:
             continue
         lines.append(line)
@@ -534,7 +548,7 @@ def _reply_part(m, who):
     return f' (replying to {who(target.author)}: "{snippet}")'
 
 
-def _line(m, i, *, now, who, numbers):
+def _line(m, i, *, now, who, numbers, max_line=MAX_LINE):
     """One message as one transcript line, or None when there is nothing to say."""
     ago = _ago(getattr(m, "created_at", None), now)
     if _is_system(m):
@@ -545,8 +559,8 @@ def _line(m, i, *, now, who, numbers):
         return f"({ago}) * {said[:MAX_LINE]}" if said else None
 
     body = _text(m).strip()
-    if len(body) > MAX_LINE:
-        body = body[:MAX_LINE].rstrip() + "..."
+    if len(body) > max_line:
+        body = body[:max_line].rstrip() + "..."
     # Continuation lines indented, so a multi-line message still reads as one
     # speaker's message and nothing in it starts a line of its own.
     body = body.replace("\n", "\n    ")
