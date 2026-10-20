@@ -288,7 +288,7 @@ call = model.seen[0] if model.seen else {}
 check("...talking only: tool_choice none", call.get("tool_choice"), {"type": "none"})
 check("...Benham's bot-guest note opens the turn",
       call["messages"][-1]["content"][0]["text"].startswith(
-          "[Tyler set this channel up so I can talk directly with HERMES_AGENT")
+          "[Caz set this channel up so I can talk directly with HERMES_AGENT")
       if call else False, True)
 check("...told they are another AI's bot",
       "another AI's bot" in call["system"][1]["text"] if call else False, True)
@@ -296,7 +296,7 @@ check("one message in #kestra", len(kestra.sent), 1)
 check("...opening with Hermes's inline mention",
       (kestra.sent[0] or "").startswith(f"<@{HERMES_ID}> hey Hermes") if kestra.sent else False,
       True)
-check("Tyler was NOT asked (no DM)", CAZ.dm_channel.sent, [])
+check("Caz was NOT asked (no DM)", CAZ.dm_channel.sent, [])
 check("no invite opened as a side effect", invites.invite_for(KESTRA, HERMES_ID), None)
 check("the eyes reaction, like a friend turn", msg.reactions_added, ["\N{EYES}"])
 
@@ -312,13 +312,13 @@ section("Scope on the live path: nothing else changes")
 model = fresh()
 say(HERMES, "hello from general", general)
 check("Hermes in #general: no model turn", model.seen, [])
-check("...the ordinary friend ask goes to Tyler's DMs", len(CAZ.dm_channel.sent), 1)
+check("...the ordinary friend ask goes to Caz's DMs", len(CAZ.dm_channel.sent), 1)
 check("...and nothing is said in #general", general.sent, [])
 
 model = fresh()
 say(ALEX, "can I join?", kestra)
 check("a friend in #kestra: no model turn", model.seen, [])
-check("...the ordinary friend ask goes to Tyler", len(CAZ.dm_channel.sent), 1)
+check("...the ordinary friend ask goes to Caz", len(CAZ.dm_channel.sent), 1)
 check("...and #kestra hears nothing", kestra.sent, [])
 
 model = fresh()
@@ -330,7 +330,7 @@ grant(None)
 model = fresh()
 say(HERMES, "hi", kestra)
 check("bot_guests removed: Hermes in #kestra gets the friend path", model.seen, [])
-check("...Tyler is asked, as before decision 53", len(CAZ.dm_channel.sent), 1)
+check("...Caz is asked, as before decision 53", len(CAZ.dm_channel.sent), 1)
 grant()
 
 
@@ -342,7 +342,7 @@ for i in range(botguests.CAP + 3):
     say(HERMES, f"msg {i}", kestra)
 check(f"exactly {botguests.CAP} model calls", len(model.seen), botguests.CAP)
 check(f"exactly {botguests.CAP} replies", len(kestra.sent), botguests.CAP)
-check("capped messages never fall through to a Tyler ask", CAZ.dm_channel.sent, [])
+check("capped messages never fall through to a Caz ask", CAZ.dm_channel.sent, [])
 
 t0 = time.time()
 botguests.reset()

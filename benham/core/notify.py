@@ -36,7 +36,7 @@ BUZZ, QUIET = "buzz", "quiet"
 # someone take it.
 KINDS = {
     # --- wake the phone ---------------------------------------------------
-    "blocked":  (BUZZ,  "work stopped and cannot continue without Tyler"),
+    "blocked":  (BUZZ,  "work stopped and cannot continue without Caz"),
     "broke":    (BUZZ,  "something failed - a server, a sync, a scheduled task"),
     # Added 2026-08-20 with the initiative lane, and built QUIET: Tyler had said
     # "notifications are not the goal", and this is the one kind of message Claude
@@ -47,7 +47,7 @@ KINDS = {
     # here: policy.authorize_unprompted still holds a 48-hour floor and one
     # unanswered question at a time, and the task prompt aims for roughly one a
     # week. This row only decides that the few that do get through are felt.
-    "curious":  (BUZZ,  "Claude chose to ask Tyler something, unprompted"),
+    "curious":  (BUZZ,  "Claude chose to ask Caz something, unprompted"),
     # --- there when he looks ----------------------------------------------
     "finished": (QUIET, "a long task he asked for is done"),
     "answered": (QUIET, "a collaborator replied, filed an idea, or reported a bug"),

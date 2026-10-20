@@ -1077,7 +1077,7 @@ def rule_unprompted_no_escalation(conv, now):
             return _deny("unprompted_no_escalation",
                          "that reads as a request for access or capability, and this "
                          "lane never makes one - that ask belongs in live conversation, "
-                         "where Tyler can say no in one word. If the match is a false "
+                         "where Caz can say no in one word. If the match is a false "
                          "positive, rephrase it as a question about him or about the "
                          f"work. (matched: {pat})")
     return None
@@ -1110,7 +1110,7 @@ def rule_unprompted_lane_quiet(conv, now):
         return _deny("unprompted_lane_quiet",
                      f"{lapses} unprompted questions in a row went unanswered, so this "
                      "lane is dormant. That is the designed response to not landing, "
-                     "not a fault. It clears when Tyler answers one, or when a human "
+                     "not a fault. It clears when Caz answers one, or when a human "
                      "runs `python benham.py initiate reset`.")
     return None
 
@@ -1237,7 +1237,7 @@ def authorize_crowd_ping(action, params):
         return None
     return _confirm("crowd_ping",
                     "it would ping a crowd (@everyone, @here or a role) - that only "
-                    "happens when Tyler says so, so it waits for his approval")
+                    "happens when Caz says so, so it waits for his approval")
 
 
 # ==========================================================================

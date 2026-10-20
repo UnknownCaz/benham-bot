@@ -288,7 +288,7 @@ def user_text(call):
 
 
 # --------------------------------------------------------------------------
-section("A friend's @ starts nothing - Tyler is asked, in his DMs")
+section("A friend's @ starts nothing - Caz is asked, in his DMs")
 
 fresh()
 model = _Model("hey @alex - pineapple on pizza is a crime. @sam back me up.")
@@ -297,7 +297,7 @@ general.said.append(_Said(CAZ, "who wants to argue about pizza", ago=5))
 say(ALEX, "settle this: pineapple on pizza?")
 check("no model turn on a friend's say-so", model.seen, [])
 check("nothing said in the channel", general.sent, [])
-check("Tyler got one DM", len(CAZ.dm_channel.sent), 1)
+check("Caz got one DM", len(CAZ.dm_channel.sent), 1)
 dm = CAZ.dm_channel.sent[0] if CAZ.dm_channel.sent else ""
 check("...naming who and quoting what they said",
       "**Alex** @'d me in #general" in dm and "pineapple on pizza?" in dm, True)
@@ -319,7 +319,7 @@ check("the model was asked once", len(model.seen), 1)
 call = model.seen[0] if model.seen else {}
 check("...talking only: tool_choice none", call.get("tool_choice"), {"type": "none"})
 check("...Benham's own note opens the turn, never a friend's words",
-      user_text(call).startswith("[Tyler let me answer Alex, sam here") if call else False,
+      user_text(call).startswith("[Caz let me answer Alex, sam here") if call else False,
       True)
 check("...and the friends' words are fenced below it",
       "--- recent messages in #general in Test Server [" in user_text(call) if call else False,
@@ -329,8 +329,8 @@ check("...told they are not his owner", "They are NOT your owner" in volatile, T
 check("...told it has no tools", "no tools on this turn" in volatile, True)
 # 2026-10-12: told Doom "I can't open attachments from here" about a file
 # he handed over for Caz. A hand-off for Tyler is noted, never a "can't".
-check("...told a hand-off for Tyler is noted, not refused",
-      "say it's noted and Tyler will see it" in volatile
+check("...told a hand-off for Caz is noted, not refused",
+      "say it's noted and Caz will see it" in volatile
       and "never tell them you can't" in volatile, True)
 check("the reply went to the channel", len(general.sent), 1)
 check("...with @names turned into real pings",
@@ -352,7 +352,7 @@ check("the closing message went out", len(general.sent), 2)
 check("the invite is spent", invites.invite_for(GENERAL, ALEX.id), None)
 
 say(ALEX, "wait come back")
-check("after the closing message, a friend's @ goes back to asking Tyler",
+check("after the closing message, a friend's @ goes back to asking Caz",
       len(CAZ.dm_channel.sent), 2)
 check("...with no model turn", len(model.seen), 2)
 
@@ -380,7 +380,7 @@ check("no ask", invites.pending_ask(offlist.id), None)
 
 
 # --------------------------------------------------------------------------
-section("Tyler's own go-ahead in the channel counts as the tap")
+section("Caz's own go-ahead in the channel counts as the tap")
 
 fresh()
 model = _Model("ok ok, @alex: closing thought - pineapple stays banned.")
@@ -435,7 +435,7 @@ check("nothing was posted anywhere", (general.sent, other.sent), ([], []))
 
 
 # --------------------------------------------------------------------------
-section("Crowd pings - never by default, only on Tyler's say-so")
+section("Crowd pings - never by default, only on Caz's say-so")
 
 check("the client blocks @everyone", bot.ALLOWED_MENTIONS.everyone, False)
 check("...and roles", bot.ALLOWED_MENTIONS.roles, False)
@@ -459,7 +459,7 @@ async def _post(content, force):
 res, preview = asyncio.run(_post("@everyone dinner's ready", force=False))
 check("a clean, owner-asked post naming a crowd still waits for him",
       (res, preview is not None, other.sent), (None, True, []))
-check("...and says why", "only happens when Tyler says so" in (preview or {}).get("reason", ""),
+check("...and says why", "only happens when Caz says so" in (preview or {}).get("reason", ""),
       True)
 res, preview = asyncio.run(_post("@everyone dinner's ready", force=True))
 check("once he confirms, it goes", other.sent, ["@everyone dinner's ready"])

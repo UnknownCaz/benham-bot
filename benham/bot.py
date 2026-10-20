@@ -404,7 +404,7 @@ async def _power_command(interaction, server, verb, fn):
     # Then, only where the guild requires it, also require an operator (owner_ids or a guild admin).
     if guild_requires_operator(gid) and not is_operator(interaction):
         await interaction.response.send_message(
-            "⛔ Only Tyler or a server admin can do that here.", ephemeral=True)
+            "⛔ Only Caz or a server admin can do that here.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True)
     if verb in ("stop", "restart"):
@@ -659,7 +659,7 @@ async def on_ready():
         if not tick_loopclose.is_running():
             tick_loopclose.start()
         log(f"Loop-close: ON ({issues.REPO}, every 20 min, max "
-            f"{loopclose.MAX_PER_RUN}/pass) - reporters get told when Tyler "
+            f"{loopclose.MAX_PER_RUN}/pass) - reporters get told when Caz "
             "closes or declines what they filed")
     elif not issues.enabled():
         log("loop-close: OFF - no intake repo configured")
@@ -1630,7 +1630,7 @@ def guest_note(bound, waiting):
         return "; ".join(f"\"{str(c.get('question') or '')[:400]}\"" for c in cs)
     if bound:
         return ("From Benham's side, not from them: their message was just recorded "
-                f"as their answer to what you asked them: {quote(bound)}. Tyler "
+                f"as their answer to what you asked them: {quote(bound)}. Caz "
                 "gets it. Acknowledge it in a few words and don't ask it again.")
     if waiting:
         return ("From Benham's side, not from them: you asked them this earlier and "
@@ -2219,7 +2219,7 @@ async def handle_friend_mention(message):
         return
     ask, is_new = invites.add_ask(ch.id, who.id, _display(who), message.id)
     if not is_new:
-        log(f"friend @ from {who} in #{ch}: folded into the ask already in Tyler's DMs")
+        log(f"friend @ from {who} in #{ch}: folded into the ask already in Caz's DMs")
         return
 
     said = channelread.snippet(message, 300) or "(no text)"
@@ -2230,7 +2230,7 @@ async def handle_friend_mention(message):
     async def decide(approved, _ch=ch):
         waiting = invites.drop_ask(_ch.id, ignored=not approved)
         if not approved:
-            log(f"friend ask in #{_ch}: ignored by Tyler")
+            log(f"friend ask in #{_ch}: ignored by Caz")
             return
         if waiting is None:
             log(f"friend ask in #{_ch}: approved, but it had already expired")
@@ -2243,11 +2243,11 @@ async def handle_friend_mention(message):
     _views[("invite", ch.id)] = view
     try:
         await send_with_view(await owner_dm_channel(), text, view)
-        log(f"friend @ from {who} in #{ch}: asked Tyler in DMs")
+        log(f"friend @ from {who} in #{ch}: asked Caz in DMs")
     except Exception as e:  # noqa: BLE001 - an ask that never reached him is no ask
         invites.drop_ask(ch.id)
         _views.pop(("invite", ch.id), None)
-        log(f"friend ask in #{ch} could not reach Tyler: {type(e).__name__}: {e}")
+        log(f"friend ask in #{ch} could not reach Caz: {type(e).__name__}: {e}")
 
 
 async def handle_bot_guest_mention(message):

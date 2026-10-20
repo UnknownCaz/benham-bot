@@ -524,7 +524,7 @@ def _confined_path(root, filename):
         "return what they are; text files come back with their contents. Files are "
         "saved to the bot's safety "
         "quarantine folder (downloads/<message_id>/ inside the benham-bot repo), NOT "
-        "the Windows user Downloads folder - say so when telling Tyler where a file "
+        "the Windows user Downloads folder - say so when telling Caz where a file "
         "went, and give the full saved_to path from the result.",
         {"channel_id": {"type": "int", "required": True},
          "message_id": {"type": "int", "required": True},
@@ -991,7 +991,7 @@ def _room_author(ctx):
     """Who a room line is attributed to. Owner ids read as 'tyler' because the
     lines are for humans to skim; no Discord actor means the CLI/outbox path."""
     if ctx.actor_id and identity.is_owner(ctx.actor_id):
-        return "tyler"
+        return "caz"
     return str(ctx.actor_id) if ctx.actor_id else "code-session"
 
 
@@ -1056,7 +1056,7 @@ async def _post_room(ctx, p):
 @action("answer_conversation", identity.MANAGE,
         "Record that the message you were just sent ANSWERS the open question. Use "
         "it only when there is an open question and this really does answer it - "
-        "and when you use it, SAY SO in your reply, in your own words. Tyler chose "
+        "and when you use it, SAY SO in your reply, in your own words. Caz chose "
         "this deliberately: a reply to the question binds by itself and needs no "
         "tool, but anything else is your judgement, and a judgement that is not "
         "announced is indistinguishable from swallowing what he said. If you are "
@@ -1101,7 +1101,7 @@ async def _answer_conversation(ctx, p):
 
 
 @action("notify_owner", identity.SPEAK,
-        "Tell Tyler something, at the volume the NEWS deserves rather than one you "
+        "Tell Caz something, at the volume the NEWS deserves rather than one you "
         "pick. Say what happened with `kind` - blocked (work stopped, needs him), "
         "broke (a server/sync/task failed), finished (a long task he asked for is "
         "done), answered (a collaborator replied or filed something) - and the tier "
@@ -1344,7 +1344,7 @@ async def _advance_conversation(ctx, p):
 
 
 @action("deliver_unprompted", identity.SPEAK,
-        "Send ONE question Claude decided on its own was worth asking Tyler - the "
+        "Send ONE question Claude decided on its own was worth asking Caz - the "
         "outward half of the initiative lane. Takes a conversation id and nothing "
         "else: the recipient and the words both come off the stored record, and "
         "policy.authorize_unprompted decides whether it may go at all. Never "
@@ -1575,7 +1575,7 @@ def _load_files(p):
 
 @action("send_file", identity.SPEAK, "Upload one or more local files to a channel.",
         {"channel_id": {"type": "int", "required": True},
-         "path": {"type": "str", "desc": "Local path on Tyler's PC"},
+         "path": {"type": "str", "desc": "Local path on Caz's PC"},
          "paths": {"type": "list", "desc": "Several local paths at once (max 10, 25MB total)"},
          "content": {"type": "str", "desc": "Message text alongside the files"},
          "spoiler": {"type": "bool"}},
