@@ -1076,6 +1076,205 @@ async def _list_events(ctx, p):
             "limit": EVENT_CAP, "events": [event_dict(g, e) for e in events]}
 
 
+# --- the moderation set (INTENT 60, Stage 8 D) ------------------------------
+#
+# Discord's Audit Log, Bans, Invites and AutoMod screens. The reads are READ and
+# taint: reasons, names, invite inviters and AutoMod keywords are all text other
+# people wrote. Every time is shown in both halves (eventtime.py): Caz's clock,
+# America/Detroit, and UTC.
+
+AUDIT_MAX = 100
+_AUDIT_SHOWN = 6            # changed attributes per entry, then "+N more"
+_AUDIT_TEXT = 80            # characters of one text value
+_AUDIT_ACTIONS = {a.name: a for a in discord.AuditLogAction}
+# The names a person reaches for first, which discord.py spells otherwise.
+_AUDIT_ALIASES = {"member_kick": "kick", "kick_member": "kick", "member_ban": "ban",
+                  "ban_member": "ban", "member_ban_add": "ban", "member_unban": "unban",
+                  "unban_member": "unban", "member_ban_remove": "unban"}
+_AUDIT_KINDS = {"user": "member", "guild": "server", "auto_moderation": "automod rule",
+                "guild_scheduled_event": "event", "stage_instance": "stage",
+                "integration_or_app_command": "command", "app_command": "command"}
+# One name per permission bit, Discord's current spelling where discord.py has two.
+_PERM_PREFERRED = {"view_channel", "use_external_emojis", "manage_roles",
+                   "manage_expressions", "use_external_stickers", "send_polls"}
+
+
+def _perm_words_by_bit():
+    out = {}
+    for name, bit in discord.Permissions.VALID_FLAGS.items():
+        if bit not in out or name in _PERM_PREFERRED:
+            out[bit] = name
+    return out
+
+
+_PERM_BY_BIT = _perm_words_by_bit()
+
+
+def _audit_action(raw):
+    word = re.sub(r"[\s-]+", "_", str(raw).strip().lower())
+    word = _AUDIT_ALIASES.get(word, word)
+    act = _AUDIT_ACTIONS.get(word)
+    if act is not None:
+        return act
+    near = sorted(n for n in _AUDIT_ACTIONS if word and (word in n or n in word))[:6]
+    raise ActionError(
+        f"action_type: {raw!r} isn't an audit-log action - "
+        + (f"did you mean {', '.join(near)}?" if near else
+           "names look like channel_update, kick, ban, role_update, guild_update, "
+           "invite_create or message_delete."))
+
+
+def _audit_value(v):
+    """One before/after value as a person reads it, or None to leave the
+    attribute out (a picture, an overwrite list - anything that isn't a short
+    fact)."""
+    if v is None:
+        return "none"
+    if isinstance(v, bool):
+        return "on" if v else "off"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        t = " ".join(v.split())
+        return '"' + (t if len(t) <= _AUDIT_TEXT else t[:_AUDIT_TEXT - 3] + "...") + '"'
+    if isinstance(v, datetime):
+        return eventtime.local(v)
+    if isinstance(type(v), discord.enums.EnumMeta):
+        return v.name
+    if isinstance(v, discord.Colour):
+        return str(v)
+    if isinstance(v, (discord.Member, discord.User)):
+        return v.display_name
+    if isinstance(v, (discord.abc.GuildChannel, discord.Thread)):
+        return f"#{v.name}"
+    if isinstance(v, discord.Role):
+        return v.name
+    if isinstance(v, (list, tuple)):
+        words = [_audit_value(x) for x in v]
+        if any(w is None for w in words):
+            return None
+        if not words:
+            return "none"
+        return ", ".join(words[:5]) + (f" +{len(words) - 5} more" if len(words) > 5 else "")
+    return None
+
+
+def _audit_perm_change(before, after):
+    b = before.value if isinstance(before, discord.Permissions) else 0
+    a = after.value if isinstance(after, discord.Permissions) else 0
+    gained = [n for bit, n in sorted(_PERM_BY_BIT.items()) if a & bit and not b & bit]
+    lost = [n for bit, n in sorted(_PERM_BY_BIT.items()) if b & bit and not a & bit]
+    words = [f"+{n}" for n in gained] + [f"-{n}" for n in lost]
+    if not words:
+        return "unchanged"
+    return " ".join(words[:8]) + (f" +{len(words) - 8} more" if len(words) > 8 else "")
+
+
+def _audit_changes(entry):
+    before, after = dict(entry.changes.before), dict(entry.changes.after)
+    lines = []
+    for attr in dict.fromkeys(list(before) + list(after)):
+        b, a = before.get(attr), after.get(attr)
+        if isinstance(b, discord.Permissions) or isinstance(a, discord.Permissions):
+            lines.append(f"{attr}: {_audit_perm_change(b, a)}")
+            continue
+        wb, wa = _audit_value(b), _audit_value(a)
+        if wb is None or wa is None:
+            continue
+        lines.append(f"{attr}: {wb} -> {wa}")
+    if len(lines) > _AUDIT_SHOWN:
+        lines = lines[:_AUDIT_SHOWN] + [f"+{len(lines) - _AUDIT_SHOWN} more"]
+    return lines
+
+
+def _audit_target(entry):
+    kind = entry.action.target_type
+    out = {"kind": _AUDIT_KINDS.get(kind, kind or "none")}
+    try:
+        t = entry.target
+    except Exception:  # noqa: BLE001 - a target discord.py can't build is still a kind
+        t = None
+    name = None
+    if isinstance(t, discord.Guild):
+        name = t.name
+    elif isinstance(t, (discord.Member, discord.User)):
+        name = t.display_name
+    elif isinstance(t, discord.Invite):
+        name = t.code
+    elif isinstance(t, (discord.abc.GuildChannel, discord.Thread)):
+        name = f"#{t.name}"
+    elif t is not None and not isinstance(t, discord.Object):
+        name = getattr(t, "name", None)
+    if name:
+        out["name"] = name
+    return out
+
+
+def _audit_extra(entry):
+    """The few facts an entry carries outside its changes: how many a prune
+    removed, how many messages a delete took, which channel."""
+    extra, bits = entry.extra, []
+    for attr, label in (("members_removed", "members removed"),
+                        ("delete_member_days", "inactive days"), ("count", "count")):
+        v = getattr(extra, attr, None)
+        if isinstance(v, int) and not isinstance(v, bool):
+            bits.append(f"{label} {v}")
+    ch = getattr(extra, "channel", None)
+    if isinstance(ch, (discord.abc.GuildChannel, discord.Thread)):
+        bits.append(f"in #{ch.name}")
+    return bits
+
+
+def audit_dict(entry):
+    """One audit-log entry as the Audit Log screen shows it - names, not ids."""
+    d = {"when": eventtime.both(entry.created_at),
+         "who": entry.user.display_name if entry.user is not None else "unknown",
+         "what": entry.action.name, "target": _audit_target(entry),
+         "reason": entry.reason or None, "changes": _audit_changes(entry)}
+    extra = _audit_extra(entry)
+    if extra:
+        d["extra"] = extra
+    return d
+
+
+@action("read_audit_log", identity.READ,
+        "A server's audit log (Server Settings > Audit Log), newest first: when (Caz's "
+        "local time, America/Detroit, and UTC), who did it, what (the action's name, "
+        "like channel_update, kick, ban, role_update or guild_update), the target, the "
+        "reason, and a short before -> after of what changed. Filter by action_type "
+        "and/or by who did it (user_id).",
+        {"guild_id": {"type": "int", "required": True},
+         "limit": {"type": "int", "desc": "How many entries (default 20, max 100)"},
+         "user_id": {"type": "int", "desc": "Only entries made by this user"},
+         "action_type": {"type": "str",
+                         "desc": "Only this kind of entry: an audit-log action name "
+                                 "like channel_update, kick, ban, member_role_update, "
+                                 "role_update, guild_update, invite_create, "
+                                 "message_delete or automod_rule_create"}},
+        needs_guild=True, taints=True)
+async def _read_audit_log(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    act = _audit_action(p["action_type"]) if p.get("action_type") else None
+    if not g.me.guild_permissions.view_audit_log:
+        raise ActionError(f"this bot lacks View Audit Log in {g.name}, so it can't read "
+                          "the audit log - give its role View Audit Log (or "
+                          "Administrator) first.")
+    limit = max(1, min(int(p.get("limit") or 20), AUDIT_MAX))
+    kw = {"limit": limit, "oldest_first": False}
+    if p.get("user_id"):
+        kw["user"] = discord.Object(id=int(p["user_id"]))
+    if act is not None:
+        kw["action"] = act
+    entries = [audit_dict(e) async for e in g.audit_logs(**kw)]
+    out = {"guild": g.name, "count": len(entries),
+           "filter": {"action_type": act.name if act is not None else None,
+                      "by_user": bool(p.get("user_id"))},
+           "entries": entries}
+    if not entries:
+        out["message"] = f"No audit-log entries in {g.name} match."
+    return out
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "
