@@ -587,6 +587,40 @@ check("no View Audit Log: one sentence, Discord never asked",
                         "Administrator) first.", []))
 
 
+# =================================================================== list_bans
+section("list_bans - who is banned, by name, and why")
+registered("list_bans", 0, False, False, True)
+cl, g, http = fresh()
+http.bans = [{"user": user(BOB, "bob", global_name="Bob"), "reason": "spam links"},
+             {"user": user(CAROL, "carol"), "reason": None}]
+result, preview = go(cl, "list_bans", {"guild_id": GUILD})
+check("a read: no preview, nothing written, Discord asked for 50",
+      (preview, http.writes(), http.calls), (None, [], [("get_bans", {"limit": 50})]))
+check("each ban: display name, username, the id unban_member takes, the reason",
+      result["bans"], [{"name": "Bob", "username": "bob", "user_id": BOB,
+                        "reason": "spam links"},
+                       {"name": "carol", "username": "carol", "user_id": CAROL,
+                        "reason": None}])
+check("...counted, and the list is complete", (result["count"], result["complete"]),
+      (2, True))
+cl, g, http = fresh()
+http.bans = [{"user": user(8800200 + i, f"u{i}"), "reason": None} for i in range(5)]
+result, _ = go(cl, "list_bans", {"guild_id": GUILD, "limit": 3})
+check("a limit: that many, and it says there may be more",
+      (result["count"], result["complete"]), (3, False))
+go(cl, "list_bans", {"guild_id": GUILD, "limit": 5000})
+check("a limit over 1000 is held to 1000", http.calls[-1], ("get_bans", {"limit": 1000}))
+cl, g, http = fresh()
+result, _ = go(cl, "list_bans", {"guild_id": GUILD})
+check("no bans is said plainly", (result["count"], result["bans"], result["message"]),
+      (0, [], "No bans in Testing Server."))
+cl, g, http = fresh(bot_perms=SEND)
+check("no Ban Members: one sentence, Discord never asked",
+      (refusal(cl, "list_bans", {"guild_id": GUILD}), http.calls),
+      ("this bot lacks Ban Members in Testing Server, so it can't read the ban list - "
+       "give its role Ban Members (or Administrator) first.", []))
+
+
 # ===================================================================== the end
 print()
 if _fails:

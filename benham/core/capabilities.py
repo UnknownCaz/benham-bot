@@ -1275,6 +1275,31 @@ async def _read_audit_log(ctx, p):
     return out
 
 
+BANS_MAX = 1000
+
+
+@action("list_bans", identity.READ,
+        "Who is banned from a server (Server Settings > Bans): each user's display name, "
+        "username and user_id (unban_member takes it), and the reason given for the ban.",
+        {"guild_id": {"type": "int", "required": True},
+         "limit": {"type": "int", "desc": "How many (default 50, max 1000)"}},
+        needs_guild=True, taints=True)
+async def _list_bans(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.ban_members:
+        raise ActionError(f"this bot lacks Ban Members in {g.name}, so it can't read the "
+                          "ban list - give its role Ban Members (or Administrator) first.")
+    limit = max(1, min(int(p.get("limit") or 50), BANS_MAX))
+    bans = [{"name": b.user.display_name, "username": b.user.name,
+             "user_id": b.user.id, "reason": b.reason or None}
+            async for b in g.bans(limit=limit)]
+    out = {"guild": g.name, "count": len(bans), "complete": len(bans) < limit,
+           "bans": bans}
+    if not bans:
+        out["message"] = f"No bans in {g.name}."
+    return out
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "
