@@ -23,6 +23,7 @@ nothing, and once for real after confirmation.
 import asyncio
 import base64
 import io
+import json
 import os
 import re
 import unicodedata
@@ -4305,12 +4306,65 @@ async def _cancel_event(ctx, p):
 # Dispatch
 # ==========================================================================
 
+# A `flags` parameter: a map of names to true/false, nothing else (INTENT 60,
+# Stage 8 C - edit_server_settings's system_flags). Its values are booleans by
+# construction, so no free text can ride in one past the privacy screen
+# (policy.screen_params screens string values only); the handler still checks
+# every NAME against its own table. Three spellings reach it: a JSON object from
+# the model's tool call, the same object as text from the CLI, and the
+# shell-friendly `name=true,name=false` (a comma, semicolon or space between).
+_FLAG_TRUE = ("1", "true", "yes", "y", "on")
+_FLAG_FALSE = ("0", "false", "no", "n", "off")
+
+
+def _flags_example(name):
+    return (f"{name} must be a map of names to true/false, like "
+            f'{{"setup_tips": false}} or setup_tips=false,join_notifications=true')
+
+
+def _flag_bool(name, key, value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in _FLAG_TRUE + _FLAG_FALSE:
+        return value.strip().lower() in _FLAG_TRUE
+    raise ActionError(f"{name}: {key} has to be true or false, got {value!r}")
+
+
+def _coerce_flags(name, value):
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{"):
+            try:
+                value = json.loads(text)
+            except ValueError:
+                raise ActionError(_flags_example(name))
+        else:
+            pairs = {}
+            for part in re.split(r"[,;\s]+", text):
+                if not part:
+                    continue
+                key, sep, val = part.partition("=")
+                if not sep:
+                    key, sep, val = part.partition(":")
+                if not sep or not key.strip():
+                    raise ActionError(_flags_example(name))
+                pairs[key.strip()] = val.strip()
+            value = pairs
+    if not isinstance(value, dict):
+        raise ActionError(_flags_example(name))
+    return {str(k).strip(): _flag_bool(name, k, v) for k, v in value.items()}
+
+
 def _coerce(name, spec, value):
     """Coerce one parameter, with an error that names the parameter."""
     t = spec.get("type", "str")
     try:
         if t == "int":
             return int(value)
+        if t == "flags":
+            return _coerce_flags(name, value)
         if t == "bool":
             if isinstance(value, str):
                 return value.strip().lower() in ("1", "true", "yes", "y", "on")

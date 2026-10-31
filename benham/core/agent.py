@@ -93,7 +93,8 @@ SEARCH_LOG = os.path.join(paths.process_state_dir(), "agent_searches.jsonl")
 
 _client = None
 _last_call = {}          # conversation key -> monotonic time
-_JSON_TYPE = {"int": "integer", "str": "string", "bool": "boolean", "list": "array"}
+_JSON_TYPE = {"int": "integer", "str": "string", "bool": "boolean", "list": "array",
+              "flags": "object"}
 
 
 def _get_client():
@@ -295,6 +296,9 @@ def build_tools():
                 props[pname]["description"] = spec["desc"]
             if spec.get("type") == "list":
                 props[pname]["items"] = {"type": "object"}
+            if spec.get("type") == "flags":
+                # A map of names to true/false (capabilities._coerce_flags).
+                props[pname]["additionalProperties"] = {"type": "boolean"}
             if spec.get("required"):
                 required.append(pname)
         desc = act.summary

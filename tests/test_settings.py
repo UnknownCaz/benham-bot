@@ -393,6 +393,50 @@ check("...and no two toggles share a name",
       len({n for n, _ in capabilities._SYSTEM_FLAGS}), len(capabilities._SYSTEM_FLAGS))
 
 
+# ================================================================ flags params
+section("a flags parameter - a map of names to true/false, three spellings")
+from benham.cli import do as _do      # noqa: E402
+from benham.core import agent as _agent  # noqa: E402
+FSPEC = {"type": "flags"}
+
+
+def coerce(value):
+    try:
+        return capabilities._coerce("system_flags", FSPEC, value)
+    except capabilities.ActionError as e:
+        return f"refused: {e}"
+
+
+check("a JSON object from a tool call", coerce({"setup_tips": False, "join_notifications": True}),
+      {"setup_tips": False, "join_notifications": True})
+check("the same object as text", coerce('{"setup_tips": false}'), {"setup_tips": False})
+check("name=value pairs, commas, spaces or semicolons between",
+      coerce("setup_tips=false, join_notifications=true;emoji_added_notifications=off"),
+      {"setup_tips": False, "join_notifications": True, "emoji_added_notifications": False})
+check("name:value works too, and yes/no/on/off/1/0",
+      coerce("a:yes b:no c=on d=0"), {"a": True, "b": False, "c": True, "d": False})
+check("an empty map is an empty map (the handler decides what that means)", coerce("{}"), {})
+for bad in ("setup_tips", "{not json", "[1, 2]", ["setup_tips"], 7):
+    m = coerce(bad)
+    check(f"{bad!r} is refused with the shape spelled out",
+          m.startswith("refused: system_flags must be a map of names to true/false"), True)
+m = coerce({"setup_tips": "maybe"})
+check("a value that isn't true or false names the flag",
+      m, "refused: system_flags: setup_tips has to be true or false, got 'maybe'")
+check("...a number other than 0/1 too", coerce({"x": 2}).startswith("refused: system_flags: x"),
+      True)
+_act = types.SimpleNamespace(params={"system_flags": FSPEC})
+check("the CLI decodes a JSON object for a flags parameter",
+      _do._parse_kv(['system_flags={"setup_tips": false}'], _act),
+      ({"system_flags": {"setup_tips": False}}, None))
+check("...and leaves name=value text for the coercion",
+      _do._parse_kv(["system_flags=setup_tips=false,join_notifications=true"], _act),
+      ({"system_flags": "setup_tips=false,join_notifications=true"}, None))
+check("...a JSON list is not a flags value, so it stays text (and is refused later)",
+      _do._parse_kv(["system_flags=[1]"], _act), ({"system_flags": "[1]"}, None))
+check("the model is told it's an object", _agent._JSON_TYPE["flags"], "object")
+
+
 # ===================================================================== the end
 print()
 if _fails:
