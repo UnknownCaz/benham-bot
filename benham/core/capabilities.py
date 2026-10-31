@@ -4081,6 +4081,280 @@ async def _edit_server_settings(ctx, p):
     return out
 
 
+# --- channel order ------------------------------------------------------------
+#
+# Why neither GuildChannel.move nor edit(position=) - both read in discord.py
+# 2.7.1 (abc.py) before choosing:
+#   edit(position=N) hands N to _move, which renumbers EVERY channel of that kind
+#       across the server by raw position, categories ignored - "position 2 in
+#       Games" means nothing to it.
+#   move(category=None, ...) - out of a category to the top level - counts the
+#       place among the channel's OLD category, not the top level, so it lands at
+#       a number that means nothing where it ends up.
+# So the plan is made here, the way move() makes it in the cases it gets right:
+# one group (same kind - text-like, voice-like or category - and same category,
+# sorted by position then id), the channel taken out and put back in, the group
+# renumbered 0..n-1, a new parent and the permission sync on the moved channel
+# only. It goes through the HTTP route move() itself uses, the preview's
+# neighbours are read off the very list that is sent, and the result is read
+# back with Guild.fetch_channels.
+
+_GROUP_WORDS = {"text": "text channels", "voice": "voice channels",
+                "category": "categories"}
+
+
+def _ch_group(c):
+    t = getattr(c, "type", None)
+    if t == discord.ChannelType.category:
+        return "category"
+    if t in (discord.ChannelType.voice, discord.ChannelType.stage_voice):
+        return "voice"
+    return "text"
+
+
+def _ch_siblings(chans, group, cat_id, skip=None):
+    """The channels of one group in one category (None = the top level), in the
+    order Discord shows them."""
+    return sorted((c for c in chans if _ch_group(c) == group
+                   and getattr(c, "category_id", None) == cat_id and c.id != skip),
+                  key=lambda c: (c.position, c.id))
+
+
+def _cn(c):
+    return c.name if _ch_group(c) == "category" else f"#{c.name}"
+
+
+def _cat_words(chans, cat_id):
+    if cat_id is None:
+        return "the top level (no category)"
+    cat = next((c for c in chans if c.id == cat_id), None)
+    return f"the category {cat.name}" if cat is not None else f"category {cat_id}"
+
+
+def _ch_between(order, i):
+    above = order[i - 1] if i > 0 else None
+    below = order[i + 1] if i + 1 < len(order) else None
+    if above is not None and below is not None:
+        return f"between {_cn(above)} and {_cn(below)}"
+    if below is not None:
+        return f"at the top, above {_cn(below)}"
+    if above is not None:
+        return f"at the bottom, below {_cn(above)}"
+    return "the only one there"
+
+
+def _ch_place(chans, order, i, cat_id):
+    """Where order[i] sits, as plain data."""
+    above = order[i - 1] if i > 0 else None
+    below = order[i + 1] if i + 1 < len(order) else None
+    cat = next((c for c in chans if c.id == cat_id), None) if cat_id else None
+    return {"category": cat.name if cat is not None else None, "category_id": cat_id,
+            "position": i, "of": len(order), "between": _ch_between(order, i),
+            "above": above.name if above is not None else None,
+            "below": below.name if below is not None else None}
+
+
+def _ch_in_guild(ctx, g, raw, field):
+    try:
+        cid = int(raw)
+    except (TypeError, ValueError):
+        raise ActionError(f"{field} takes a channel id - {raw!r} isn't one.")
+    ch = g.get_channel(cid)
+    if ch is None:
+        other = ctx.client.get_channel(cid)
+        if other is not None and getattr(other, "guild", None) is not None:
+            raise ActionError(f"{field}: channel {cid} belongs to another server, not "
+                              f"{g.name}.")
+        raise ActionError(f"{field}: there's no channel {cid} in {g.name} that this bot "
+                          "can see.")
+    return ch
+
+
+_PLACE_WORDS = "position, before_id, after_id, to_top or to_bottom"
+
+
+@action("move_channel", identity.MANAGE,
+        "Move a channel - or a category - in a server's channel list: to a position "
+        "(0 = the top) among the channels of its kind in its category or at the top "
+        "level, directly before_id / after_id another channel, or to_top / to_bottom; "
+        "and optionally into another category (category_id, or none for the top "
+        "level; with only category_id it goes to the bottom there). Inside a category "
+        "voice channels always sit below text channels, so a place is counted among "
+        "channels of the same kind. sync_permissions=true makes a channel moving into "
+        "a category take that category's permissions. The preview names the "
+        "neighbours it lands between; its current place is saved first, and the "
+        "result is the order Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "channel_id": {"type": "int", "required": True,
+                        "desc": "The channel or category to move (list_channels)"},
+         "position": {"type": "int", "desc": "0-based place among channels of its kind "
+                                             "in the category (or top level) it ends up "
+                                             "in; 0 is the top"},
+         "before_id": {"type": "int", "desc": "Put it directly above this channel"},
+         "after_id": {"type": "int", "desc": "Put it directly below this channel"},
+         "to_top": {"type": "bool", "desc": "Put it first"},
+         "to_bottom": {"type": "bool", "desc": "Put it last"},
+         "category_id": {"type": "str", "desc": "Move it into this category, or none for "
+                                                "the top level"},
+         "sync_permissions": {"type": "bool", "desc": "Moving into a category: take that "
+                                                      "category's permissions (default "
+                                                      "false)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _move_channel(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.manage_channels:
+        raise ActionError(f"this bot lacks Manage Channels in {g.name}, so it can't move "
+                          "channels there - give its role Manage Channels (or "
+                          "Administrator) first.")
+    ch = _ch_in_guild(ctx, g, p["channel_id"], "channel_id")
+    group = _ch_group(ch)
+    places = [k for k in ("position", "before_id", "after_id") if p.get(k) is not None] \
+        + [k for k in ("to_top", "to_bottom") if p.get(k)]
+    if len(places) > 1:
+        raise ActionError(f"give one place - {_PLACE_WORDS} - not "
+                          f"{' and '.join(places)}.")
+    cat_given = p.get("category_id") is not None
+    if not places and not cat_given:
+        raise ActionError(f"nothing to change - say where: {_PLACE_WORDS} (and "
+                          "category_id to move it into a category).")
+
+    chans = list(g.channels)
+    cur_cat = getattr(ch, "category_id", None)
+    tgt_cat = cur_cat
+    if cat_given:
+        text = str(p["category_id"]).strip().lower()
+        if text in _CLEAR_WORDS:
+            tgt_cat = None
+        elif group == "category":
+            raise ActionError(f"{_cn(ch)} is a category, and a category can't go inside "
+                              "another one - leave category_id out.")
+        else:
+            cat = _ch_in_guild(ctx, g, p["category_id"], "category_id")
+            if _ch_group(cat) != "category":
+                raise ActionError(f"category_id: {_cn(cat)} is a {_type_word(cat)} "
+                                  "channel, not a category.")
+            tgt_cat = cat.id
+    anchor = None
+    for key in ("before_id", "after_id"):
+        if p.get(key) is None:
+            continue
+        anchor = _ch_in_guild(ctx, g, p[key], key)
+        if anchor.id == ch.id:
+            raise ActionError(f"{key}: a channel can't go before or after itself.")
+        if _ch_group(anchor) != group:
+            raise ActionError(
+                f"{key}: {_cn(anchor)} is a {_type_word(anchor)} channel and {_cn(ch)} is "
+                f"a {_type_word(ch)} channel - Discord keeps voice channels below text "
+                "channels and categories apart, so one can't go directly next to the "
+                "other.")
+        anchor_cat = getattr(anchor, "category_id", None)
+        if cat_given and anchor_cat != tgt_cat:
+            raise ActionError(f"{key}: {_cn(anchor)} is in {_cat_words(chans, anchor_cat)}, "
+                              f"not {_cat_words(chans, tgt_cat)} - drop category_id to "
+                              "move next to it, or pick a channel in that category.")
+        tgt_cat = anchor_cat
+    moved_cat = tgt_cat != cur_cat
+    sync = bool(p.get("sync_permissions"))
+    if sync and tgt_cat is None:
+        raise ActionError(f"sync_permissions needs a category to sync with, and "
+                          f"{_cn(ch)} would sit at the top level.")
+    if sync and not moved_cat:
+        raise ActionError(f"sync_permissions only applies when {_cn(ch)} moves into a "
+                          f"different category, and it stays in "
+                          f"{_cat_words(chans, cur_cat)}.")
+
+    others = _ch_siblings(chans, group, tgt_cat, skip=ch.id)
+    n = len(others)
+    if p.get("position") is not None:
+        idx = int(p["position"])
+        if not 0 <= idx <= n:
+            raise ActionError(f"position has to be 0 to {n} for {_cn(ch)} in "
+                              f"{_cat_words(chans, tgt_cat)} (0 is the top, {n} the "
+                              f"bottom), and {idx} is outside that.")
+    elif p.get("to_top"):
+        idx = 0
+    elif p.get("before_id") is not None:
+        idx = others.index(anchor)
+    elif p.get("after_id") is not None:
+        idx = others.index(anchor) + 1
+    else:
+        idx = n                                  # to_bottom, or a category alone
+    new_order = others[:idx] + [ch] + others[idx:]
+    cur_order = _ch_siblings(chans, group, cur_cat)
+    cur_idx = cur_order.index(ch)
+    before = _ch_place(chans, cur_order, cur_idx, cur_cat)
+    planned = _ch_place(chans, new_order, idx, tgt_cat)
+    if not moved_cat and idx == cur_idx:
+        raise ActionError(f"{_cn(ch)} is already there ({_cat_words(chans, cur_cat)}, "
+                          f"position {cur_idx}, {before['between']}) - nothing to change.")
+    payload = []
+    for i, c in enumerate(new_order):
+        item = {"id": c.id, "position": i}
+        if c.id == ch.id and moved_cat:
+            item.update(parent_id=tgt_cat, lock_permissions=sync)
+        payload.append(item)
+
+    if ctx.dry_run:
+        words = _GROUP_WORDS[group]
+        lines = [f"Now: {_cat_words(chans, cur_cat)}, position {cur_idx} of "
+                 f"0-{len(cur_order) - 1} among its {words}, {before['between']}.",
+                 f"After: {_cat_words(chans, tgt_cat)}, position {idx} of "
+                 f"0-{len(new_order) - 1}, {planned['between']}."]
+        if not places:
+            lines.append("No place was named, so it goes to the bottom there.")
+        if group != "category":
+            other = "voice" if group == "text" else "text"
+            if _ch_siblings(chans, other, tgt_cat):
+                lines.append(f"Voice channels always sit below text channels there, so "
+                             f"this counts only the {words}.")
+        if moved_cat:
+            cat_name = planned["category"] or f"category {tgt_cat}"
+            lines.append(f"sync_permissions is on: it takes {cat_name}'s permissions, "
+                         "replacing its own." if sync else
+                         "Its own permissions stay as they are (sync_permissions is off).")
+        lines += [f"The other {words} there shift to make room; nothing else changes.",
+                  "Its current place is saved first, so it can be put back."]
+        what = f"the category {ch.name}" if group == "category" else _cn(ch)
+        return {"summary": f"Move {what} in **{g.name}**", "detail": "\n".join(lines)}
+
+    saved = _settings_keep(
+        ctx, g, f"channel-{ch.id}",
+        {"channel_id": ch.id, "name": ch.name, "kind": group,
+         "before": {**before, "raw_position": ch.position}, "planned": planned,
+         "payload": payload,
+         # Feed this back to move_channel (with guild_id) to undo.
+         "restore": {"channel_id": ch.id, "position": cur_idx,
+                     "category_id": str(cur_cat) if cur_cat else "none"}},
+        f"{_cn(ch)}'s current place")
+    # Straight to discord.py's own route for a reorder (see the note above).
+    await _settings_call(
+        g._state.http.bulk_channel_update(g.id, payload, reason=p.get("reason") or VIA),
+        "channel move", "list_channels")
+    out = {"status": "channel_moved", "guild": g.name, "channel": ch.name,
+           "before": before, "backup": saved}
+    try:
+        fresh = list(await asyncio.wait_for(g.fetch_channels(), LOOK_TIMEOUT))
+    except Exception as e:  # noqa: BLE001 - the move itself went through
+        out["warning"] = (f"Discord took the move, but reading the channel list back "
+                          f"failed ({type(e).__name__}) - check list_channels.")
+        return out
+    me_now = next((c for c in fresh if c.id == ch.id), None)
+    if me_now is None:
+        out["warning"] = (f"Discord took the move, but {_cn(ch)} isn't in the channel list "
+                          "it reads back - check list_channels.")
+        return out
+    now_cat = getattr(me_now, "category_id", None)
+    read = _ch_siblings(fresh, group, now_cat)
+    ridx = [c.id for c in read].index(ch.id)
+    out["after"] = _ch_place(fresh, read, ridx, now_cat)
+    if (now_cat, [c.id for c in read]) != (tgt_cat, [c.id for c in new_order]):
+        out["warning"] = (f"Discord's order afterwards isn't the planned one: {_cn(ch)} "
+                          f"reads {_cat_words(fresh, now_cat)}, position {ridx}, "
+                          f"{out['after']['between']} - check list_channels.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},

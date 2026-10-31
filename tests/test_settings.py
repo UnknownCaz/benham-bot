@@ -693,6 +693,262 @@ check("...fed back to edit_server_settings, the settings block is what it was",
       capabilities._settings_block(g), rec["settings_before"])
 
 
+# ================================================================ move_channel
+section("move_channel - registered like edit_server_look")
+registered("move_channel", 2, True, True, True)
+
+
+def mc(params, force=False, **gkw):
+    """(result, preview, http, client, guild) for one move_channel call."""
+    cl, g, http = fresh(**gkw)
+    result, preview = go(cl, "move_channel", {"guild_id": GUILD, **params}, force=force)
+    return result, preview, http, cl, g
+
+
+def mc_refused(params, **gkw):
+    """The refusal, at the preview AND at the confirm, with Discord never asked."""
+    out = []
+    for force in (False, True):
+        cl, g, http = fresh(**gkw)
+        before = backups()
+        m = refusal(cl, "move_channel", {"guild_id": GUILD, **params}, force=force)
+        out.append((m, http.writes == [] and http.reads == [], backups() == before))
+    (m1, w1, b1), (m2, w2, b2) = out
+    return m1 if (m1 == m2 and w1 and w2 and b1 and b2) else ("MISMATCH", out)
+
+
+def sent(http):
+    """The one reorder Discord was asked for, as [(id, position, parent?, lock?)]."""
+    verb, payload, _ = http.writes[0]
+    return verb, [(d["id"], d["position"]) + ((d["parent_id"], d["lock_permissions"])
+                                              if "parent_id" in d else ()) for d in payload]
+
+
+section("move_channel - previewed first, nothing touched, neighbours named")
+before = backups()
+result, preview, http, cl, g = mc({"channel_id": BETA, "to_bottom": True})
+check("the first call is a preview; Discord asked nothing, nothing saved",
+      (result, http.writes, http.reads, backups() == before), (None, [], [], True))
+check("...the summary names the channel and the server",
+      preview["summary"], "Move #benham-beta in **Testing Server**")
+check("...the place now and after, counted among its kind, with the neighbours",
+      preview["detail"].splitlines(),
+      ["Now: the category Games, position 0 of 0-2 among its text channels, at the "
+       "top, above #lfg.",
+       "After: the category Games, position 2 of 0-2, at the bottom, below #clips.",
+       "Voice channels always sit below text channels there, so this counts only the "
+       "text channels.",
+       "The other text channels there shift to make room; nothing else changes.",
+       "Its current place is saved first, so it can be put back."])
+_, preview, _, _, _ = mc({"channel_id": BETA, "position": 1})
+check("a middle place names both neighbours",
+      "After: the category Games, position 1 of 0-2, between #lfg and #clips."
+      in preview["detail"], True)
+_, preview, _, _, _ = mc({"channel_id": ARCHIVE, "to_top": True})
+check("a category moves among the categories",
+      (preview["summary"], preview["detail"].splitlines()[:2]),
+      ("Move the category Archive in **Testing Server**",
+       ["Now: the top level (no category), position 2 of 0-2 among its categories, at "
+        "the bottom, below Voice.",
+        "After: the top level (no category), position 0 of 0-2, at the top, above "
+        "Games."]))
+_, preview, _, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE)})
+check("only a category named: to the bottom there, said so, permissions kept",
+      [ln for ln in preview["detail"].splitlines() if ln.startswith(("After", "No place",
+                                                                     "Its own"))],
+      ["After: the category Archive, position 1 of 0-1, at the bottom, below #old.",
+       "No place was named, so it goes to the bottom there.",
+       "Its own permissions stay as they are (sync_permissions is off)."])
+_, preview, _, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE),
+                          "to_top": True, "sync_permissions": True})
+check("sync_permissions on: the preview says it takes the category's permissions",
+      "sync_permissions is on: it takes Archive's permissions, replacing its own."
+      in preview["detail"], True)
+
+section("move_channel - confirmed: the planned order is what is sent, then read back")
+before = backups()
+result, _, http, cl, g = mc({"channel_id": BETA, "to_bottom": True}, force=True)
+check("one reorder of the group, renumbered 0..n-1, no parent change",
+      sent(http), ("bulk_channel_update", [(LFG, 0), (CLIPS, 1), (BETA, 2)]))
+check("...the audit reason is the acting face's, and the list is read back once",
+      (http.writes[0][2], http.reads), (capabilities.VIA, ["channels"]))
+check("the result's place is the one read back: Games, last of three, below #clips",
+      (result["status"], result["after"], "warning" in result),
+      ("channel_moved", {"category": "Games", "category_id": GAMES, "position": 2,
+                         "of": 3, "between": "at the bottom, below #clips",
+                         "above": "clips", "below": None}, False))
+check("...beside where it was", (result["before"]["position"], result["before"]["below"]),
+      (0, "lfg"))
+new = [b for b in backups() if b not in before]
+check("one backup, <guild>-channel-<id>-<local stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-channel-{BETA}-2"), result["backup"]
+       == os.path.join(capabilities.LOOK_BACKUP_DIR, new[0])), (1, True, True))
+with open(result["backup"], encoding="utf-8") as fh:
+    rec = json.load(fh)
+check("...holding the old place and the parameters that put it back",
+      (rec["before"]["position"], rec["before"]["category_id"], rec["before"]["raw_position"],
+       rec["restore"]), (0, GAMES, 0, {"channel_id": BETA, "position": 0,
+                                       "category_id": str(GAMES)}))
+g = resync(cl, g)
+http.writes.clear()
+result, _ = go(cl, "move_channel", {"guild_id": GUILD, **rec["restore"]}, force=True)
+check("...and fed back, they do: the old order, read back",
+      (sent(http)[1], result["after"]["position"], result["after"]["between"]),
+      ([(BETA, 0), (LFG, 1), (CLIPS, 2)], 0, "at the top, above #lfg"))
+
+for params, want, label in (
+        ({"position": 1}, [(LFG, 0), (BETA, 1), (CLIPS, 2)], "position 1"),
+        ({"after_id": LFG}, [(LFG, 0), (BETA, 1), (CLIPS, 2)], "after_id #lfg"),
+        ({"before_id": CLIPS}, [(LFG, 0), (BETA, 1), (CLIPS, 2)], "before_id #clips")):
+    check(f"{label}: the same landing", sent(mc({"channel_id": BETA, **params},
+                                                force=True)[2])[1], want)
+check("before_id the top channel puts it first",
+      sent(mc({"channel_id": CLIPS, "before_id": BETA}, force=True)[2])[1],
+      [(CLIPS, 0), (BETA, 1), (LFG, 2)])
+result, _, http, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE)}, force=True)
+check("into another category: that group renumbered, the parent set on the mover only",
+      sent(http)[1], [(OLD, 0), (BETA, 1, ARCHIVE, False)])
+check("...read back in its new category", (result["after"]["category"],
+                                           result["after"]["position"]), ("Archive", 1))
+_, _, http, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE), "to_top": True,
+                       "sync_permissions": True}, force=True)
+check("...with sync_permissions, the lock goes with the parent",
+      sent(http)[1], [(BETA, 0, ARCHIVE, True), (OLD, 1)])
+result, _, http, _, _ = mc({"channel_id": BETA, "category_id": "none", "position": 1},
+                           force=True)
+check("out to the top level: counted among the TOP-LEVEL channels (where discord.py's "
+      "move() counts the old category's)",
+      sent(http)[1], [(WELCOME, 0), (BETA, 1, None, False), (ASD, 2)])
+check("...read back at the top level between #welcome and #asd",
+      (result["after"]["category"], result["after"]["between"]),
+      (None, "between #welcome and #asd"))
+_, _, http, _, _ = mc({"channel_id": BETA, "before_id": OLD}, force=True)
+check("before_id a channel in another category moves it there, beside that channel",
+      sent(http)[1], [(BETA, 0, ARCHIVE, False), (OLD, 1)])
+_, _, http, _, _ = mc({"channel_id": ARCHIVE, "to_top": True}, force=True)
+check("a category among the categories", sent(http)[1],
+      [(ARCHIVE, 0), (GAMES, 1), (VOICECAT, 2)])
+_, _, http, _, _ = mc({"channel_id": TOWNHALL, "to_top": True}, force=True)
+check("a stage channel counts with the voice channels",
+      sent(http)[1], [(TOWNHALL, 0), (GENERAL, 1), (AFK, 2)])
+
+section("move_channel - refused at the preview, whole (and at the confirm)")
+check("two places at once", mc_refused({"channel_id": BETA, "position": 1, "to_top": True}),
+      "give one place - position, before_id, after_id, to_top or to_bottom - not "
+      "position and to_top.")
+check("...before_id and after_id too",
+      mc_refused({"channel_id": BETA, "before_id": CLIPS, "after_id": LFG}),
+      "give one place - position, before_id, after_id, to_top or to_bottom - not "
+      "before_id and after_id.")
+check("no place at all", mc_refused({"channel_id": BETA}),
+      "nothing to change - say where: position, before_id, after_id, to_top or "
+      "to_bottom (and category_id to move it into a category).")
+check("to_top=false is no place either", mc_refused({"channel_id": BETA, "to_top": False}),
+      mc_refused({"channel_id": BETA}))
+for pos in (3, -1):
+    check(f"position {pos} is outside the group",
+          mc_refused({"channel_id": BETA, "position": pos}),
+          f"position has to be 0 to 2 for #benham-beta in the category Games (0 is the "
+          f"top, 2 the bottom), and {pos} is outside that.")
+for params in ({"position": 0}, {"to_top": True}, {"before_id": LFG},
+               {"category_id": str(GAMES), "position": 0}):
+    check(f"already there ({params})", mc_refused({"channel_id": BETA, **params}),
+          "#benham-beta is already there (the category Games, position 0, at the top, "
+          "above #lfg) - nothing to change.")
+check("next to a channel of another kind",
+      mc_refused({"channel_id": BETA, "before_id": GAMENIGHT}),
+      "before_id: #Game Night is a voice channel and #benham-beta is a text channel - "
+      "Discord keeps voice channels below text channels and categories apart, so one "
+      "can't go directly next to the other.")
+check("next to itself", mc_refused({"channel_id": BETA, "after_id": BETA}),
+      "after_id: a channel can't go before or after itself.")
+check("next to a channel outside the category named",
+      mc_refused({"channel_id": BETA, "category_id": str(ARCHIVE), "before_id": LFG}),
+      "before_id: #lfg is in the category Games, not the category Archive - drop "
+      "category_id to move next to it, or pick a channel in that category.")
+check("a category into a category",
+      mc_refused({"channel_id": ARCHIVE, "category_id": str(GAMES)}),
+      "Archive is a category, and a category can't go inside another one - leave "
+      "category_id out.")
+check("a category_id that isn't a category",
+      mc_refused({"channel_id": BETA, "category_id": str(ASD)}),
+      "category_id: #asd is a text channel, not a category.")
+check("a channel from another server", mc_refused({"channel_id": ELSEWHERE, "to_top": True}),
+      "channel_id: channel 901 belongs to another server, not Testing Server.")
+check("a channel that doesn't exist", mc_refused({"channel_id": 4242, "to_top": True}),
+      "channel_id: there's no channel 4242 in Testing Server that this bot can see.")
+check("an anchor from another server",
+      mc_refused({"channel_id": BETA, "after_id": ELSEWHERE}),
+      "after_id: channel 901 belongs to another server, not Testing Server.")
+check("sync_permissions without a category change",
+      mc_refused({"channel_id": BETA, "to_bottom": True, "sync_permissions": True}),
+      "sync_permissions only applies when #benham-beta moves into a different category, "
+      "and it stays in the category Games.")
+check("sync_permissions out to the top level",
+      mc_refused({"channel_id": BETA, "category_id": "none", "sync_permissions": True}),
+      "sync_permissions needs a category to sync with, and #benham-beta would sit at the "
+      "top level.")
+check("no Manage Channels",
+      mc_refused({"channel_id": BETA, "to_top": True}, bot_perms=VIEW | SEND | MANAGE_GUILD),
+      "this bot lacks Manage Channels in Testing Server, so it can't move channels there "
+      "- give its role Manage Channels (or Administrator) first.")
+
+section("move_channel - backup first; Discord's refusals; the read-back is Discord's")
+cl, g, http = fresh()
+http.raise_on_write = discord.HTTPException(_Resp(400), {"code": 50035,
+                                                         "message": "Invalid Form Body"})
+before = backups()
+m = refusal(cl, "move_channel", {"guild_id": GUILD, "channel_id": BETA, "to_bottom": True},
+            force=True)
+check("Discord's refusal is one sentence ending 'Nothing was changed.'",
+      (one_sentence(m), m.startswith("Discord turned the channel move down: "),
+       m.endswith("Nothing was changed."), http.reads), (True, True, True, []))
+check("...the backup was written before Discord was asked", len(backups()) - len(before), 1)
+http.raise_on_write = discord.HTTPException(_Resp(429), "You are being rate limited.")
+check("a rate limit says so", refusal(cl, "move_channel", {"guild_id": GUILD,
+                                                           "channel_id": BETA,
+                                                           "to_bottom": True}, force=True),
+      "Discord is rate-limiting channel moves right now. Nothing was changed; try again "
+      "in a while.")
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+cl, g, http = fresh()
+m = refusal(cl, "move_channel", {"guild_id": GUILD, "channel_id": BETA, "to_bottom": True},
+            force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("no backup, no move: one sentence, Discord never asked",
+      (m.startswith("I couldn't save #benham-beta's current place first ("),
+       m.endswith("so I didn't change anything. Nothing was changed."), http.writes),
+      (True, True, []))
+cl, g, http = fresh()
+
+
+def _undo_beta(by_id):
+    by_id[str(BETA)]["position"] = -1               # Discord keeps it on top after all
+
+
+http.answer_override = _undo_beta
+result, _ = go(cl, "move_channel", {"guild_id": GUILD, "channel_id": BETA,
+                                    "to_bottom": True}, force=True)
+check("Discord's order disagreeing with the plan: the result says what it reads, and warns",
+      (result["after"]["position"], result["warning"]),
+      (0, "Discord's order afterwards isn't the planned one: #benham-beta reads the "
+          "category Games, position 0, at the top, above #lfg - check list_channels."))
+cl, g, http = fresh()
+
+
+async def _no_read(guild_id):
+    raise discord.HTTPException(_Resp(500), "read failed")
+
+
+http.get_all_guild_channels = _no_read
+result, _ = go(cl, "move_channel", {"guild_id": GUILD, "channel_id": BETA,
+                                    "to_bottom": True}, force=True)
+check("a failed read-back after a move that went through never says 'Nothing was changed'",
+      (result["status"], "after" in result, result["warning"]),
+      ("channel_moved", False, "Discord took the move, but reading the channel list back "
+                               "failed (HTTPException) - check list_channels."))
+
+
 # ===================================================================== the end
 print()
 if _fails:
