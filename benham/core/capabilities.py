@@ -1076,6 +1076,486 @@ async def _list_events(ctx, p):
             "limit": EVENT_CAP, "events": [event_dict(g, e) for e in events]}
 
 
+# --- the moderation set (INTENT 60, Stage 8 D) ------------------------------
+#
+# Discord's Audit Log, Bans, Invites and AutoMod screens. The reads are READ and
+# taint: reasons, names, invite inviters and AutoMod keywords are all text other
+# people wrote. Every time is shown in both halves (eventtime.py): Caz's clock,
+# America/Detroit, and UTC.
+
+AUDIT_MAX = 100
+_AUDIT_SHOWN = 6            # changed attributes per entry, then "+N more"
+_AUDIT_TEXT = 80            # characters of one text value
+_AUDIT_ACTIONS = {a.name: a for a in discord.AuditLogAction}
+# The names a person reaches for first, which discord.py spells otherwise.
+_AUDIT_ALIASES = {"member_kick": "kick", "kick_member": "kick", "member_ban": "ban",
+                  "ban_member": "ban", "member_ban_add": "ban", "member_unban": "unban",
+                  "unban_member": "unban", "member_ban_remove": "unban"}
+_AUDIT_KINDS = {"user": "member", "guild": "server", "auto_moderation": "automod rule",
+                "guild_scheduled_event": "event", "stage_instance": "stage",
+                "integration_or_app_command": "command", "app_command": "command"}
+# One name per permission bit, Discord's current spelling where discord.py has two.
+_PERM_PREFERRED = {"view_channel", "use_external_emojis", "manage_roles",
+                   "manage_expressions", "use_external_stickers", "send_polls"}
+
+
+def _perm_words_by_bit():
+    out = {}
+    for name, bit in discord.Permissions.VALID_FLAGS.items():
+        if bit not in out or name in _PERM_PREFERRED:
+            out[bit] = name
+    return out
+
+
+_PERM_BY_BIT = _perm_words_by_bit()
+
+
+def _audit_action(raw):
+    word = re.sub(r"[\s-]+", "_", str(raw).strip().lower())
+    word = _AUDIT_ALIASES.get(word, word)
+    act = _AUDIT_ACTIONS.get(word)
+    if act is not None:
+        return act
+    near = sorted(n for n in _AUDIT_ACTIONS if word and (word in n or n in word))[:6]
+    raise ActionError(
+        f"action_type: {raw!r} isn't an audit-log action - "
+        + (f"did you mean {', '.join(near)}?" if near else
+           "names look like channel_update, kick, ban, role_update, guild_update, "
+           "invite_create or message_delete."))
+
+
+def _audit_value(v):
+    """One before/after value as a person reads it, or None to leave the
+    attribute out (a picture, an overwrite list - anything that isn't a short
+    fact)."""
+    if v is None:
+        return "none"
+    if isinstance(v, bool):
+        return "on" if v else "off"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        t = " ".join(v.split())
+        return '"' + (t if len(t) <= _AUDIT_TEXT else t[:_AUDIT_TEXT - 3] + "...") + '"'
+    if isinstance(v, datetime):
+        return eventtime.local(v)
+    if isinstance(type(v), discord.enums.EnumMeta):
+        return v.name
+    if isinstance(v, discord.Colour):
+        return str(v)
+    if isinstance(v, (discord.Member, discord.User)):
+        return v.display_name
+    if isinstance(v, (discord.abc.GuildChannel, discord.Thread)):
+        return f"#{v.name}"
+    if isinstance(v, discord.Role):
+        return v.name
+    if isinstance(v, (list, tuple)):
+        words = [_audit_value(x) for x in v]
+        if any(w is None for w in words):
+            return None
+        if not words:
+            return "none"
+        return ", ".join(words[:5]) + (f" +{len(words) - 5} more" if len(words) > 5 else "")
+    return None
+
+
+def _audit_perm_change(before, after):
+    b = before.value if isinstance(before, discord.Permissions) else 0
+    a = after.value if isinstance(after, discord.Permissions) else 0
+    gained = [n for bit, n in sorted(_PERM_BY_BIT.items()) if a & bit and not b & bit]
+    lost = [n for bit, n in sorted(_PERM_BY_BIT.items()) if b & bit and not a & bit]
+    words = [f"+{n}" for n in gained] + [f"-{n}" for n in lost]
+    if not words:
+        return "unchanged"
+    return " ".join(words[:8]) + (f" +{len(words) - 8} more" if len(words) > 8 else "")
+
+
+def _audit_changes(entry):
+    before, after = dict(entry.changes.before), dict(entry.changes.after)
+    lines = []
+    for attr in dict.fromkeys(list(before) + list(after)):
+        b, a = before.get(attr), after.get(attr)
+        if isinstance(b, discord.Permissions) or isinstance(a, discord.Permissions):
+            lines.append(f"{attr}: {_audit_perm_change(b, a)}")
+            continue
+        wb, wa = _audit_value(b), _audit_value(a)
+        if wb is None or wa is None:
+            continue
+        lines.append(f"{attr}: {wb} -> {wa}")
+    if len(lines) > _AUDIT_SHOWN:
+        lines = lines[:_AUDIT_SHOWN] + [f"+{len(lines) - _AUDIT_SHOWN} more"]
+    return lines
+
+
+def _audit_target(entry):
+    kind = entry.action.target_type
+    out = {"kind": _AUDIT_KINDS.get(kind, kind or "none")}
+    try:
+        t = entry.target
+    except Exception:  # noqa: BLE001 - a target discord.py can't build is still a kind
+        t = None
+    name = None
+    if isinstance(t, discord.Guild):
+        name = t.name
+    elif isinstance(t, (discord.Member, discord.User)):
+        name = t.display_name
+    elif isinstance(t, discord.Invite):
+        name = t.code
+    elif isinstance(t, (discord.abc.GuildChannel, discord.Thread)):
+        name = f"#{t.name}"
+    elif t is not None and not isinstance(t, discord.Object):
+        name = getattr(t, "name", None)
+    if name:
+        out["name"] = name
+    return out
+
+
+def _audit_extra(entry):
+    """The few facts an entry carries outside its changes: how many a prune
+    removed, how many messages a delete took, which channel."""
+    extra, bits = entry.extra, []
+    for attr, label in (("members_removed", "members removed"),
+                        ("delete_member_days", "inactive days"), ("count", "count")):
+        v = getattr(extra, attr, None)
+        if isinstance(v, int) and not isinstance(v, bool):
+            bits.append(f"{label} {v}")
+    ch = getattr(extra, "channel", None)
+    if isinstance(ch, (discord.abc.GuildChannel, discord.Thread)):
+        bits.append(f"in #{ch.name}")
+    return bits
+
+
+def audit_dict(entry):
+    """One audit-log entry as the Audit Log screen shows it - names, not ids."""
+    d = {"when": eventtime.both(entry.created_at),
+         "who": entry.user.display_name if entry.user is not None else "unknown",
+         "what": entry.action.name, "target": _audit_target(entry),
+         "reason": entry.reason or None, "changes": _audit_changes(entry)}
+    extra = _audit_extra(entry)
+    if extra:
+        d["extra"] = extra
+    return d
+
+
+@action("read_audit_log", identity.READ,
+        "A server's audit log (Server Settings > Audit Log), newest first: when (Caz's "
+        "local time, America/Detroit, and UTC), who did it, what (the action's name, "
+        "like channel_update, kick, ban, role_update or guild_update), the target, the "
+        "reason, and a short before -> after of what changed. Filter by action_type "
+        "and/or by who did it (user_id).",
+        {"guild_id": {"type": "int", "required": True},
+         "limit": {"type": "int", "desc": "How many entries (default 20, max 100)"},
+         "user_id": {"type": "int", "desc": "Only entries made by this user"},
+         "action_type": {"type": "str",
+                         "desc": "Only this kind of entry: an audit-log action name "
+                                 "like channel_update, kick, ban, member_role_update, "
+                                 "role_update, guild_update, invite_create, "
+                                 "message_delete or automod_rule_create"}},
+        needs_guild=True, taints=True)
+async def _read_audit_log(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    act = _audit_action(p["action_type"]) if p.get("action_type") else None
+    if not g.me.guild_permissions.view_audit_log:
+        raise ActionError(f"this bot lacks View Audit Log in {g.name}, so it can't read "
+                          "the audit log - give its role View Audit Log (or "
+                          "Administrator) first.")
+    limit = max(1, min(int(p.get("limit") or 20), AUDIT_MAX))
+    kw = {"limit": limit, "oldest_first": False}
+    if p.get("user_id"):
+        kw["user"] = discord.Object(id=int(p["user_id"]))
+    if act is not None:
+        kw["action"] = act
+    entries = [audit_dict(e) async for e in g.audit_logs(**kw)]
+    out = {"guild": g.name, "count": len(entries),
+           "filter": {"action_type": act.name if act is not None else None,
+                      "by_user": bool(p.get("user_id"))},
+           "entries": entries}
+    if not entries:
+        out["message"] = f"No audit-log entries in {g.name} match."
+    return out
+
+
+BANS_MAX = 1000
+
+
+@action("list_bans", identity.READ,
+        "Who is banned from a server (Server Settings > Bans): each user's display name, "
+        "username and user_id (unban_member takes it), and the reason given for the ban.",
+        {"guild_id": {"type": "int", "required": True},
+         "limit": {"type": "int", "desc": "How many (default 50, max 1000)"}},
+        needs_guild=True, taints=True)
+async def _list_bans(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.ban_members:
+        raise ActionError(f"this bot lacks Ban Members in {g.name}, so it can't read the "
+                          "ban list - give its role Ban Members (or Administrator) first.")
+    limit = max(1, min(int(p.get("limit") or 50), BANS_MAX))
+    bans = [{"name": b.user.display_name, "username": b.user.name,
+             "user_id": b.user.id, "reason": b.reason or None}
+            async for b in g.bans(limit=limit)]
+    out = {"guild": g.name, "count": len(bans), "complete": len(bans) < limit,
+           "bans": bans}
+    if not bans:
+        out["message"] = f"No bans in {g.name}."
+    return out
+
+
+def _invite_expires(inv):
+    """When an invite runs out, or None for never. Discord's list gives the age
+    limit and the creation time; expires_at is only on a single fetch."""
+    if not inv.max_age:
+        return None
+    if inv.expires_at is not None:
+        return inv.expires_at
+    if inv.created_at is not None:
+        return inv.created_at + timedelta(seconds=inv.max_age)
+    return None
+
+
+def invite_dict(inv, vanity=False):
+    """One invite as the Invites screen shows it - the inviter by name, no ids of
+    people. max_uses 0 means unlimited; expires "never" means no age limit."""
+    ch = inv.channel
+    exp = _invite_expires(inv)
+    return {"code": inv.code, "url": inv.url,
+            "channel": f"#{ch.name}" if getattr(ch, "name", None) else None,
+            "channel_id": getattr(ch, "id", None),
+            "inviter": inv.inviter.display_name if inv.inviter is not None else None,
+            "uses": inv.uses or 0, "max_uses": inv.max_uses or 0,
+            "expires": eventtime.both(exp) if exp is not None else "never",
+            "temporary": bool(inv.temporary),
+            "created": eventtime.both(inv.created_at), "vanity": vanity}
+
+
+def _invites_can(g, what):
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(f"this bot lacks Manage Server in {g.name}, so it can't {what} "
+                          "- give its role Manage Server (or Administrator) first.")
+
+
+async def _invites_fetch(g):
+    return await asyncio.wait_for(g.invites(), LOOK_TIMEOUT)
+
+
+@action("list_invites", identity.READ,
+        "A server's active invites (Server Settings > Invites): code and link, channel, "
+        "who made it, uses / max_uses (0 = unlimited), when it expires (Caz's local "
+        "time, America/Detroit, and UTC - or never), whether it grants temporary "
+        "membership, and when it was made; plus the vanity link if the server has one.",
+        {"guild_id": {"type": "int", "required": True},
+         "channel_id": {"type": "int", "desc": "Only invites to this channel"}},
+        needs_guild=True, taints=True)
+async def _list_invites(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _invites_can(g, "read its invites")
+    only = None
+    if p.get("channel_id"):
+        only = g.get_channel(int(p["channel_id"]))
+        if only is None:
+            raise ActionError(f"channel_id: there's no channel {p['channel_id']} in "
+                              f"{g.name} that this bot can see.")
+    invites = [i for i in await _invites_fetch(g)
+               if only is None or getattr(i.channel, "id", None) == only.id]
+    invites.sort(key=lambda i: (i.created_at or datetime.min.replace(tzinfo=timezone.utc)),
+                 reverse=True)
+    rows = [invite_dict(i) for i in invites]
+    if "VANITY_URL" in (getattr(g, "features", None) or ()):
+        try:
+            v = await asyncio.wait_for(g.vanity_invite(), LOOK_TIMEOUT)
+        except Exception:  # noqa: BLE001 - no vanity link (or none readable) is quiet
+            v = None
+        if v is not None and (only is None or getattr(v.channel, "id", None) == only.id):
+            rows.insert(0, invite_dict(v, vanity=True))
+    out = {"guild": g.name, "count": len(rows), "invites": rows}
+    if only is not None:
+        out["channel"] = f"#{only.name}"
+    if not rows:
+        out["message"] = (f"No active invites in {g.name}"
+                          + (f" to #{only.name}." if only is not None else "."))
+    return out
+
+
+# --- AutoMod (INTENT 60, Stage 8 D) -------------------------------------------
+#
+# Discord's limits, from its API docs (docs.discord.com/developers/resources/
+# auto-moderation, read 2026-10-31): rules per server by trigger - keyword 6,
+# spam 1, keyword_preset 1, mention_spam 1, member_profile 1. Per rule:
+# keyword_filter 1000 strings of up to 60 characters, regex_patterns 10 of up to
+# 260, allow_list 100 of up to 60 (keyword_preset: 1000), mention_total_limit 50,
+# exempt_roles 20, exempt_channels 50. Actions: block_message's custom message up
+# to 150 characters; a timeout up to 2419200 seconds (4 weeks), only on keyword
+# and mention_spam rules, and it needs Moderate Members. discord.py 2.7.1's
+# AutoModTrigger docstring carries the same per-rule list numbers.
+
+_AM_TRIGGERS = ("keyword", "keyword_preset", "spam", "mention_spam", "member_profile")
+_AM_RULE_CAP = {"keyword": 6, "spam": 1, "keyword_preset": 1, "mention_spam": 1,
+                "member_profile": 1}
+_AM_PRESETS = ("profanity", "sexual_content", "slurs")
+_AM_EXEMPT_ROLES_MAX = 20
+_AM_EXEMPT_CHANNELS_MAX = 50
+_AM_TRIGGER_WORDS = {
+    "keyword": "messages with these words or patterns",
+    "keyword_preset": "messages with words from Discord's own lists",
+    "spam": "messages Discord judges to be spam",
+    "mention_spam": "messages with too many mentions",
+    "member_profile": "member names and profiles with these words or patterns",
+    "harmful_link": "messages with harmful links"}
+
+
+def _am_kind(rule):
+    return rule.trigger.type.name
+
+
+def _am_can(g, what):
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(f"this bot lacks Manage Server in {g.name}, so it can't {what} "
+                          "- give its role Manage Server (or Administrator) first.")
+
+
+async def _am_rules(g):
+    """Every AutoMod rule as Discord holds it now. discord.py documents NotFound
+    for a server with none; that is an empty list, not an error."""
+    try:
+        return await asyncio.wait_for(g.fetch_automod_rules(), LOOK_TIMEOUT)
+    except discord.NotFound:
+        return []
+
+
+def _am_span(secs):
+    secs = int(secs)
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size and secs % size == 0:
+            return f"{secs // size}{unit}"
+    return f"{secs}s"
+
+
+def _am_vals(rule):
+    """A rule as the create/edit parameters that would make it - one shape for the
+    preview, the backup's `restore` and the read-back."""
+    kind, tr = _am_kind(rule), rule.trigger
+    v = {"name": rule.name, "trigger": kind, "enabled": bool(rule.enabled),
+         "keywords": [], "regex_patterns": [], "allow_list": [], "presets": [],
+         "mention_limit": 0, "mention_raid_protection": False,
+         "block": False, "custom_message": "", "alert": 0, "timeout": 0,
+         "exempt_roles": sorted(rule.exempt_role_ids),
+         "exempt_channels": sorted(rule.exempt_channel_ids)}
+    if kind in ("keyword", "member_profile"):
+        v.update(keywords=list(tr.keyword_filter), regex_patterns=list(tr.regex_patterns),
+                 allow_list=list(tr.allow_list))
+    elif kind == "keyword_preset":
+        v.update(presets=[n for n in _AM_PRESETS if getattr(tr.presets, n)],
+                 allow_list=list(tr.allow_list))
+    elif kind == "mention_spam":
+        v.update(mention_limit=int(tr.mention_limit or 0),
+                 mention_raid_protection=bool(tr.mention_raid_protection))
+    for a in rule.actions:
+        t = a.type.name
+        if t in ("block_message", "block_member_interactions"):
+            v["block"] = True
+            if a.custom_message:
+                v["custom_message"] = a.custom_message
+        elif t == "send_alert_message":
+            v["alert"] = int(a.channel_id or 0)
+        elif t == "timeout" and a.duration is not None:
+            v["timeout"] = int(a.duration.total_seconds())
+    return v
+
+
+def _am_params(v):
+    """_am_vals as the parameters create_automod_rule takes - what a backup's
+    `restore` holds."""
+    out = {"name": v["name"], "trigger": v["trigger"], "enabled": v["enabled"],
+           "block_message": v["block"]}
+    for key in ("keywords", "regex_patterns", "allow_list", "presets"):
+        if v[key]:
+            out[key] = list(v[key])
+    if v["mention_limit"]:
+        out["mention_limit"] = v["mention_limit"]
+    if v["custom_message"]:
+        out["custom_message"] = v["custom_message"]
+    if v["alert"]:
+        out["alert_channel_id"] = str(v["alert"])
+    if v["timeout"]:
+        out["timeout_seconds"] = v["timeout"]
+    if v["exempt_roles"]:
+        out["exempt_role_ids"] = list(v["exempt_roles"])
+    if v["exempt_channels"]:
+        out["exempt_channel_ids"] = list(v["exempt_channels"])
+    return out
+
+
+def _am_ch_name(g, cid):
+    ch = g.get_channel(int(cid)) if cid else None
+    return f"#{ch.name}" if ch is not None else None
+
+
+def automod_dict(g, rule):
+    """One AutoMod rule as the AutoMod screen shows it: what it matches, what it
+    does, who it spares, who made it (by name)."""
+    v, kind = _am_vals(rule), _am_kind(rule)
+    d = {"id": rule.id, "name": rule.name, "enabled": v["enabled"], "trigger": kind,
+         "event": rule.event_type.name}
+    if kind in ("keyword", "member_profile"):
+        d.update(keywords=v["keywords"], regex_patterns=v["regex_patterns"],
+                 allow_list=v["allow_list"])
+    elif kind == "keyword_preset":
+        d.update(presets=v["presets"], allow_list=v["allow_list"])
+    elif kind == "mention_spam":
+        d.update(mention_limit=v["mention_limit"],
+                 mention_raid_protection=v["mention_raid_protection"])
+    actions = []
+    for a in rule.actions:
+        t = a.type.name
+        one = {"type": t}
+        if t == "block_message" and a.custom_message:
+            one["custom_message"] = a.custom_message
+        elif t == "send_alert_message":
+            one.update(channel=_am_ch_name(g, a.channel_id), channel_id=a.channel_id)
+        elif t == "timeout" and a.duration is not None:
+            secs = int(a.duration.total_seconds())
+            one.update(seconds=secs, duration=_am_span(secs))
+        actions.append(one)
+    d["actions"] = actions
+    d["exempt_roles"] = [{"id": rid, "name": getattr(g.get_role(rid), "name", None)}
+                         for rid in v["exempt_roles"]]
+    d["exempt_channels"] = [{"id": cid, "name": _am_ch_name(g, cid)}
+                            for cid in v["exempt_channels"]]
+    creator = g.get_member(rule.creator_id)
+    d["creator"] = creator.display_name if creator is not None else None
+    return d
+
+
+def _am_slots(rules):
+    used = {k: 0 for k in _AM_TRIGGERS}
+    for r in rules:
+        k = _am_kind(r)
+        if k in used:
+            used[k] += 1
+    return {k: {"used": used[k], "limit": _AM_RULE_CAP[k]} for k in _AM_TRIGGERS}
+
+
+@action("list_automod_rules", identity.READ,
+        "A server's AutoMod rules (Server Settings > AutoMod): each rule's id, name, "
+        "whether it's on, its trigger (keyword, keyword_preset, spam, mention_spam or "
+        "member_profile) and what it matches - keywords, regex patterns, allow list, "
+        "Discord's word-list presets or a mention limit - its actions (block the "
+        "message, with an optional note to the sender; post an alert in a channel; time "
+        "the member out; or block a member's interactions), the exempt roles and "
+        "channels, and who made it; plus how many of Discord's rule slots each trigger "
+        "uses.",
+        {"guild_id": {"type": "int", "required": True}},
+        needs_guild=True, taints=True)
+async def _list_automod_rules(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "read its AutoMod rules")
+    rules = sorted(await _am_rules(g), key=lambda r: r.id)
+    out = {"guild": g.name, "count": len(rules), "slots": _am_slots(rules),
+           "rules": [automod_dict(g, r) for r in rules]}
+    if not rules:
+        out["message"] = f"No AutoMod rules in {g.name}."
+    return out
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "
@@ -2311,19 +2791,25 @@ def _overwrite_state(ow):
 
 
 @action("set_channel_permissions", identity.MANAGE,
-        "Allow or deny specific permissions for one role in one channel (a channel "
-        "overwrite). Merges onto whatever overwrite the role already has, so naming "
-        "one permission leaves the others alone; `reset` drops the overwrite entirely "
-        "and the channel falls back to the role's server-wide permissions.",
+        "Allow or deny specific permissions for one role, or one member, in one channel "
+        "(a channel overwrite) - give role_id or user_id, not both. Merges onto whatever "
+        "overwrite the role or member already has, so naming one permission leaves the "
+        "others alone; `reset` drops the overwrite entirely and the channel falls back "
+        "to the server-wide permissions. For a member the allows are applied first and "
+        "read back from Discord before any deny is applied, and the result shows what "
+        "Discord read after each step.",
         {"channel_id": {"type": "int", "required": True},
-         "role_id": {"type": "int", "required": True,
+         "role_id": {"type": "int",
                      "desc": "Role to set the overwrite for (list_roles has the ids)"},
+         "user_id": {"type": "int",
+                     "desc": "Or one member to set it for instead of a role (find_user "
+                             "has the ids)"},
          "allow": {"type": "list",
                    "desc": "Permission names to allow, e.g. ['view_channel', 'send_messages']"},
          "deny": {"type": "list", "desc": "Permission names to deny, same spelling"},
          "reset": {"type": "bool",
-                   "desc": "Remove this role's overwrite here, back to the server "
-                           "default. Ignores allow/deny."},
+                   "desc": "Remove this role's (or member's) overwrite here, back to the "
+                           "server default. Ignores allow/deny."},
          "reason": {"type": "str"}},
         outward=True, taints=True)
 async def _set_channel_permissions(ctx, p):
@@ -2335,6 +2821,15 @@ async def _set_channel_permissions(ctx, p):
             "categories can. A thread inherits its parent channel's, so set them "
             "on the parent instead."
         )
+    has_role, has_user = p.get("role_id") is not None, p.get("user_id") is not None
+    if has_role and has_user:
+        raise ActionError("give role_id or user_id, not both - one overwrite is set per "
+                          "call, for a role or for one member.")
+    if not has_role and not has_user:
+        raise ActionError("say whose overwrite this is: role_id for a role, or user_id "
+                          "for one member.")
+    if has_user:
+        return await _member_overwrite(ctx, ch, g, p)
     role = g.get_role(int(p["role_id"]))
     if role is None:
         raise ActionError(f"no role {p['role_id']} in {g.name} - list_roles has the ids")
@@ -2393,6 +2888,150 @@ async def _set_channel_permissions(ctx, p):
             "before": before, "after": _overwrite_state(ow),
             "message": (f"**{role.name}** in **#{ch.name}** ({g.name}): "
                         + " and ".join(bits) + ".")}
+
+
+# --- one member's overwrite (INTENT 60, Stage 8 D) --------------------------
+#
+# Stage 7's trap rule, kept exactly: apply the allows FIRST, read the overwrite
+# back from Discord and check it holds them, and only then send any deny. A deny
+# that lands before its allow can lock a member - or this bot itself - out of a
+# channel, and from the bot side that is not recoverable (the 38-refusal
+# incident, 2026-08-21). The role path above sets both halves in one call, as it
+# always has; one call per target is atomic for that target.
+
+_SELF_LOCK = frozenset(_perm_key(n) for n in ("view_channel", "manage_permissions"))
+
+
+async def _overwrite_read(g, ch, target, what):
+    """The target's overwrite as Discord holds it now - a fresh fetch, not the
+    cache and not what was sent."""
+    try:
+        fresh = await asyncio.wait_for(g.fetch_channel(ch.id), LOOK_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        raise ActionError(f"{what} went to Discord, but I couldn't read #{ch.name}'s "
+                          f"overwrite back ({type(e).__name__}) - check channel_info "
+                          "before changing anything else.")
+    return _overwrite_state(fresh.overwrites_for(target))
+
+
+def _ow_words(state):
+    """An overwrite as a person reads it, in Discord's own permission names (the
+    data keeps discord.py's, which says read_messages for view_channel)."""
+    def words(names):
+        return ", ".join(sorted(_PERM_BY_BIT.get(discord.Permissions.VALID_FLAGS[n], n)
+                                for n in names))
+    bits = []
+    if state["allow"]:
+        bits.append("allows " + words(state["allow"]))
+    if state["deny"]:
+        bits.append("denies " + words(state["deny"]))
+    return "; ".join(bits) or "no overwrite"
+
+
+async def _member_overwrite(ctx, ch, g, p):
+    m = await ctx.member(g.id, p["user_id"])
+    if not ch.permissions_for(g.me).manage_permissions:
+        raise ActionError(
+            f"this bot lacks Manage Permissions in #{ch.name}, so it cannot change "
+            "overwrites there. Note Discord also refuses to let a bot grant a "
+            "permission it does not hold itself."
+        )
+    reason = p.get("reason") or VIA
+    who = m.display_name
+    before = _overwrite_state(ch.overwrites_for(m))
+    base = {"channel": ch.name, "channel_id": ch.id, "member": who, "user_id": m.id,
+            "before": before}
+
+    if p.get("reset"):
+        had = before["allow"] or before["deny"]
+        await ch.set_permissions(m, overwrite=None, reason=reason)
+        now = await _overwrite_read(g, ch, m, "The reset")
+        out = {"status": "reset", **base, "after": now,
+               "message": (f"Cleared **{who}**'s overwrite in **#{ch.name}** ({g.name}) "
+                           "- they now have the permissions their roles give them."
+                           if had else
+                           f"**{who}** already had no overwrite in **#{ch.name}** "
+                           f"({g.name}) - nothing to clear.")}
+        if now["allow"] or now["deny"]:
+            out["warning"] = (f"Discord still reads an overwrite for {who} in "
+                              f"#{ch.name}: {_ow_words(now)} - check channel_info.")
+        return out
+
+    allow, allow_keys = _perm_list(p.get("allow"), "allow")
+    deny, deny_keys = _perm_list(p.get("deny"), "deny")
+    if not allow and not deny:
+        raise ActionError("nothing to change - pass `allow`, `deny`, or reset=true")
+    clash = sorted(set(allow_keys) & set(deny_keys))
+    if clash:
+        pairs = ", ".join(
+            allow_keys[k] if allow_keys[k] == deny_keys[k]
+            else f"{allow_keys[k]}/{deny_keys[k]} (the same permission)" for k in clash)
+        raise ActionError(f"cannot allow and deny the same permission: {pairs}")
+    mine = ch.permissions_for(g.me)
+    lacking = [n for n in allow if not getattr(mine, n)]
+    if lacking:
+        raise ActionError(f"this bot doesn't hold {', '.join(lacking)} in #{ch.name} "
+                          "itself, and Discord won't let it grant a member a permission "
+                          "it lacks. Nothing was changed.")
+    if m.id == g.me.id and not g.me.guild_permissions.administrator:
+        cut = [n for n in deny if _perm_key(n) in _SELF_LOCK]
+        if cut:
+            raise ActionError(f"denying this bot its own {', '.join(cut)} in #{ch.name} "
+                              "would lock it out of that channel's overwrites, so it "
+                              "won't. Nothing was changed.")
+
+    steps, state = [], before
+    if allow:
+        ow = ch.overwrites_for(m)          # merge onto what is there
+        for n in allow:
+            setattr(ow, n, True)
+        await ch.set_permissions(m, overwrite=ow, reason=reason)
+        state = await _overwrite_read(g, ch, m, "The allow")
+        ctx.log(f"set_channel_permissions #{ch.name} member {m}: step 1 allows applied, "
+                f"read back: {state}")
+        steps.append(f"1. allowed {', '.join(allow)} - Discord reads: {_ow_words(state)}")
+        missing = [n for n in allow if _perm_key(n) not in state["allow"]]
+        if missing:
+            raise ActionError(f"Discord took the allow for {who} in #{ch.name}, but the "
+                              f"overwrite it reads back doesn't allow "
+                              f"{', '.join(missing)}, so the deny was NOT applied - "
+                              "check channel_info.")
+    if deny:
+        ow = discord.PermissionOverwrite(**{k: True for k in state["allow"]},
+                                         **{k: False for k in state["deny"]})
+        for n in deny:
+            setattr(ow, n, False)
+        try:
+            await ch.set_permissions(m, overwrite=ow, reason=reason)
+        except discord.HTTPException as e:
+            if not allow:
+                raise
+            text = " ".join((getattr(e, "text", None) or str(e) or "").split()).rstrip(".")
+            raise ActionError(f"the allows for {who} in #{ch.name} landed and read back "
+                              f"({_ow_words(state)}), but Discord refused the deny: "
+                              f"{text or 'it gave no reason'}. The deny was not applied.")
+        state = await _overwrite_read(g, ch, m, "The deny")
+        ctx.log(f"set_channel_permissions #{ch.name} member {m}: step {len(steps) + 1} "
+                f"denies applied, read back: {state}")
+        steps.append(f"{len(steps) + 1}. denied {', '.join(deny)} - Discord reads: "
+                     f"{_ow_words(state)}")
+
+    bits = []
+    if allow:
+        bits.append("allowed " + ", ".join(f"`{n}`" for n in allow))
+    if deny:
+        bits.append("denied " + ", ".join(f"`{n}`" for n in deny))
+    out = {"status": "permissions_set", **base, "allowed": allow, "denied": deny,
+           "after": state, "steps": steps,
+           "message": (f"**{who}** in **#{ch.name}** ({g.name}): " + " and ".join(bits)
+                       + (" - the allows were applied and read back before the deny."
+                          if allow and deny else "."))}
+    off = ([n for n in allow if _perm_key(n) not in state["allow"]]
+           + [n for n in deny if _perm_key(n) not in state["deny"]])
+    if off:
+        out["warning"] = (f"Discord's overwrite afterwards doesn't match the request for "
+                          f"{', '.join(off)} - check channel_info.")
+    return out
 
 
 @action("create_invite", identity.MANAGE, "Create an invite link to a channel.",
@@ -4568,6 +5207,701 @@ async def _move_role(ctx, p):
     return out
 
 
+# --- invites (INTENT 60, Stage 8 D) --------------------------------------------
+
+_INVITE_CODE = re.compile(r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite/|"
+                          r"discord\.gg/)?([A-Za-z0-9-]{2,32})/?")
+
+
+def _invite_code(raw):
+    m = _INVITE_CODE.fullmatch(str(raw).strip())
+    if not m:
+        raise ActionError(f"code: {raw!r} doesn't look like an invite code - "
+                          "list_invites has them.")
+    return m.group(1)
+
+
+async def _invite_find(ctx, g, code):
+    """The server's own invite with exactly this code, or one plain sentence on
+    why there isn't one. Codes are case-sensitive, so the match is exact."""
+    for inv in await _invites_fetch(g):
+        if inv.code == code:
+            return inv
+    if code == getattr(g, "vanity_url_code", None):
+        raise ActionError(f"{code} is {g.name}'s vanity link, which isn't revoked like "
+                          "an invite - it's changed in Server Settings.")
+    try:
+        other = await asyncio.wait_for(ctx.client.fetch_invite(code), LOOK_TIMEOUT)
+    except Exception:  # noqa: BLE001 - unknown, expired or unreadable: all "not here"
+        other = None
+    gid = getattr(getattr(other, "guild", None), "id", None)
+    if gid is not None and gid != g.id:
+        raise ActionError(f"invite {code} belongs to another server, not {g.name} - "
+                          "this bot only revokes a server's own invites.")
+    raise ActionError(f"there's no active invite {code} in {g.name} - list_invites has "
+                      "the codes (an expired or used-up invite is already gone).")
+
+
+@action("revoke_invite", identity.MANAGE,
+        "Revoke one of a server's invites so its link stops working (Server Settings > "
+        "Invites). A revoked invite can't be brought back with the same code - "
+        "create_invite makes a new one. The preview shows the invite's channel, maker, "
+        "uses and expiry; its details are saved first and the result is the invite "
+        "list Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "code": {"type": "str", "required": True,
+                  "desc": "The invite's code (list_invites), or its discord.gg link"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, always_confirm=True, taints=True)
+async def _revoke_invite(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _invites_can(g, "revoke its invites")
+    code = _invite_code(p["code"])
+    inv = await _invite_find(ctx, g, code)
+    facts = invite_dict(inv)
+    where = facts["channel"] or "an unknown channel"
+    if ctx.dry_run:
+        exp = _invite_expires(inv)
+        lines = [f"Channel: {where}",
+                 f"Made by: {facts['inviter'] or 'unknown'}",
+                 (f"Uses: {facts['uses']} of {facts['max_uses']}" if facts["max_uses"]
+                  else f"Uses: {facts['uses']} (no limit)"),
+                 f"Expires: {eventtime.line(exp) if exp is not None else 'never'}",
+                 f"Temporary membership: {'yes' if facts['temporary'] else 'no'}",
+                 "Its link stops working at once. A revoked invite can't be restored "
+                 "with the same code - create_invite makes a new one.",
+                 "Its details are saved first."]
+        return {"summary": f"Revoke invite **{code}** to **{where}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"invite-{code}",
+        {"invite": facts,
+         # create_invite with these makes a NEW invite to the same place.
+         "remake": {"channel_id": facts["channel_id"], "max_age_seconds": inv.max_age or 0,
+                    "max_uses": facts["max_uses"]}},
+        f"the invite {code}'s details")
+    await _settings_call(inv.delete(reason=p.get("reason") or VIA), "invite revoke",
+                         "list_invites")
+    left = [i.code for i in await _invites_fetch(g)]
+    out = {"status": "invite_revoked", "guild": g.name, "code": code, "channel": where,
+           "gone": code not in left, "invites_left": len(left), "backup": saved}
+    if code in left:
+        out["warning"] = (f"Discord took the revoke, but its invite list still shows "
+                          f"{code} - check list_invites.")
+    return out
+
+
+# --- AutoMod rules: make and change (INTENT 60, Stage 8 D) ---------------------
+#
+# One plan for both verbs: the rule as create/edit parameters (_am_vals' shape),
+# checked WHOLE against Discord's rules before anything is sent, then built into
+# discord.py's own AutoModTrigger / AutoModRuleAction objects. Discord's limits
+# are cited above list_automod_rules.
+
+_AM_MESSAGE_MAX = 150
+_AM_TIMEOUT_MAX = 2419200          # 28 days
+_AM_MENTION_MAX = 50
+_AM_LIST_CAPS = {"keywords": (1000, 60), "regex_patterns": (10, 260)}
+_AM_FITS = {"keywords": ("keyword", "member_profile"),
+            "regex_patterns": ("keyword", "member_profile"),
+            "allow_list": ("keyword", "keyword_preset", "member_profile"),
+            "presets": ("keyword_preset",), "mention_limit": ("mention_spam",)}
+_AM_LISTS = ("keywords", "regex_patterns", "allow_list")
+_AM_ORDER = ("name", "enabled", "keywords", "regex_patterns", "allow_list", "presets",
+             "mention_limit", "block", "custom_message", "alert", "timeout",
+             "exempt_roles", "exempt_channels")
+_AM_LABELS = {"name": "Name", "enabled": "Enabled", "keywords": "Keywords",
+              "regex_patterns": "Regex patterns", "allow_list": "Allow list",
+              "presets": "Word lists", "mention_limit": "Mention limit",
+              "block": "Block", "custom_message": "Note to the sender",
+              "alert": "Alert channel", "timeout": "Timeout",
+              "exempt_roles": "Exempt roles", "exempt_channels": "Exempt channels"}
+# parameter -> the plan's key
+_AM_PARAM_KEYS = {"name": "name", "enabled": "enabled", "keywords": "keywords",
+                  "regex_patterns": "regex_patterns", "allow_list": "allow_list",
+                  "presets": "presets", "mention_limit": "mention_limit",
+                  "block_message": "block", "custom_message": "custom_message",
+                  "alert_channel_id": "alert", "timeout_seconds": "timeout",
+                  "exempt_role_ids": "exempt_roles",
+                  "exempt_channel_ids": "exempt_channels"}
+
+
+def _am_trigger(raw):
+    w = re.sub(r"[\s-]+", "_", str(raw).strip().lower())
+    if w not in _AM_TRIGGERS:
+        raise ActionError(f"trigger is one of {', '.join(_AM_TRIGGERS)}, and {raw!r} "
+                          "isn't one of those.")
+    return w
+
+
+def _am_strs(raw, field):
+    out = []
+    for item in raw or []:
+        if isinstance(item, bool) or not isinstance(item, (str, int, float)):
+            raise ActionError(f'{field} is a list of plain words or phrases, like '
+                              f'["word", "two words"] - {item!r} isn\'t one.')
+        t = str(item).strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _am_ids(raw, field):
+    out = []
+    for item in raw or []:
+        try:
+            n = int(item)
+        except (TypeError, ValueError):
+            raise ActionError(f"{field} takes ids - {item!r} isn't one.")
+        if n not in out:
+            out.append(n)
+    return sorted(out)
+
+
+def _am_apply(v, p):
+    """The plan `v` with every parameter `p` names applied; (plan, the plan keys
+    given). Types and spellings only - what fits which trigger is _am_check's."""
+    v = {k: (list(x) if isinstance(x, list) else x) for k, x in v.items()}
+    given = set()
+    for param, key in _AM_PARAM_KEYS.items():
+        if p.get(param) is None:
+            continue
+        raw = p[param]
+        given.add(key)
+        if key == "name":
+            v[key] = " ".join(str(raw).split())
+        elif key in ("enabled", "block"):
+            v[key] = bool(raw)
+        elif key in _AM_LISTS:
+            v[key] = _am_strs(raw, param)
+        elif key == "presets":
+            out = []
+            for item in raw or []:
+                w = re.sub(r"[\s-]+", "_", str(item).strip().lower())
+                if w not in _AM_PRESETS:
+                    raise ActionError(f"presets: {item!r} isn't one of Discord's word "
+                                      "lists - they are profanity, sexual_content and "
+                                      "slurs.")
+                if w not in out:
+                    out.append(w)
+            v[key] = [n for n in _AM_PRESETS if n in out]
+        elif key == "mention_limit":
+            v[key] = int(raw)
+        elif key == "custom_message":
+            text = str(raw).strip()
+            v[key] = "" if text.lower() in ("", "none") else text
+        elif key == "alert":
+            text = str(raw).strip().lower()
+            if text in _CLEAR_WORDS:
+                v[key] = 0
+            else:
+                try:
+                    v[key] = int(text)
+                except ValueError:
+                    raise ActionError(f"alert_channel_id takes a channel id, or none to "
+                                      f"drop the alert - {raw!r} is neither.")
+        elif key == "timeout":
+            v[key] = int(raw)
+        else:                                   # exempt roles / channels
+            v[key] = _am_ids(raw, param)
+    return v, given
+
+
+def _am_check(ctx, g, v, rules, rule=None):
+    """Refuse, whole and in one sentence, anything Discord would turn down - or a
+    rule that would do nothing. `rule` is the one being edited (None = new)."""
+    kind = v["trigger"]
+    if not v["name"]:
+        raise ActionError("name can't be empty - a rule needs a name.")
+    for field, fits in _AM_FITS.items():
+        if v[field] and kind not in fits:
+            why = ("a spam rule uses Discord's own spam detection and takes no list"
+                   if kind == "spam" else
+                   f"{field} fits {' and '.join(fits)} rules")
+            raise ActionError(f"{field} doesn't fit a {kind} rule - {why}.")
+    for field, (cap, longest) in _AM_LIST_CAPS.items():
+        _am_cap_list(v[field], field, cap, longest)
+    _am_cap_list(v["allow_list"], "allow_list", 1000 if kind == "keyword_preset" else 100,
+                 60)
+    if kind in ("keyword", "member_profile") and not (v["keywords"] or v["regex_patterns"]):
+        raise ActionError(f"a {kind} rule needs at least one keyword or regex pattern to "
+                          "match.")
+    if kind == "keyword_preset" and not v["presets"]:
+        raise ActionError("a keyword_preset rule needs at least one of Discord's word "
+                          "lists: profanity, sexual_content or slurs.")
+    if kind == "mention_spam" and not 1 <= v["mention_limit"] <= _AM_MENTION_MAX:
+        raise ActionError(f"a mention_spam rule needs mention_limit, 1 to "
+                          f"{_AM_MENTION_MAX} mentions per message.")
+    if v["custom_message"]:
+        if kind == "member_profile":
+            raise ActionError("custom_message is shown to someone whose message was "
+                              "blocked, and a member_profile rule blocks members, not "
+                              "messages.")
+        if not v["block"]:
+            raise ActionError("custom_message needs block_message on - it's what the "
+                              "sender sees when their message is blocked.")
+        if len(v["custom_message"]) > _AM_MESSAGE_MAX:
+            raise ActionError(f"custom_message is {len(v['custom_message'])} characters, "
+                              f"and Discord allows {_AM_MESSAGE_MAX}.")
+    if v["timeout"]:
+        if not 1 <= v["timeout"] <= _AM_TIMEOUT_MAX:
+            raise ActionError(f"timeout_seconds has to be 1 to {_AM_TIMEOUT_MAX} (28 "
+                              "days), or 0 for no timeout.")
+        if kind not in ("keyword", "mention_spam"):
+            raise ActionError(f"a timeout only goes on keyword and mention_spam rules - "
+                              f"Discord doesn't allow one on a {kind} rule.")
+        if not g.me.guild_permissions.moderate_members:
+            raise ActionError(f"a timeout needs this bot to hold Timeout Members in "
+                              f"{g.name}, and it doesn't.")
+    if v["alert"]:
+        ch = g.get_channel(v["alert"])
+        if ch is None:
+            other = ctx.client.get_channel(v["alert"])
+            if other is not None and getattr(other, "guild", None) is not None:
+                raise ActionError(f"alert_channel_id: channel {v['alert']} belongs to "
+                                  f"another server, not {g.name}.")
+            raise ActionError(f"alert_channel_id: there's no channel {v['alert']} in "
+                              f"{g.name} that this bot can see.")
+        if not isinstance(ch, discord.TextChannel):
+            raise ActionError(f"alert_channel_id: alerts post in a text channel, and "
+                              f"#{ch.name} is a {_type_word(ch)} channel.")
+    if not (v["block"] or v["alert"] or v["timeout"]):
+        raise ActionError("a rule with no action does nothing - turn block_message on, or "
+                          "give alert_channel_id or timeout_seconds.")
+    for rid in v["exempt_roles"]:
+        if g.get_role(rid) is None:
+            raise ActionError(f"exempt_role_ids: there's no role {rid} in {g.name} - "
+                              "list_roles has the ids.")
+    if len(v["exempt_roles"]) > _AM_EXEMPT_ROLES_MAX:
+        raise ActionError(f"exempt_role_ids has {len(v['exempt_roles'])} roles, and "
+                          f"Discord allows {_AM_EXEMPT_ROLES_MAX} on one rule.")
+    for cid in v["exempt_channels"]:
+        if g.get_channel(cid) is None:
+            raise ActionError(f"exempt_channel_ids: there's no channel {cid} in {g.name} "
+                              "that this bot can see.")
+    if len(v["exempt_channels"]) > _AM_EXEMPT_CHANNELS_MAX:
+        raise ActionError(f"exempt_channel_ids has {len(v['exempt_channels'])} channels, "
+                          f"and Discord allows {_AM_EXEMPT_CHANNELS_MAX} on one rule.")
+    others = [r for r in rules if rule is None or r.id != rule.id]
+    if any(r.name.strip().lower() == v["name"].lower() for r in others):
+        raise ActionError(f'{g.name} already has an AutoMod rule named "{v["name"]}" - '
+                          "pick another name.")
+    if rule is None:
+        same = sum(1 for r in rules if _am_kind(r) == kind)
+        if same >= _AM_RULE_CAP[kind]:
+            raise ActionError(f"{g.name} already has {same} of {_AM_RULE_CAP[kind]} "
+                              f"{kind} rule(s) Discord allows - edit or delete one "
+                              "first.")
+
+
+def _am_cap_list(items, field, cap, longest):
+    for t in items:
+        if len(t) > longest:
+            raise ActionError(f'{field}: "{t[:30]}..." is {len(t)} characters, and '
+                              f"Discord allows {longest} per entry.")
+    if len(items) > cap:
+        raise ActionError(f"{field} has {len(items)} entries, and Discord allows {cap} on "
+                          "one rule.")
+
+
+def _am_screen(v, given):
+    """policy.screen_params screens string parameters only, so the lists a rule
+    carries - free text every admin of the server reads in its AutoMod settings -
+    go through the same privacy screen here (INTENT 55). A personal term in one
+    is refused rather than rewritten: a rewritten keyword would match something
+    else than what was asked."""
+    for key in _AM_LISTS:
+        if key not in given or not v[key]:
+            continue
+        clean, d = policy.screen_value(list(v[key]))
+        if d.denied or clean != list(v[key]):
+            raise ActionError(f"{key} carries a personal term the privacy screen keeps on "
+                              "this machine, and rewriting it would change what the rule "
+                              "matches - so it isn't sent. Nothing was changed.")
+
+
+def _am_build(v):
+    """The plan as discord.py's objects: (trigger, actions, event type)."""
+    kind = v["trigger"]
+    T = discord.AutoModRuleTriggerType
+    if kind in ("keyword", "member_profile"):
+        trig = discord.AutoModTrigger(type=getattr(T, kind), keyword_filter=v["keywords"],
+                                      regex_patterns=v["regex_patterns"],
+                                      allow_list=v["allow_list"])
+    elif kind == "keyword_preset":
+        trig = discord.AutoModTrigger(
+            type=T.keyword_preset,
+            presets=discord.AutoModPresets(**{n: True for n in v["presets"]}),
+            allow_list=v["allow_list"])
+    elif kind == "mention_spam":
+        trig = discord.AutoModTrigger(type=T.mention_spam, mention_limit=v["mention_limit"],
+                                      mention_raid_protection=v["mention_raid_protection"])
+    else:
+        trig = discord.AutoModTrigger(type=T.spam)
+    A = discord.AutoModRuleActionType
+    actions = []
+    if v["block"]:
+        if kind == "member_profile":
+            actions.append(discord.AutoModRuleAction(type=A.block_member_interactions))
+        else:
+            actions.append(discord.AutoModRuleAction(
+                type=A.block_message, custom_message=v["custom_message"] or None))
+    if v["alert"]:
+        actions.append(discord.AutoModRuleAction(channel_id=v["alert"]))
+    if v["timeout"]:
+        actions.append(discord.AutoModRuleAction(duration=timedelta(seconds=v["timeout"])))
+    event = (discord.AutoModRuleEventType.member_update if kind == "member_profile"
+             else discord.AutoModRuleEventType.message_send)
+    return trig, actions, event
+
+
+def _am_list_words(items, cap=15):
+    if not items:
+        return "none"
+    shown = ", ".join(f'"{x}"' for x in items[:cap])
+    return f"({len(items)}) " + shown + (f" and {len(items) - cap} more"
+                                         if len(items) > cap else "")
+
+
+def _am_words(g, v, key):
+    """One field of a plan as a person reads it."""
+    kind, x = v["trigger"], v[key]
+    if key == "name":
+        return f'"{x}"'
+    if key == "enabled":
+        return "on" if x else "off"
+    if key in _AM_LISTS:
+        return _am_list_words(x)
+    if key == "presets":
+        return ", ".join(x) or "none"
+    if key == "mention_limit":
+        return (f"{x} mentions per message"
+                + (", with raid protection" if v["mention_raid_protection"] else ""))
+    if key == "block":
+        if not x:
+            return "off"
+        return ("block the member from chatting, talking and other interactions until "
+                "their profile passes" if kind == "member_profile" else
+                "block the message")
+    if key == "custom_message":
+        return f'"{x}"' if x else "none"
+    if key == "alert":
+        return (_am_ch_name(g, x) or f"channel {x}") if x else "none"
+    if key == "timeout":
+        return _am_span(x) if x else "none"
+    if key == "exempt_roles":
+        return ", ".join(getattr(g.get_role(r), "name", str(r)) for r in x) or "none"
+    if key == "exempt_channels":
+        return ", ".join(_am_ch_name(g, c) or str(c) for c in x) or "none"
+    return str(x)
+
+
+def _am_action_words(g, v):
+    out = []
+    if v["block"]:
+        out.append(_am_words(g, v, "block")
+                   + (f', telling the sender "{v["custom_message"]}"'
+                      if v["custom_message"] else ""))
+    if v["alert"]:
+        out.append(f"post an alert in {_am_words(g, v, 'alert')}")
+    if v["timeout"]:
+        out.append(f"time the member out for {_am_span(v['timeout'])}")
+    return "; ".join(out) or "none"
+
+
+def _am_lines(g, v):
+    """The whole rule, line by line - the create preview, the delete dry-run."""
+    kind = v["trigger"]
+    lines = [f"Name: {_am_words(g, v, 'name')}",
+             f"Trigger: {kind} - {_AM_TRIGGER_WORDS.get(kind, kind)}"]
+    if kind in ("keyword", "member_profile"):
+        lines += [f"Keywords: {_am_words(g, v, 'keywords')}",
+                  f"Regex patterns: {_am_words(g, v, 'regex_patterns')}",
+                  f"Allow list: {_am_words(g, v, 'allow_list')}"]
+    elif kind == "keyword_preset":
+        lines += [f"Word lists: {_am_words(g, v, 'presets')}",
+                  f"Allow list: {_am_words(g, v, 'allow_list')}"]
+    elif kind == "mention_spam":
+        lines.append(f"Mention limit: {_am_words(g, v, 'mention_limit')}")
+    lines += [f"Actions: {_am_action_words(g, v)}",
+              f"Exempt roles: {_am_words(g, v, 'exempt_roles')}",
+              f"Exempt channels: {_am_words(g, v, 'exempt_channels')}",
+              "Enabled: " + ("yes" if v["enabled"] else
+                             "no - it does nothing until it's turned on")]
+    return lines
+
+
+def _am_exempts(v):
+    return {"exempt_roles": [discord.Object(id=r) for r in v["exempt_roles"]],
+            "exempt_channels": [discord.Object(id=c) for c in v["exempt_channels"]]}
+
+
+async def _am_read_back(g, rule_id, fallback):
+    """The rule as Discord holds it after a change; (rule, warning-or-None)."""
+    try:
+        return await asyncio.wait_for(g.fetch_automod_rule(rule_id), LOOK_TIMEOUT), None
+    except Exception as e:  # noqa: BLE001 - the change is made; say what is unknown
+        return fallback, (f"Discord took it, but I couldn't read the rule back "
+                          f"({type(e).__name__}) - this shows Discord's answer to the "
+                          "change; check list_automod_rules.")
+
+
+def _am_off(now, want, keys):
+    return [_AM_LABELS[k] for k in keys if now[k] != want[k]]
+
+
+_AM_PARAMS = {
+    "keywords": {"type": "list",
+                 "desc": "keyword and member_profile rules: words or phrases to match, "
+                         "as plain strings, e.g. ['badword', 'buy now*'] (up to 1000, 60 "
+                         "characters each; Discord's * wildcards work)"},
+    "regex_patterns": {"type": "list",
+                       "desc": "keyword and member_profile rules: regex patterns as "
+                               "plain strings, Rust syntax, e.g. ['b+a+d'] (up to 10, 260 "
+                               "characters each)"},
+    "allow_list": {"type": "list",
+                   "desc": "Words the rule lets through, as plain strings, e.g. "
+                           "['badminton'] (up to 100; up to 1000 on a keyword_preset "
+                           "rule)"},
+    "presets": {"type": "list",
+                "desc": "keyword_preset rules: Discord's word lists, e.g. "
+                        "['profanity', 'slurs'] - profanity, sexual_content, slurs"},
+    "mention_limit": {"type": "int",
+                      "desc": "mention_spam rules: the most user and role mentions one "
+                              "message may carry, 1-50"},
+    "block_message": {"type": "bool",
+                      "desc": "Block the message (on a member_profile rule: block the "
+                              "member's interactions instead)"},
+    "custom_message": {"type": "str",
+                       "desc": "Shown to the sender when their message is blocked (up "
+                               "to 150 characters)"},
+    "alert_channel_id": {"type": "str",
+                         "desc": "A text channel to post an alert in when the rule "
+                                 "fires"},
+    "timeout_seconds": {"type": "int",
+                        "desc": "keyword and mention_spam rules: also time the member "
+                                "out this long, 1-2419200 (28 days)"},
+    "exempt_role_ids": {"type": "list", "desc": "Role ids the rule never applies to, "
+                                                "e.g. [123, 456] (up to 20)"},
+    "exempt_channel_ids": {"type": "list", "desc": "Channel ids the rule never applies "
+                                                   "in, e.g. [123] (up to 50)"},
+    "enabled": {"type": "bool", "desc": "On from the start (default true)"},
+    "reason": {"type": "str", "desc": "Audit-log reason"},
+}
+
+
+@action("create_automod_rule", identity.MANAGE,
+        "Make an AutoMod rule (Server Settings > AutoMod): a trigger - keyword (your "
+        "words and regex patterns), keyword_preset (Discord's own word lists), spam, "
+        "mention_spam (too many mentions) or member_profile (names and profiles) - and "
+        "what it does: block the message (with an optional note to the sender), post "
+        "an alert in a channel, and on keyword and mention_spam rules time the member "
+        "out. Discord allows 6 keyword rules and 1 of each other trigger per server. "
+        "The preview shows the whole rule as it will be made; refused before anything "
+        "is sent if the trigger or a preset is unknown, the content doesn't fit the "
+        "trigger, the rule would do nothing, the name is taken or the slots are full. "
+        "Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "The rule's name"},
+         "trigger": {"type": "str", "required": True,
+                     "desc": "keyword | keyword_preset | spam | mention_spam | "
+                             "member_profile"},
+         **_AM_PARAMS,
+         "block_message": {"type": "bool",
+                           "desc": "Block the message (default true; on a "
+                                   "member_profile rule: block the member's "
+                                   "interactions instead)"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_automod_rule(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "make AutoMod rules")
+    kind = _am_trigger(p["trigger"])
+    v = {"name": "", "trigger": kind, "enabled": True, "keywords": [],
+         "regex_patterns": [], "allow_list": [], "presets": [], "mention_limit": 0,
+         "mention_raid_protection": False, "block": True, "custom_message": "",
+         "alert": 0, "timeout": 0, "exempt_roles": [], "exempt_channels": []}
+    v, given = _am_apply(v, p)
+    rules = await _am_rules(g)
+    _am_check(ctx, g, v, rules)
+    _am_screen(v, given)
+    if ctx.dry_run:
+        same = sum(1 for r in rules if _am_kind(r) == kind)
+        acts_on = "profiles" if kind == "member_profile" else "messages"
+        lines = _am_lines(g, v) + [
+            f"It acts on everyone's {acts_on} as soon as it's made, except the exempt "
+            "roles and channels.",
+            f"That makes {same + 1} of {_AM_RULE_CAP[kind]} {kind} rule(s) Discord "
+            "allows; delete_automod_rule removes it again."]
+        return {"summary": f"Make the AutoMod rule **{v['name']}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+    trig, actions, event = _am_build(v)
+    made = await _settings_call(
+        g.create_automod_rule(name=v["name"], event_type=event, trigger=trig,
+                              actions=actions, enabled=v["enabled"],
+                              reason=p.get("reason") or VIA, **_am_exempts(v)),
+        "AutoMod rule create", "list_automod_rules")
+    read, warn = await _am_read_back(g, made.id, made)
+    out = {"status": "automod_rule_created", "guild": g.name,
+           "rule": automod_dict(g, read)}
+    off = _am_off(_am_vals(read), v, [k for k in _AM_ORDER])
+    if warn:
+        out["warning"] = warn
+    elif off:
+        out["warning"] = ("Discord made the rule, but it doesn't read back as asked: "
+                          + ", ".join(off) + " - check list_automod_rules.")
+    return out
+
+
+def _am_find(g, rules, raw):
+    """The rule `raw` names: its id, or a name no other rule shares."""
+    text = " ".join(str(raw).split())
+    if text.isdigit():
+        hit = next((r for r in rules if r.id == int(text)), None)
+        if hit is not None:
+            return hit
+    named = [r for r in rules if r.name.strip().lower() == text.lower()]
+    if len(named) == 1:
+        return named[0]
+    if len(named) > 1:
+        raise ActionError(f"{len(named)} AutoMod rules in {g.name} are named {text!r} - "
+                          "give the rule's id instead (list_automod_rules has them).")
+    raise ActionError(f"there's no AutoMod rule {text!r} in {g.name} - "
+                      "list_automod_rules has the ids and names.")
+
+
+_AM_TRIGGER_KEYS = ("keywords", "regex_patterns", "allow_list", "presets", "mention_limit")
+_AM_ACTION_KEYS = ("block", "custom_message", "alert", "timeout")
+# plan key -> the parameter that puts it back
+_AM_RESTORE = {key: param for param, key in _AM_PARAM_KEYS.items()}
+
+
+def _am_restore_value(key, value):
+    if key == "alert":
+        return str(value) if value else "none"
+    return value
+
+
+@action("edit_automod_rule", identity.MANAGE,
+        "Change one of a server's AutoMod rules: its name, what it matches (keywords, "
+        "regex patterns, allow list, word-list presets or mention limit - a list given "
+        "REPLACES the rule's list), its actions (block_message, custom_message, an "
+        "alert channel, a timeout), its exempt roles and channels, or whether it's on. "
+        "Its trigger can't change - make a new rule for that. Only the fields named "
+        "change; the preview shows each old -> new, the rule is saved first so it can "
+        "be put back, and the result is the rule Discord reads afterwards. Refused "
+        "before anything is sent if the change doesn't fit the rule or changes nothing. "
+        "Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "rule_id": {"type": "str", "required": True,
+                     "desc": "The rule's id (list_automod_rules), or its name if no other "
+                             "rule shares it"},
+         "name": {"type": "str", "desc": "A new name"},
+         **{k: dict(v) for k, v in _AM_PARAMS.items()},
+         "keywords": {"type": "list",
+                      "desc": "REPLACES the rule's keywords, as plain strings, e.g. "
+                              "['badword', 'buy now*'] (keyword and member_profile rules; "
+                              "up to 1000, 60 characters each)"},
+         "regex_patterns": {"type": "list",
+                            "desc": "REPLACES the rule's regex patterns, as plain "
+                                    "strings, e.g. ['b+a+d'] (up to 10, 260 characters "
+                                    "each)"},
+         "allow_list": {"type": "list",
+                        "desc": "REPLACES the rule's allow list, as plain strings, "
+                                "e.g. ['badminton'] (up to 100; 1000 on a keyword_preset "
+                                "rule)"},
+         "presets": {"type": "list",
+                     "desc": "REPLACES the word lists of a keyword_preset rule, e.g. "
+                             "['profanity', 'slurs'] - profanity, sexual_content, slurs"},
+         "custom_message": {"type": "str",
+                            "desc": "The note shown to a blocked sender; empty or none "
+                                    "drops it"},
+         "alert_channel_id": {"type": "str",
+                              "desc": "A text channel for alerts; 0 or none drops the "
+                                      "alert"},
+         "timeout_seconds": {"type": "int",
+                             "desc": "keyword and mention_spam rules: 1-2419200 (28 "
+                                     "days); 0 drops the timeout"},
+         "exempt_role_ids": {"type": "list", "desc": "REPLACES the exempt roles: role "
+                                                     "ids, e.g. [123] (up to 20; [] for "
+                                                     "none)"},
+         "exempt_channel_ids": {"type": "list", "desc": "REPLACES the exempt channels: "
+                                                        "channel ids, e.g. [123] (up to 50; "
+                                                        "[] for none)"},
+         "enabled": {"type": "bool", "desc": "Turn the rule on or off"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_automod_rule(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "change AutoMod rules")
+    if not any(p.get(param) is not None for param in _AM_PARAM_KEYS):
+        raise ActionError("nothing to change - pass name, keywords, regex_patterns, "
+                          "allow_list, presets, mention_limit, block_message, "
+                          "custom_message, alert_channel_id, timeout_seconds, "
+                          "exempt_role_ids, exempt_channel_ids or enabled.")
+    rules = await _am_rules(g)
+    rule = _am_find(g, rules, p["rule_id"])
+    kind = _am_kind(rule)
+    if kind not in _AM_TRIGGERS:
+        raise ActionError(f"'{rule.name}' is a {kind} rule, which this bot doesn't edit - "
+                          "change it in Server Settings > AutoMod.")
+    old = _am_vals(rule)
+    v, given = _am_apply(old, p)
+    changed = [k for k in _AM_ORDER if v[k] != old[k]]
+    if not changed:
+        raise ActionError(f"nothing would change - the AutoMod rule '{rule.name}' already "
+                          "reads that way.")
+    _am_check(ctx, g, v, rules, rule=rule)
+    _am_screen(v, given)
+    if ctx.dry_run:
+        lines = []
+        for k in changed:
+            line = f"{_AM_LABELS[k]}: {_am_words(g, old, k)} -> {_am_words(g, v, k)}"
+            if k in _AM_LISTS + ("presets", "exempt_roles", "exempt_channels"):
+                line += " (the list is replaced)"
+            lines.append(line)
+        lines.append("Nothing else changes.")
+        if "enabled" in changed and not v["enabled"]:
+            lines.append("Turned off, it stops acting at once.")
+        lines.append("The rule as it is now is saved first, so this can be put back.")
+        return {"summary": f"Change the AutoMod rule **{rule.name}** in **{g.name}**: "
+                           + ", ".join(_AM_LABELS[k] for k in changed),
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"automod-{rule.id}",
+        {"rule_id": rule.id, "rule": rule.to_dict(), "view": automod_dict(g, rule),
+         "changed": [_AM_RESTORE[k] for k in changed],
+         # Feed this back to edit_automod_rule (with guild_id) to undo.
+         "restore": {"rule_id": str(rule.id),
+                     **{_AM_RESTORE[k]: _am_restore_value(k, old[k]) for k in changed}}},
+        f"the AutoMod rule '{rule.name}'")
+    kw = {}
+    if "name" in changed:
+        kw["name"] = v["name"]
+    if "enabled" in changed:
+        kw["enabled"] = v["enabled"]
+    trig, actions, _ = _am_build(v)
+    if any(k in changed for k in _AM_TRIGGER_KEYS):
+        kw["trigger"] = trig
+    if any(k in changed for k in _AM_ACTION_KEYS):
+        kw["actions"] = actions
+    ex = _am_exempts(v)
+    for k in ("exempt_roles", "exempt_channels"):
+        if k in changed:
+            kw[k] = ex[k]
+    after = await _settings_call(rule.edit(reason=p.get("reason") or VIA, **kw),
+                                 "AutoMod rule edit", "list_automod_rules")
+    read, warn = await _am_read_back(g, rule.id, after)
+    out = {"status": "automod_rule_edited", "guild": g.name,
+           "changed": [_AM_LABELS[k] for k in changed], "rule": automod_dict(g, read),
+           "backup": saved}
+    off = _am_off(_am_vals(read), v, changed)
+    if warn:
+        out["warning"] = warn
+    elif off:
+        out["warning"] = ("Discord took the edit, but the rule doesn't read back as asked: "
+                          + ", ".join(off) + " - check list_automod_rules.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
@@ -5169,6 +6503,120 @@ async def _cancel_event(ctx, p):
     return {"status": "event_ended" if running else "event_cancelled",
             "guild": g.name, "event": ev.name, "now": _event_status(after),
             "copy_saved": saved}
+
+
+# Discord counts a prune's inactivity in whole days, 1 to 30 (its Prune screen
+# and the API's GET/POST /guilds/{id}/prune both).
+PRUNE_DAYS = (1, 30)
+
+
+def _prune_roles(g, raw):
+    roles = []
+    for item in raw or []:
+        try:
+            rid = int(item)
+        except (TypeError, ValueError):
+            raise ActionError(f"include_role_ids takes role ids - {item!r} isn't one "
+                              "(list_roles has them).")
+        r = g.get_role(rid)
+        if r is None:
+            raise ActionError(f"include_role_ids: there's no role {rid} in {g.name} - "
+                              "list_roles has the ids.")
+        if r.is_default():
+            raise ActionError("include_role_ids: @everyone isn't needed - members with "
+                              "no roles are always counted.")
+        if r not in roles:
+            roles.append(r)
+    return roles
+
+
+@action("prune_members", identity.DESTRUCTIVE,
+        "Prune a server (Server Settings > Members > Prune): kick every member who has "
+        "no roles and hasn't been seen for `days` days (1-30, default 7). Members whose "
+        "only roles are in include_role_ids are counted too. The dry-run asks Discord "
+        "how many would go - Discord never says WHO. They can rejoin with an invite, "
+        "but the prune itself can't be undone.",
+        {"guild_id": {"type": "int", "required": True},
+         "days": {"type": "int", "desc": "Inactive for this many days, 1-30 (default 7)"},
+         "include_role_ids": {"type": "list",
+                              "desc": "Role ids whose holders are counted too, if those "
+                                      "are their only roles (default: none - members "
+                                      "with no roles only)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _prune_members(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    perms = g.me.guild_permissions
+    if not (perms.kick_members and perms.manage_guild):
+        raise ActionError(f"this bot needs both Kick Members and Manage Server in "
+                          f"{g.name} to prune it - give its role both (or "
+                          "Administrator) first.")
+    days = int(p["days"]) if p.get("days") is not None else 7
+    lo, hi = PRUNE_DAYS
+    if not lo <= days <= hi:
+        raise ActionError(f"days has to be {lo} to {hi} - Discord counts a prune's "
+                          f"inactivity in whole days up to {hi}, and {days} isn't in "
+                          "that range.")
+    roles = _prune_roles(g, p.get("include_role_ids"))
+    names = [r.name for r in roles]
+    plus = (" (plus members whose only roles are "
+            + ", ".join(f"'{n}'" for n in names) + ")") if names else ""
+    if ctx.dry_run:
+        est = await _settings_call(g.estimate_pruned_members(days=days, roles=roles),
+                                   "prune estimate", "the member list")
+        count = "an unknown number of" if est is None else str(est)
+        lines = [f"{count} member(s) would be kicked: no roles{plus}, no activity for "
+                 f"{days} day(s).",
+                 "Discord doesn't say WHICH members - only how many.",
+                 "They can rejoin with an invite, but a prune can't be undone."]
+        return {"summary": f"Prune **{g.name}**: **{count} member(s)** inactive "
+                           f"{days} day(s) would be kicked",
+                "detail": "\n".join(lines), "count": est}
+    pruned = await _settings_call(
+        g.prune_members(days=days, compute_prune_count=True, roles=roles,
+                        reason=p.get("reason") or VIA),
+        "prune", "the member list")
+    return {"status": "pruned", "guild": g.name, "days": days, "included_roles": names,
+            "pruned": pruned}
+
+
+@action("delete_automod_rule", identity.DESTRUCTIVE,
+        "Delete one of a server's AutoMod rules. Its full settings are saved first, so "
+        "it can be made again with create_automod_rule (with a new id).",
+        {"guild_id": {"type": "int", "required": True},
+         "rule_id": {"type": "str", "required": True,
+                     "desc": "The rule's id (list_automod_rules), or its name if no other "
+                             "rule shares it"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _delete_automod_rule(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "delete AutoMod rules")
+    rule = _am_find(g, await _am_rules(g), p["rule_id"])
+    v = _am_vals(rule)
+    if ctx.dry_run:
+        lines = _am_lines(g, v) + [
+            "Once it's gone, nothing it matched is blocked or reported any more.",
+            "Its full settings are saved to look_backups first, so it can be made again "
+            "with create_automod_rule - with a new id."]
+        return {"summary": f"Delete the AutoMod rule **{rule.name}** from **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"automod-{rule.id}",
+        {"rule_id": rule.id, "rule": rule.to_dict(), "view": automod_dict(g, rule),
+         # Feed this to create_automod_rule (with guild_id) to make it again.
+         "restore": _am_params(v)},
+        f"the AutoMod rule '{rule.name}'")
+    await _settings_call(rule.delete(reason=p.get("reason") or VIA),
+                         "AutoMod rule delete", "list_automod_rules")
+    left = await _am_rules(g)
+    gone = all(r.id != rule.id for r in left)
+    out = {"status": "automod_rule_deleted", "guild": g.name, "rule": rule.name,
+           "gone": gone, "rules_left": len(left), "copy_saved": saved}
+    if not gone:
+        out["warning"] = (f"Discord took the delete, but '{rule.name}' is still in its "
+                          "rule list - check list_automod_rules.")
+    return out
 
 
 # ==========================================================================

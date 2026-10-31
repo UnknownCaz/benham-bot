@@ -86,6 +86,19 @@
     "taints": false,
     "tier": 3
   },
+  "create_automod_rule": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "create_channel": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -216,6 +229,19 @@
     "taints": false,
     "tier": 2
   },
+  "delete_automod_rule": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
   "delete_channel": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -322,6 +348,19 @@
     "posts": false,
     "taints": false,
     "tier": 1
+  },
+  "edit_automod_rule": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
   },
   "edit_bot_profile": {
     "always_confirm": true,
@@ -534,6 +573,32 @@
     "taints": false,
     "tier": 3
   },
+  "list_automod_rules": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
+  "list_bans": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_channels": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -580,6 +645,19 @@
     "guest": false,
     "needs_confirm": false,
     "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
+  "list_invites": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
     "origins": [],
     "outward": false,
     "posts": false,
@@ -761,6 +839,19 @@
     "taints": false,
     "tier": 2
   },
+  "prune_members": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
   "purge_guild": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -807,6 +898,19 @@
     "guest": false,
     "needs_confirm": false,
     "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
+  "read_audit_log": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
     "origins": [],
     "outward": false,
     "posts": false,
@@ -866,6 +970,19 @@
     "outward": false,
     "posts": false,
     "taints": false,
+    "tier": 2
+  },
+  "revoke_invite": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
     "tier": 2
   },
   "search_messages": {
