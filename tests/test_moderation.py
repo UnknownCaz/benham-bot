@@ -697,6 +697,101 @@ check("no Manage Server: one sentence, Discord never asked",
        "give its role Manage Server (or Administrator) first.", []))
 
 
+# =============================================================== revoke_invite
+section("revoke_invite - tier 2, always confirmed, a copy kept, read back")
+registered("revoke_invite", 2, False, True, True)
+before = backups()
+cl, g, http = invited()
+result, preview = go(cl, "revoke_invite", {"guild_id": GUILD, "code": "aB3dE9f"})
+check("the first call is a preview: Discord only read, nothing saved",
+      (result, http.writes(), http.verbs(), backups() == before),
+      (None, [], ["invites_from"], True))
+check("...the summary names the code, the channel and the server",
+      preview["summary"], "Revoke invite **aB3dE9f** to **#asd** in **Testing Server**")
+check("...the facts, and that the same code can't come back",
+      preview["detail"].splitlines(),
+      ["Channel: #asd", "Made by: Alice", "Uses: 1 of 5",
+       "Expires: Fri 2026-10-30 19:40 EDT = 2026-10-30 23:40 UTC",
+       "Temporary membership: no",
+       "Its link stops working at once. A revoked invite can't be restored with the "
+       "same code - create_invite makes a new one.", "Its details are saved first."])
+_, preview = go(cl, "revoke_invite", {"guild_id": GUILD,
+                                      "code": "https://discord.gg/forever1"})
+check("a discord.gg link works as the code; no limits read as no limit and never",
+      [l for l in preview["detail"].splitlines() if l.startswith(("Uses", "Expires",
+                                                                   "Temporary"))],
+      ["Uses: 12 (no limit)", "Expires: never", "Temporary membership: yes"])
+
+cl, g, http = invited()
+before = backups()
+result, preview = go(cl, "revoke_invite", {"guild_id": GUILD, "code": "aB3dE9f",
+                                           "reason": "stage d"}, force=True)
+check("confirmed: the invite list read, the delete with the reason, the list read back",
+      http.verbs(), ["invites_from", "delete_invite", "invites_from"])
+check("...the delete names the code and carries the reason",
+      http.calls[1], ("delete_invite", {"code": "aB3dE9f", "reason": "stage d"}))
+check("...the result: gone, how many are left, the backup path",
+      {k: result[k] for k in ("status", "code", "channel", "gone", "invites_left")},
+      {"status": "invite_revoked", "code": "aB3dE9f", "channel": "#asd", "gone": True,
+       "invites_left": 1})
+new = sorted(set(backups()) - set(before))
+check("one backup, named <guild>-invite-<code>-<local stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-invite-aB3dE9f-"), new[0].endswith(".json"),
+       os.path.basename(result["backup"]) == new[0]), (1, True, True, True))
+saved = json.load(open(result["backup"], encoding="utf-8"))
+check("...holding the invite's facts and the create_invite call that remakes it",
+      (saved["invite"]["code"], saved["invite"]["inviter"], saved["remake"]),
+      ("aB3dE9f", "Alice", {"channel_id": ASD, "max_age_seconds": 600, "max_uses": 5}))
+cl, g, http = invited()
+http.answer_override["delete_invite"] = True          # Discord keeps it
+result, _ = go(cl, "revoke_invite", {"guild_id": GUILD, "code": "aB3dE9f"}, force=True)
+check("Discord still listing it afterwards: the result says so",
+      (result["gone"], result["warning"]),
+      (False, "Discord took the revoke, but its invite list still shows aB3dE9f - "
+              "check list_invites."))
+
+section("revoke_invite - refused at the preview (and at the confirm), nothing deleted")
+cl, g, http = invited()
+cl.foreign_invites["xYz123"] = OTHER_GUILD
+for code, want in (
+        ("nosuchcode", "there's no active invite nosuchcode in Testing Server - "
+                       "list_invites has the codes (an expired or used-up invite is "
+                       "already gone)."),
+        ("AB3DE9F", "there's no active invite AB3DE9F in Testing Server - list_invites "
+                    "has the codes (an expired or used-up invite is already gone)."),
+        ("xYz123", "invite xYz123 belongs to another server, not Testing Server - this "
+                   "bot only revokes a server's own invites."),
+        ("not a code!", "code: 'not a code!' doesn't look like an invite code - "
+                        "list_invites has them.")):
+    for force in (False, True):
+        m = refusal(cl, "revoke_invite", {"guild_id": GUILD, "code": code}, force=force)
+        check(f"{code!r} ({'confirm' if force else 'preview'}): {want[:40]}...", m, want)
+check("...and Discord was never asked to delete anything",
+      [c for c in http.writes()], [])
+cl, g, http = invited(features=("VANITY_URL",))
+check("the server's vanity code is not an invite to revoke",
+      refusal(cl, "revoke_invite", {"guild_id": GUILD, "code": "testing"}),
+      "testing is Testing Server's vanity link, which isn't revoked like an invite - "
+      "it's changed in Server Settings.")
+cl, g, http = invited()
+_real_dir = capabilities.LOOK_BACKUP_DIR
+_blocker = os.path.join(TMP, "blocker")
+open(_blocker, "w").close()
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+m = refusal(cl, "revoke_invite", {"guild_id": GUILD, "code": "aB3dE9f"}, force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("no backup, no revoke: one sentence, Discord never asked to delete",
+      (m.startswith("I couldn't save the invite aB3dE9f's details first ("),
+       m.endswith("Nothing was changed."), "delete_invite" in http.verbs()),
+      (True, True, False))
+cl, g, http = invited()
+http.fail["delete_invite"] = discord.HTTPException(_Resp(429), "You are being rate limited.")
+check("a rate limit says so, Nothing was changed",
+      refusal(cl, "revoke_invite", {"guild_id": GUILD, "code": "aB3dE9f"}, force=True),
+      "Discord is rate-limiting invite revokes right now. Nothing was changed; try again "
+      "in a while.")
+
+
 # ===================================================================== the end
 print()
 if _fails:

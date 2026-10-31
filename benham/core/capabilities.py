@@ -4867,6 +4867,90 @@ async def _move_role(ctx, p):
     return out
 
 
+# --- invites (INTENT 60, Stage 8 D) --------------------------------------------
+
+_INVITE_CODE = re.compile(r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite/|"
+                          r"discord\.gg/)?([A-Za-z0-9-]{2,32})/?")
+
+
+def _invite_code(raw):
+    m = _INVITE_CODE.fullmatch(str(raw).strip())
+    if not m:
+        raise ActionError(f"code: {raw!r} doesn't look like an invite code - "
+                          "list_invites has them.")
+    return m.group(1)
+
+
+async def _invite_find(ctx, g, code):
+    """The server's own invite with exactly this code, or one plain sentence on
+    why there isn't one. Codes are case-sensitive, so the match is exact."""
+    for inv in await _invites_fetch(g):
+        if inv.code == code:
+            return inv
+    if code == getattr(g, "vanity_url_code", None):
+        raise ActionError(f"{code} is {g.name}'s vanity link, which isn't revoked like "
+                          "an invite - it's changed in Server Settings.")
+    try:
+        other = await asyncio.wait_for(ctx.client.fetch_invite(code), LOOK_TIMEOUT)
+    except Exception:  # noqa: BLE001 - unknown, expired or unreadable: all "not here"
+        other = None
+    gid = getattr(getattr(other, "guild", None), "id", None)
+    if gid is not None and gid != g.id:
+        raise ActionError(f"invite {code} belongs to another server, not {g.name} - "
+                          "this bot only revokes a server's own invites.")
+    raise ActionError(f"there's no active invite {code} in {g.name} - list_invites has "
+                      "the codes (an expired or used-up invite is already gone).")
+
+
+@action("revoke_invite", identity.MANAGE,
+        "Revoke one of a server's invites so its link stops working (Server Settings > "
+        "Invites). A revoked invite can't be brought back with the same code - "
+        "create_invite makes a new one. The preview shows the invite's channel, maker, "
+        "uses and expiry; its details are saved first and the result is the invite "
+        "list Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "code": {"type": "str", "required": True,
+                  "desc": "The invite's code (list_invites), or its discord.gg link"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, always_confirm=True, taints=True)
+async def _revoke_invite(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _invites_can(g, "revoke its invites")
+    code = _invite_code(p["code"])
+    inv = await _invite_find(ctx, g, code)
+    facts = invite_dict(inv)
+    where = facts["channel"] or "an unknown channel"
+    if ctx.dry_run:
+        exp = _invite_expires(inv)
+        lines = [f"Channel: {where}",
+                 f"Made by: {facts['inviter'] or 'unknown'}",
+                 (f"Uses: {facts['uses']} of {facts['max_uses']}" if facts["max_uses"]
+                  else f"Uses: {facts['uses']} (no limit)"),
+                 f"Expires: {eventtime.line(exp) if exp is not None else 'never'}",
+                 f"Temporary membership: {'yes' if facts['temporary'] else 'no'}",
+                 "Its link stops working at once. A revoked invite can't be restored "
+                 "with the same code - create_invite makes a new one.",
+                 "Its details are saved first."]
+        return {"summary": f"Revoke invite **{code}** to **{where}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"invite-{code}",
+        {"invite": facts,
+         # create_invite with these makes a NEW invite to the same place.
+         "remake": {"channel_id": facts["channel_id"], "max_age_seconds": inv.max_age or 0,
+                    "max_uses": facts["max_uses"]}},
+        f"the invite {code}'s details")
+    await _settings_call(inv.delete(reason=p.get("reason") or VIA), "invite revoke",
+                         "list_invites")
+    left = [i.code for i in await _invites_fetch(g)]
+    out = {"status": "invite_revoked", "guild": g.name, "code": code, "channel": where,
+           "gone": code not in left, "invites_left": len(left), "backup": saved}
+    if code in left:
+        out["warning"] = (f"Discord took the revoke, but its invite list still shows "
+                          f"{code} - check list_invites.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},

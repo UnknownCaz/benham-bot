@@ -907,6 +907,19 @@
     "taints": false,
     "tier": 2
   },
+  "revoke_invite": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "search_messages": {
     "always_confirm": false,
     "blocked_when_tainted": false,
