@@ -4363,12 +4363,26 @@ async def _move_channel(ctx, p):
 # a bot's or an integration's - is not this bot's to move (Stage 8's rule; one
 # CAN be shifted a place when another role is moved past it, as in the
 # Server Settings drag). Each case is its own sentence, so the refusal says
-# which one. Positions count from
-# @everyone at 0, in discord.py's hierarchy order (Guild.roles, lowest first;
-# ties broken by id) - the same numbers list_roles shows when Discord's are
-# contiguous. Only the roles between the old place and the new one are sent,
-# each with its new place (discord.py's own Role._move does the same span), so
-# nothing at or above this bot's top role is ever in the request.
+# which one.
+#
+# A `position` is a PLACE: counted up the list from @everyone at 0, in
+# discord.py's hierarchy order (Guild.roles, lowest first; ties broken by id).
+# Discord's own numbers can skip - the Testing Server read 0, 1, 5, 6, 14, 15 on
+# 2026-10-31 - so the place and Discord's number are shown side by side whenever
+# they differ.
+#
+# Only the roles between the old place and the new one are sent (discord.py's
+# own Role._move sends the same span), so nothing at or above this bot's top
+# role is ever in the request. They keep THEIR OWN numbers between them, dealt
+# out again in the new order: moving a role past one numbered 5 swaps the two
+# numbers rather than renumbering 1, 2. That is what makes the inverse exact -
+# moving it back deals the same numbers back, so every role ends on the number
+# it had, not merely in the order it had.
+
+
+def _role_number_words(place, number):
+    return f"position {place}" + (f" (Discord's number {number})"
+                                  if number != place else "")
 
 
 def _role_between(order, i):
@@ -4383,18 +4397,21 @@ def _role_between(order, i):
     return f"below '{over.name}' and above '{under.name}'"
 
 
-def _role_place(order, i):
+def _role_place(order, i, number=None):
     under = order[i - 1] if i > 0 else None
     over = order[i + 1] if i + 1 < len(order) else None
-    return {"position": i, "between": _role_between(order, i),
+    return {"position": i,
+            "discord_position": order[i].position if number is None else number,
+            "between": _role_between(order, i),
             "above": under.name if under is not None else None,
             "below": over.name if over is not None else None}
 
 
 @action("move_role", identity.MANAGE,
         "Move a role up or down a server's role list (a higher role shows its color "
-        "first and can manage the roles under it): to a position (1 = just above "
-        "@everyone; list_roles shows each role's), directly above_id / below_id "
+        "first and can manage the roles under it): to a position - its place counted "
+        "up the list, @everyone 0 and the lowest role 1 (not list_roles' number, "
+        "which is Discord's own and can skip) - directly above_id / below_id "
         "another role, or to_top (as high as this bot can place it: right below its "
         "own top role) / to_bottom (just above @everyone). This bot can't move a role "
         "to or above its own top role, nor its own top role, a managed (bot or "
@@ -4404,8 +4421,9 @@ def _role_place(order, i):
         {"guild_id": {"type": "int", "required": True},
          "role_id": {"type": "int", "required": True, "desc": "The role to move "
                                                               "(list_roles)"},
-         "position": {"type": "int", "desc": "New place, counted from @everyone at 0 "
-                                             "(1 = the lowest a role can go)"},
+         "position": {"type": "int", "desc": "New place, counted up the list from "
+                                             "@everyone at 0 (1 = the lowest a role can "
+                                             "go); not Discord's own number"},
          "above_id": {"type": "int", "desc": "Put it directly above this role"},
          "below_id": {"type": "int", "desc": "Put it directly below this role"},
          "to_top": {"type": "bool", "desc": "As high as this bot can: right below its own "
@@ -4494,13 +4512,17 @@ async def _move_role(ctx, p):
                           f"{before['between']}) - nothing to change.")
     new_order = others[:idx] + [role] + others[idx:]
     lo, hi = min(cur_idx, idx), max(cur_idx, idx)
-    span = [(r, i) for i, r in enumerate(new_order) if lo <= i <= hi]
-    planned = _role_place(new_order, idx)
+    # The span's own numbers, dealt out again in the new order (see the note).
+    numbers = [r.position for r in order[lo:hi + 1]]
+    span = list(zip(new_order[lo:hi + 1], numbers))
+    planned = _role_place(new_order, idx, numbers[idx - lo])
 
     if ctx.dry_run:
         shifted = [r.name for r, _ in span if r.id != role.id]
-        lines = [f"Now: position {cur_idx}, {before['between']}.",
-                 f"After: position {idx}, {planned['between']}.",
+        lines = [f"Now: {_role_number_words(cur_idx, role.position)}, "
+                 f"{before['between']}.",
+                 f"After: {_role_number_words(idx, planned['discord_position'])}, "
+                 f"{planned['between']}.",
                  f"{len(shifted)} other role(s) move one place "
                  f"{'down' if idx > cur_idx else 'up'} to make room: "
                  f"{', '.join(repr(n) for n in shifted)}. Nothing else changes.",
