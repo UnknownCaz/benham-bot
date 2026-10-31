@@ -229,6 +229,19 @@
     "taints": false,
     "tier": 2
   },
+  "delete_automod_rule": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
   "delete_channel": {
     "always_confirm": false,
     "blocked_when_tainted": false,

@@ -1515,6 +1515,96 @@ check("no backup, no edit: one sentence, Discord never asked to change it",
       (True, True, False))
 
 
+# ========================================================= delete_automod_rule
+section("delete_automod_rule - tier 3: the rule shown, a full copy kept, gone confirmed")
+a = capabilities.REGISTRY["delete_automod_rule"]
+check("delete_automod_rule: tier 3 (allowlist, dry-run, token), needs a guild, no guest",
+      (a.tier, a.destructive, a.needs_confirm, a.needs_guild, a.guest),
+      (3, True, True, True, False))
+cl, g, http = staged()
+before = backups()
+result, preview = go(cl, "delete_automod_rule", {"guild_id": GUILD,
+                                                 "rule_id": "stage-d-test"})
+check("the dry-run: Discord only read, nothing saved",
+      (result, http.verbs(), backups() == before),
+      (None, ["get_auto_moderation_rules"], True))
+check("...the rule as list_automod_rules shows it, and the way back",
+      (preview["summary"], preview["detail"].splitlines()),
+      ("Delete the AutoMod rule **stage-d-test** from **Testing Server**",
+       ['Name: "stage-d-test"', "Trigger: keyword - messages with these words or patterns",
+        'Keywords: (1) "stage-d-blocked-xyz"', "Regex patterns: none", "Allow list: none",
+        'Actions: block the message, telling the sender "stage D test"',
+        "Exempt roles: none", "Exempt channels: none", "Enabled: yes",
+        "Once it's gone, nothing it matched is blocked or reported any more.",
+        "Its full settings are saved to look_backups first, so it can be made again with "
+        "create_automod_rule - with a new id."]))
+cl, g, http = staged()
+before = backups()
+result, _ = go(cl, "delete_automod_rule", {"guild_id": GUILD, "rule_id": "7200",
+                                           "reason": "stage d"}, force=True)
+check("confirmed: rules read, the delete with its reason, the list read back",
+      (http.verbs(), http.calls[1]),
+      (["get_auto_moderation_rules", "delete_auto_moderation_rule",
+        "get_auto_moderation_rules"],
+       ("delete_auto_moderation_rule", {"rule_id": 7200, "reason": "stage d"})))
+check("...gone, and the count back to what it was before the stage rule",
+      {k: result[k] for k in ("status", "rule", "gone", "rules_left")},
+      {"status": "automod_rule_deleted", "rule": "stage-d-test", "gone": True,
+       "rules_left": 4})
+new = sorted(set(backups()) - set(before))
+check("one copy, saved BEFORE the delete, named <guild>-automod-<id>-<stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-automod-7200-"),
+       os.path.basename(result["copy_saved"]) == new[0]), (1, True, True))
+saved = json.load(open(result["copy_saved"], encoding="utf-8"))
+check("...the full rule, and the create_automod_rule call that makes it again",
+      (saved["rule"]["name"], saved["rule"]["actions"], saved["restore"]),
+      ("stage-d-test", [{"type": 1, "metadata": {"custom_message": "stage D test"}}],
+       {"name": "stage-d-test", "trigger": "keyword", "enabled": True,
+        "block_message": True, "keywords": ["stage-d-blocked-xyz"],
+        "custom_message": "stage D test"}))
+cl, g, http = fresh()
+go(cl, "create_automod_rule", {"guild_id": GUILD, **saved["restore"]}, force=True)
+check("...and that call really makes the same rule",
+      {k: http.calls[1][1][k] for k in ("name", "trigger_type", "trigger_metadata",
+                                        "actions", "enabled")},
+      {"name": "stage-d-test", "trigger_type": 1,
+       "trigger_metadata": {"keyword_filter": ["stage-d-blocked-xyz"],
+                            "regex_patterns": [], "allow_list": []},
+       "actions": [{"type": 1, "metadata": {"custom_message": "stage D test"}}],
+       "enabled": True})
+cl, g, http = staged()
+http.answer_override["delete_auto_moderation_rule"] = True       # Discord keeps it
+result, _ = go(cl, "delete_automod_rule", {"guild_id": GUILD, "rule_id": "7200"},
+               force=True)
+check("Discord still listing it afterwards: the result says so",
+      (result["gone"], result["warning"]),
+      (False, "Discord took the delete, but 'stage-d-test' is still in its rule list - "
+              "check list_automod_rules."))
+
+section("delete_automod_rule - refused before anything is deleted")
+cl, g, http = staged()
+for force in (False, True):
+    check(f"an unknown rule ({'confirm' if force else 'dry-run'})",
+          refusal(cl, "delete_automod_rule", {"guild_id": GUILD, "rule_id": "nope"},
+                  force=force),
+          "there's no AutoMod rule 'nope' in Testing Server - list_automod_rules has the "
+          "ids and names.")
+check("...nothing deleted", "delete_auto_moderation_rule" in http.verbs(), False)
+cl, g, http = staged()
+_real_dir = capabilities.LOOK_BACKUP_DIR
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+m = refusal(cl, "delete_automod_rule", {"guild_id": GUILD, "rule_id": "7200"}, force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("no copy, no delete: one sentence, Discord never asked",
+      (m.startswith("I couldn't save the AutoMod rule 'stage-d-test' first ("),
+       m.endswith("Nothing was changed."), "delete_auto_moderation_rule" in http.verbs()),
+      (True, True, False))
+cl, g, http = staged()
+m = refusal(cl, "delete_automod_rule", {"guild_id": OTHER_GUILD, "rule_id": "7200"})
+check("a server off the destructive allowlist: refused before the dry-run",
+      m is not None and "destructive_guilds allowlist" in m, True)
+
+
 # ===================================================================== the end
 print()
 if _fails:

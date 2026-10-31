@@ -6572,6 +6572,45 @@ async def _prune_members(ctx, p):
             "pruned": pruned}
 
 
+@action("delete_automod_rule", identity.DESTRUCTIVE,
+        "Delete one of a server's AutoMod rules. Its full settings are saved first, so "
+        "it can be made again with create_automod_rule (with a new id).",
+        {"guild_id": {"type": "int", "required": True},
+         "rule_id": {"type": "str", "required": True,
+                     "desc": "The rule's id (list_automod_rules), or its name if no other "
+                             "rule shares it"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _delete_automod_rule(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "delete AutoMod rules")
+    rule = _am_find(g, await _am_rules(g), p["rule_id"])
+    v = _am_vals(rule)
+    if ctx.dry_run:
+        lines = _am_lines(g, v) + [
+            "Once it's gone, nothing it matched is blocked or reported any more.",
+            "Its full settings are saved to look_backups first, so it can be made again "
+            "with create_automod_rule - with a new id."]
+        return {"summary": f"Delete the AutoMod rule **{rule.name}** from **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"automod-{rule.id}",
+        {"rule_id": rule.id, "rule": rule.to_dict(), "view": automod_dict(g, rule),
+         # Feed this to create_automod_rule (with guild_id) to make it again.
+         "restore": _am_params(v)},
+        f"the AutoMod rule '{rule.name}'")
+    await _settings_call(rule.delete(reason=p.get("reason") or VIA),
+                         "AutoMod rule delete", "list_automod_rules")
+    left = await _am_rules(g)
+    gone = all(r.id != rule.id for r in left)
+    out = {"status": "automod_rule_deleted", "guild": g.name, "rule": rule.name,
+           "gone": gone, "rules_left": len(left), "copy_saved": saved}
+    if not gone:
+        out["warning"] = (f"Discord took the delete, but '{rule.name}' is still in its "
+                          "rule list - check list_automod_rules.")
+    return out
+
+
 # ==========================================================================
 # Dispatch
 # ==========================================================================
