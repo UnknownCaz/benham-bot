@@ -759,6 +759,16 @@ check("only a category named: to the bottom there, said so, permissions kept",
       ["After: the category Archive, position 1 of 0-1, at the bottom, below #old.",
        "No place was named, so it goes to the bottom there.",
        "Its own permissions stay as they are (sync_permissions is off)."])
+_, preview, _, _, _ = mc({"channel_id": GAMENIGHT, "category_id": str(ARCHIVE)})
+check("landing where it is the only one of its kind: nothing shifts, and it says so",
+      preview["detail"].splitlines()[1:],
+      ["After: the category Archive, position 0 of 0-0, the only one there.",
+       "No place was named, so it goes to the bottom there.",
+       "Voice channels always sit below text channels there, so this counts only the "
+       "voice channels.",
+       "Its own permissions stay as they are (sync_permissions is off).",
+       "Nothing else changes.",
+       "Its current place is saved first, so it can be put back."])
 _, preview, _, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE),
                           "to_top": True, "sync_permissions": True})
 check("sync_permissions on: the preview says it takes the category's permissions",

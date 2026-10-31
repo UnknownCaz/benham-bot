@@ -4313,7 +4313,8 @@ async def _move_channel(ctx, p):
             lines.append(f"sync_permissions is on: it takes {cat_name}'s permissions, "
                          "replacing its own." if sync else
                          "Its own permissions stay as they are (sync_permissions is off).")
-        lines += [f"The other {words} there shift to make room; nothing else changes.",
+        lines += [f"The other {words} there shift to make room; nothing else changes."
+                  if others else "Nothing else changes.",
                   "Its current place is saved first, so it can be put back."]
         what = f"the category {ch.name}" if group == "category" else _cn(ch)
         return {"summary": f"Move {what} in **{g.name}**", "detail": "\n".join(lines)}
