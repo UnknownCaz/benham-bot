@@ -534,6 +534,19 @@
     "taints": false,
     "tier": 3
   },
+  "list_automod_rules": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_bans": {
     "always_confirm": false,
     "blocked_when_tainted": false,

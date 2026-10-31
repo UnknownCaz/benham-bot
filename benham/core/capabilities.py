@@ -1375,6 +1375,187 @@ async def _list_invites(ctx, p):
     return out
 
 
+# --- AutoMod (INTENT 60, Stage 8 D) -------------------------------------------
+#
+# Discord's limits, from its API docs (docs.discord.com/developers/resources/
+# auto-moderation, read 2026-10-31): rules per server by trigger - keyword 6,
+# spam 1, keyword_preset 1, mention_spam 1, member_profile 1. Per rule:
+# keyword_filter 1000 strings of up to 60 characters, regex_patterns 10 of up to
+# 260, allow_list 100 of up to 60 (keyword_preset: 1000), mention_total_limit 50,
+# exempt_roles 20, exempt_channels 50. Actions: block_message's custom message up
+# to 150 characters; a timeout up to 2419200 seconds (4 weeks), only on keyword
+# and mention_spam rules, and it needs Moderate Members. discord.py 2.7.1's
+# AutoModTrigger docstring carries the same per-rule list numbers.
+
+_AM_TRIGGERS = ("keyword", "keyword_preset", "spam", "mention_spam", "member_profile")
+_AM_RULE_CAP = {"keyword": 6, "spam": 1, "keyword_preset": 1, "mention_spam": 1,
+                "member_profile": 1}
+_AM_PRESETS = ("profanity", "sexual_content", "slurs")
+_AM_EXEMPT_ROLES_MAX = 20
+_AM_EXEMPT_CHANNELS_MAX = 50
+_AM_TRIGGER_WORDS = {
+    "keyword": "messages with these words or patterns",
+    "keyword_preset": "messages with words from Discord's own lists",
+    "spam": "messages Discord judges to be spam",
+    "mention_spam": "messages with too many mentions",
+    "member_profile": "member names and profiles with these words or patterns",
+    "harmful_link": "messages with harmful links"}
+
+
+def _am_kind(rule):
+    return rule.trigger.type.name
+
+
+def _am_can(g, what):
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(f"this bot lacks Manage Server in {g.name}, so it can't {what} "
+                          "- give its role Manage Server (or Administrator) first.")
+
+
+async def _am_rules(g):
+    """Every AutoMod rule as Discord holds it now. discord.py documents NotFound
+    for a server with none; that is an empty list, not an error."""
+    try:
+        return await asyncio.wait_for(g.fetch_automod_rules(), LOOK_TIMEOUT)
+    except discord.NotFound:
+        return []
+
+
+def _am_span(secs):
+    secs = int(secs)
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size and secs % size == 0:
+            return f"{secs // size}{unit}"
+    return f"{secs}s"
+
+
+def _am_vals(rule):
+    """A rule as the create/edit parameters that would make it - one shape for the
+    preview, the backup's `restore` and the read-back."""
+    kind, tr = _am_kind(rule), rule.trigger
+    v = {"name": rule.name, "trigger": kind, "enabled": bool(rule.enabled),
+         "keywords": [], "regex_patterns": [], "allow_list": [], "presets": [],
+         "mention_limit": 0, "mention_raid_protection": False,
+         "block": False, "custom_message": "", "alert": 0, "timeout": 0,
+         "exempt_roles": sorted(rule.exempt_role_ids),
+         "exempt_channels": sorted(rule.exempt_channel_ids)}
+    if kind in ("keyword", "member_profile"):
+        v.update(keywords=list(tr.keyword_filter), regex_patterns=list(tr.regex_patterns),
+                 allow_list=list(tr.allow_list))
+    elif kind == "keyword_preset":
+        v.update(presets=[n for n in _AM_PRESETS if getattr(tr.presets, n)],
+                 allow_list=list(tr.allow_list))
+    elif kind == "mention_spam":
+        v.update(mention_limit=int(tr.mention_limit or 0),
+                 mention_raid_protection=bool(tr.mention_raid_protection))
+    for a in rule.actions:
+        t = a.type.name
+        if t in ("block_message", "block_member_interactions"):
+            v["block"] = True
+            if a.custom_message:
+                v["custom_message"] = a.custom_message
+        elif t == "send_alert_message":
+            v["alert"] = int(a.channel_id or 0)
+        elif t == "timeout" and a.duration is not None:
+            v["timeout"] = int(a.duration.total_seconds())
+    return v
+
+
+def _am_params(v):
+    """_am_vals as the parameters create_automod_rule takes - what a backup's
+    `restore` holds."""
+    out = {"name": v["name"], "trigger": v["trigger"], "enabled": v["enabled"],
+           "block_message": v["block"]}
+    for key in ("keywords", "regex_patterns", "allow_list", "presets"):
+        if v[key]:
+            out[key] = list(v[key])
+    if v["mention_limit"]:
+        out["mention_limit"] = v["mention_limit"]
+    if v["custom_message"]:
+        out["custom_message"] = v["custom_message"]
+    if v["alert"]:
+        out["alert_channel_id"] = str(v["alert"])
+    if v["timeout"]:
+        out["timeout_seconds"] = v["timeout"]
+    if v["exempt_roles"]:
+        out["exempt_role_ids"] = list(v["exempt_roles"])
+    if v["exempt_channels"]:
+        out["exempt_channel_ids"] = list(v["exempt_channels"])
+    return out
+
+
+def _am_ch_name(g, cid):
+    ch = g.get_channel(int(cid)) if cid else None
+    return f"#{ch.name}" if ch is not None else None
+
+
+def automod_dict(g, rule):
+    """One AutoMod rule as the AutoMod screen shows it: what it matches, what it
+    does, who it spares, who made it (by name)."""
+    v, kind = _am_vals(rule), _am_kind(rule)
+    d = {"id": rule.id, "name": rule.name, "enabled": v["enabled"], "trigger": kind,
+         "event": rule.event_type.name}
+    if kind in ("keyword", "member_profile"):
+        d.update(keywords=v["keywords"], regex_patterns=v["regex_patterns"],
+                 allow_list=v["allow_list"])
+    elif kind == "keyword_preset":
+        d.update(presets=v["presets"], allow_list=v["allow_list"])
+    elif kind == "mention_spam":
+        d.update(mention_limit=v["mention_limit"],
+                 mention_raid_protection=v["mention_raid_protection"])
+    actions = []
+    for a in rule.actions:
+        t = a.type.name
+        one = {"type": t}
+        if t == "block_message" and a.custom_message:
+            one["custom_message"] = a.custom_message
+        elif t == "send_alert_message":
+            one.update(channel=_am_ch_name(g, a.channel_id), channel_id=a.channel_id)
+        elif t == "timeout" and a.duration is not None:
+            secs = int(a.duration.total_seconds())
+            one.update(seconds=secs, duration=_am_span(secs))
+        actions.append(one)
+    d["actions"] = actions
+    d["exempt_roles"] = [{"id": rid, "name": getattr(g.get_role(rid), "name", None)}
+                         for rid in v["exempt_roles"]]
+    d["exempt_channels"] = [{"id": cid, "name": _am_ch_name(g, cid)}
+                            for cid in v["exempt_channels"]]
+    creator = g.get_member(rule.creator_id)
+    d["creator"] = creator.display_name if creator is not None else None
+    return d
+
+
+def _am_slots(rules):
+    used = {k: 0 for k in _AM_TRIGGERS}
+    for r in rules:
+        k = _am_kind(r)
+        if k in used:
+            used[k] += 1
+    return {k: {"used": used[k], "limit": _AM_RULE_CAP[k]} for k in _AM_TRIGGERS}
+
+
+@action("list_automod_rules", identity.READ,
+        "A server's AutoMod rules (Server Settings > AutoMod): each rule's id, name, "
+        "whether it's on, its trigger (keyword, keyword_preset, spam, mention_spam or "
+        "member_profile) and what it matches - keywords, regex patterns, allow list, "
+        "Discord's word-list presets or a mention limit - its actions (block the "
+        "message, with an optional note to the sender; post an alert in a channel; time "
+        "the member out; or block a member's interactions), the exempt roles and "
+        "channels, and who made it; plus how many of Discord's rule slots each trigger "
+        "uses.",
+        {"guild_id": {"type": "int", "required": True}},
+        needs_guild=True, taints=True)
+async def _list_automod_rules(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "read its AutoMod rules")
+    rules = sorted(await _am_rules(g), key=lambda r: r.id)
+    out = {"guild": g.name, "count": len(rules), "slots": _am_slots(rules),
+           "rules": [automod_dict(g, r) for r in rules]}
+    if not rules:
+        out["message"] = f"No AutoMod rules in {g.name}."
+    return out
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "

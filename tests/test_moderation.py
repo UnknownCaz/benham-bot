@@ -1029,6 +1029,93 @@ for params, want in (
 check("...nothing written", http.writes(), [])
 
 
+# ========================================================== list_automod_rules
+section("list_automod_rules - every rule: what it matches, does, spares; the slots")
+registered("list_automod_rules", 0, False, False, True)
+
+
+def am_rule(rid, name, trigger_type, metadata, actions, creator=BOT, enabled=True,
+            exempt_roles=(), exempt_channels=(), event_type=1):
+    return {"id": str(rid), "guild_id": str(GUILD), "name": name,
+            "creator_id": str(creator), "event_type": event_type,
+            "trigger_type": trigger_type, "trigger_metadata": metadata,
+            "actions": actions, "enabled": enabled,
+            "exempt_roles": [str(r) for r in exempt_roles],
+            "exempt_channels": [str(c) for c in exempt_channels]}
+
+
+def ruled(**gkw):
+    cl, g, http = fresh(**gkw)
+    http.rules = [
+        am_rule(7001, "No slurs", 1,
+                {"keyword_filter": ["badword", "worse word"], "regex_patterns": ["b+a+d"],
+                 "allow_list": ["badminton"]},
+                [{"type": 1, "metadata": {"custom_message": "Not here, please."}},
+                 {"type": 2, "metadata": {"channel_id": str(WELCOME)}},
+                 {"type": 3, "metadata": {"duration_seconds": 600}}],
+                exempt_roles=[MODS], exempt_channels=[BETA]),
+        am_rule(7002, "Discord lists", 4, {"presets": [1, 3], "allow_list": []},
+                [{"type": 1, "metadata": {}}], creator=ALICE),
+        am_rule(7003, "Ping storms", 5, {"mention_total_limit": 8,
+                                         "mention_raid_protection_enabled": True},
+                [{"type": 1, "metadata": {}}], enabled=False),
+        am_rule(7004, "Names", 6, {"keyword_filter": ["spammer"], "regex_patterns": [],
+                                   "allow_list": []},
+                [{"type": 4, "metadata": {}}], event_type=2),
+    ]
+    return cl, g, http
+
+
+cl, g, http = ruled()
+result, preview = go(cl, "list_automod_rules", {"guild_id": GUILD})
+check("a read: no preview, nothing written, one fetch",
+      (preview, http.writes(), http.verbs()), (None, [], ["get_auto_moderation_rules"]))
+check("four rules, and the slots each trigger uses of Discord's caps",
+      (result["count"], result["slots"]),
+      (4, {"keyword": {"used": 1, "limit": 6},
+           "keyword_preset": {"used": 1, "limit": 1}, "spam": {"used": 0, "limit": 1},
+           "mention_spam": {"used": 1, "limit": 1},
+           "member_profile": {"used": 1, "limit": 1}}))
+check("a keyword rule: its lists, its three actions, who it spares, who made it",
+      result["rules"][0],
+      {"id": 7001, "name": "No slurs", "enabled": True, "trigger": "keyword",
+       "event": "message_send", "keywords": ["badword", "worse word"],
+       "regex_patterns": ["b+a+d"], "allow_list": ["badminton"],
+       "actions": [{"type": "block_message", "custom_message": "Not here, please."},
+                   {"type": "send_alert_message", "channel": "#welcome",
+                    "channel_id": WELCOME},
+                   {"type": "timeout", "seconds": 600, "duration": "10m"}],
+       "exempt_roles": [{"id": MODS, "name": "Mods"}],
+       "exempt_channels": [{"id": BETA, "name": "#benham-beta"}], "creator": "benham"})
+check("a preset rule: Discord's lists by name; a maker not in the cache reads null",
+      {k: result["rules"][1][k] for k in ("trigger", "presets", "allow_list", "creator")},
+      {"trigger": "keyword_preset", "presets": ["profanity", "slurs"], "allow_list": [],
+       "creator": None})
+check("a mention rule: the limit and raid protection; a rule that's off says so",
+      {k: result["rules"][2][k] for k in ("trigger", "mention_limit",
+                                           "mention_raid_protection", "enabled")},
+      {"trigger": "mention_spam", "mention_limit": 8, "mention_raid_protection": True,
+       "enabled": False})
+check("a profile rule: on member updates, blocking the member's interactions",
+      {k: result["rules"][3][k] for k in ("trigger", "event", "keywords", "actions")},
+      {"trigger": "member_profile", "event": "member_update", "keywords": ["spammer"],
+       "actions": [{"type": "block_member_interactions"}]})
+check("...and plain JSON", json.loads(json.dumps(result)) == result, True)
+cl, g, http = fresh()
+result, _ = go(cl, "list_automod_rules", {"guild_id": GUILD})
+check("no rules is said plainly", (result["count"], result["message"]),
+      (0, "No AutoMod rules in Testing Server."))
+cl, g, http = fresh()
+http.fail["get_auto_moderation_rules"] = discord.NotFound(_Resp(404), "none")
+check("...and discord.py's NotFound for a server with none is an empty list",
+      go(cl, "list_automod_rules", {"guild_id": GUILD})[0]["count"], 0)
+cl, g, http = fresh(bot_perms=SEND)
+check("no Manage Server: one sentence, Discord never asked",
+      (refusal(cl, "list_automod_rules", {"guild_id": GUILD}), http.calls),
+      ("this bot lacks Manage Server in Testing Server, so it can't read its AutoMod "
+       "rules - give its role Manage Server (or Administrator) first.", []))
+
+
 # ===================================================================== the end
 print()
 if _fails:
