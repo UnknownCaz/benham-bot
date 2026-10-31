@@ -599,6 +599,19 @@
     "taints": true,
     "tier": 0
   },
+  "list_channel_permissions": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_channels": {
     "always_confirm": false,
     "blocked_when_tainted": false,

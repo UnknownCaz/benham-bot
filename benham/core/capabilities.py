@@ -3098,6 +3098,139 @@ async def _member_overwrite(ctx, ch, g, p):
     return out
 
 
+# --- reading a channel's overwrites (INTENT 60, Stage D follow-up) -----------
+#
+# Edit Channel > Permissions as a READ. Before this, only set_channel_permissions'
+# read-back showed an overwrite, and only after changing one. The channel is
+# fetched fresh, as _overwrite_read does: the cache can lag a change made in
+# Discord seconds ago, and this is meant to be the state set_channel_permissions
+# would merge onto. The names are Discord's own: discord.py iterates an overwrite
+# as read_messages / external_emojis, and comparing those with what was asked for
+# reports drift that isn't there (Stage 7's trap).
+
+_OW_GONE = "a role or member no longer in the server"
+_OW_UNREAD = "a member this bot couldn't look up just now"
+
+
+def _ow_names(names):
+    """discord.py's flag names as Discord spells them, sorted, one per bit."""
+    return sorted({_PERM_BY_BIT.get(discord.Permissions.VALID_FLAGS[n], n) for n in names})
+
+
+async def _ow_target(g, target):
+    """Who one overwrite is for: (kind, name, id key, sort key).
+
+    discord.py hands back a bare Object when its cache has no such role or
+    member. A role it can't find is gone (every role is cached); a member may
+    only be uncached, so it is looked up before being called gone. Sort keys:
+    roles highest first with @everyone last, then members by name, then the
+    gone."""
+    if isinstance(target, discord.Role):
+        return ("role", target.name, "role_id",
+                (0, target.is_default(), -target.position, target.id))
+    if isinstance(target, discord.Member):
+        return ("member", target.display_name, "user_id",
+                (1, target.display_name.casefold(), target.id))
+    if getattr(target, "type", None) is not discord.Role:
+        try:
+            m = g.get_member(target.id) or await asyncio.wait_for(
+                g.fetch_member(target.id), LOOK_TIMEOUT)
+        except discord.NotFound:
+            m = None
+        except Exception:  # noqa: BLE001 - a read says what it couldn't see
+            return "member", _OW_UNREAD, "user_id", (1, "￿", target.id)
+        if m is not None:
+            return ("member", m.display_name, "user_id",
+                    (1, m.display_name.casefold(), m.id))
+    return "unknown", _OW_GONE, "target_id", (2, "", target.id)
+
+
+@action("list_channel_permissions", identity.READ,
+        "A channel's permission overwrites (Edit Channel > Permissions): for each role or "
+        "member with an overwrite there, what it allows and what it denies, in Discord's "
+        "own permission names - everything not named is inherited from the server-wide "
+        "permissions. Roles come first (highest first, @everyone last), then members, each "
+        "with the role_id or user_id that set_channel_permissions takes; "
+        "set_channel_permissions is what changes them. Read fresh from Discord, so it is "
+        "the current state - what set_channel_permissions would merge onto. "
+        "permissions_synced says whether the channel still takes its category's "
+        "overwrites. Give role_id or user_id (not both) to read just that one.",
+        {"channel_id": {"type": "int", "required": True},
+         "role_id": {"type": "int",
+                     "desc": "Only this role's overwrite (list_roles has the ids)"},
+         "user_id": {"type": "int",
+                     "desc": "Or only this member's overwrite (find_user has the ids)"}},
+        taints=True)
+async def _list_channel_permissions(ctx, p):
+    ch = await ctx.channel(p["channel_id"])
+    g = getattr(ch, "guild", None)
+    if g is None or not hasattr(ch, "set_permissions"):
+        raise ActionError(
+            f"{ch} has no permission overwrites to read - only server channels and "
+            "categories carry them. A thread inherits its parent channel's, so read "
+            "the parent's instead."
+        )
+    has_role, has_user = p.get("role_id") is not None, p.get("user_id") is not None
+    if has_role and has_user:
+        raise ActionError("give role_id or user_id, not both - this reads one role's "
+                          "overwrite, one member's, or with neither, all of them.")
+    only = member = None
+    if has_role:
+        role = g.get_role(int(p["role_id"]))
+        if role is None:
+            raise ActionError(f"no role {p['role_id']} in {g.name} - list_roles has the ids")
+        only, who, rest = role.id, role.name, "it gets its server-wide permissions here."
+    elif has_user:
+        member = await ctx.member(g.id, p["user_id"])
+        only, who, rest = (member.id, member.display_name,
+                           "they get what their roles give them here.")
+
+    warning = None
+    try:
+        fresh = await asyncio.wait_for(g.fetch_channel(ch.id), LOOK_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 - a read falls back to the cache, never fails
+        fresh = ch
+        warning = (f"Discord didn't answer a fresh read of #{ch.name} "
+                   f"({type(e).__name__}), so this is this bot's cached copy - a change "
+                   "made in the last few seconds may not show yet.")
+
+    rows = []
+    for target, ow in fresh.overwrites.items():
+        if only is not None and target.id != only:
+            continue
+        if member is not None:
+            target = member         # already looked up; no second fetch
+        kind, name, key, order = await _ow_target(g, target)
+        state = _overwrite_state(ow)
+        words = (_ow_words(state) if state["allow"] or state["deny"]
+                 else "listed, but sets nothing - everything is inherited")
+        rows.append((order, {"kind": kind, "name": name, key: target.id,
+                             "allow": _ow_names(state["allow"]),
+                             "deny": _ow_names(state["deny"]),
+                             "summary": f"{name}: {words}"}))
+    rows.sort(key=lambda r: r[0])
+    rows = [r for _, r in rows]
+
+    cat = getattr(fresh, "category", None)
+    synced = bool(getattr(fresh, "permissions_synced", False))
+    out = {"channel": f"#{fresh.name}", "channel_id": fresh.id, "kind": fresh.type.name,
+           "category": cat.name if cat is not None else None,
+           "permissions_synced": synced, "count": len(rows), "overwrites": rows}
+    if synced:
+        out["note"] = (f"#{fresh.name} is synced with its category {cat.name}: these are "
+                       "the category's overwrites. Changing them here unsyncs it, and a "
+                       "later sync with the category (Sync Now in Discord) would put the "
+                       "category's back over the change.")
+    if not rows:
+        out["message"] = (f"{who} has no overwrite in #{fresh.name} - {rest}"
+                          if only is not None else
+                          f"No overwrites in #{fresh.name} - everyone gets the "
+                          "server-wide permissions here.")
+    if warning:
+        out["warning"] = warning
+    return out
+
+
 @action("create_invite", identity.MANAGE, "Create an invite link to a channel.",
         {"channel_id": {"type": "int", "required": True},
          "max_age_seconds": {"type": "int", "desc": "0 = never expires (default 86400)"},

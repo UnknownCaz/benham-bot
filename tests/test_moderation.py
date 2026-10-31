@@ -5,7 +5,9 @@ Nine capabilities and one extension give the Audit Log, Bans, Invites, Prune,
 member channel overwrites and AutoMod screens to a prompt: read_audit_log,
 list_bans, list_invites, revoke_invite, prune_members, set_channel_permissions'
 user_id, list_automod_rules, create_automod_rule, edit_automod_rule,
-delete_automod_rule. What is pinned:
+delete_automod_rule. A follow-up, list_channel_permissions, reads a channel's
+overwrites back (Edit Channel > Permissions), fresh from Discord, in Discord's
+own permission names. What is pinned:
 
   THE READS ARE READS. Tier 0, a guild named, taint (reasons, names, inviters
   and AutoMod keywords are other people's text), times in both halves - Caz's
@@ -1098,6 +1100,236 @@ for params, want in (
           refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
                                                   **params}), want)
 check("...nothing written", http.writes(), [])
+
+
+# ==================================================== list_channel_permissions
+section("list_channel_permissions - Edit Channel > Permissions as a read, fresh")
+a = capabilities.REGISTRY["list_channel_permissions"]
+check("tier 0, taints, not outward, no guild named (it takes channel_id), no confirm",
+      (a.tier, a.taints, a.outward, a.needs_guild, a.always_confirm, a.posts),
+      (0, True, False, False, False, False))
+check("never a guest capability, and a guest is refused",
+      (a.guest, policy.authorize(a, policy.CallContext.guest_dm(111, 5)).allowed),
+      (False, False))
+check("channel_id required; role_id and user_id optional ints",
+      (a.params["channel_id"], a.params["role_id"]["type"], a.params["user_id"]["type"],
+       "required" in a.params["role_id"], "required" in a.params["user_id"]),
+      ({"type": "int", "required": True}, "int", "int", False, False))
+
+EXT_EMOJI, TTS = 1 << 18, 1 << 12
+SHAPE = [{"id": str(EVERYONE), "type": 0, "allow": "0", "deny": str(VIEW)},
+         {"id": str(ALICE), "type": 1, "allow": str(EMBED), "deny": str(TTS)},
+         {"id": str(MEMBERS), "type": 0, "allow": str(VIEW | SEND), "deny": "0"},
+         {"id": str(BOT), "type": 1, "allow": str(VIEW), "deny": "0"},
+         {"id": str(MODS), "type": 0, "allow": str(EMBED | EXT_EMOJI), "deny": "0"}]
+ROW_MODS = {"kind": "role", "name": "Mods", "role_id": MODS,
+            "allow": ["embed_links", "use_external_emojis"], "deny": [],
+            "summary": "Mods: allows embed_links, use_external_emojis"}
+ROW_MEMBERS = {"kind": "role", "name": "Members", "role_id": MEMBERS,
+               "allow": ["send_messages", "view_channel"], "deny": [],
+               "summary": "Members: allows send_messages, view_channel"}
+ROW_EVERYONE = {"kind": "role", "name": "@everyone", "role_id": EVERYONE, "allow": [],
+                "deny": ["view_channel"], "summary": "@everyone: denies view_channel"}
+ROW_ALICE = {"kind": "member", "name": "Alice", "user_id": ALICE,
+             "allow": ["embed_links"], "deny": ["send_tts_messages"],
+             "summary": "Alice: allows embed_links; denies send_tts_messages"}
+ROW_BOT = {"kind": "member", "name": "benham", "user_id": BOT,
+           "allow": ["view_channel"], "deny": [], "summary": "benham: allows view_channel"}
+
+
+def shaped():
+    """#asd with role, member and @everyone overwrites in Discord - and NOT in the
+    cache, so whatever the read shows came from the fresh fetch."""
+    cl, g, http = fresh()
+    http._channel(ASD)["permission_overwrites"] = copy.deepcopy(SHAPE)
+    return cl, g, http
+
+
+cl, g, http = shaped()
+check("the cache doesn't hold them (so the read below can only be the fresh fetch)",
+      g.get_channel(ASD).overwrites, {})
+result, preview = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("a read: no preview, nothing written; Discord asked for the channel, then the "
+      "one uncached member",
+      (preview, http.writes(), http.calls),
+      (None, [], [("get_channel", ASD), ("get_member", ALICE)]))
+check("roles first, highest first, @everyone last among roles; then members by name; "
+      "only the set halves, in Discord's names (view_channel, use_external_emojis)",
+      result["overwrites"], [ROW_MODS, ROW_MEMBERS, ROW_EVERYONE, ROW_ALICE, ROW_BOT])
+check("...the channel: name, id, kind, category, not synced, counted",
+      {k: result[k] for k in ("channel", "channel_id", "kind", "category",
+                              "permissions_synced", "count")},
+      {"channel": "#asd", "channel_id": ASD, "kind": "text", "category": None,
+       "permissions_synced": False, "count": 5})
+check("...and no note, message or warning",
+      [k for k in ("note", "message", "warning") if k in result], [])
+
+cl, g, http = fresh()
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("no overwrites is said plainly",
+      (result["count"], result["overwrites"], result["message"], "note" in result),
+      (0, [], "No overwrites in #asd - everyone gets the server-wide permissions here.",
+       False))
+result, _ = go(cl, "list_channel_permissions", {"channel_id": VOICE})
+check("a voice channel reads the same way, its kind said",
+      (result["channel"], result["kind"], result["count"]), ("#General", "voice", 0))
+
+section("list_channel_permissions - synced with its category: the note says what an "
+        "edit here means")
+cl, g, http = fresh()
+for cid in (GAMES, BETA):
+    http._channel(cid)["permission_overwrites"] = [
+        {"id": str(MEMBERS), "type": 0, "allow": str(VIEW), "deny": "0"}]
+g = resync(cl, g)
+result, _ = go(cl, "list_channel_permissions", {"channel_id": BETA})
+check("the category's overwrite, the category named, synced",
+      (result["category"], result["permissions_synced"], result["count"],
+       result["overwrites"][0]["summary"]),
+      ("Games", True, 1, "Members: allows view_channel"))
+check("...and the note", result["note"],
+      "#benham-beta is synced with its category Games: these are the category's "
+      "overwrites. Changing them here unsyncs it, and a later sync with the category "
+      "(Sync Now in Discord) would put the category's back over the change.")
+http._channel(BETA)["permission_overwrites"].append(
+    {"id": str(ALICE), "type": 1, "allow": str(EMBED), "deny": "0"})
+result, _ = go(cl, "list_channel_permissions", {"channel_id": BETA})
+check("one more overwrite than the category's: not synced, no note",
+      (result["permissions_synced"], "note" in result, result["count"]), (False, False, 2))
+result, _ = go(cl, "list_channel_permissions", {"channel_id": GAMES})
+check("a category reads as one", (result["channel"], result["kind"], result["category"]),
+      ("#Games", "category", None))
+
+section("list_channel_permissions - a target that is gone, one that sets nothing")
+cl, g, http = fresh()
+GONE_ROLE = 8800777
+http._channel(ASD)["permission_overwrites"] = [
+    {"id": str(CAROL), "type": 1, "allow": "0", "deny": str(VIEW)},
+    {"id": str(GONE_ROLE), "type": 0, "allow": str(SEND), "deny": "0"},
+    {"id": str(BOTS), "type": 0, "allow": "0", "deny": "0"}]
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("a deleted role and a member who left: kind unknown, said in words, target_id",
+      result["overwrites"][1:],
+      [{"kind": "unknown", "name": "a role or member no longer in the server",
+        "target_id": CAROL, "allow": [], "deny": ["view_channel"],
+        "summary": "a role or member no longer in the server: denies view_channel"},
+       {"kind": "unknown", "name": "a role or member no longer in the server",
+        "target_id": GONE_ROLE, "allow": ["send_messages"], "deny": [],
+        "summary": "a role or member no longer in the server: allows send_messages"}])
+check("...the member was looked up before being called gone; the role was not",
+      http.calls, [("get_channel", ASD), ("get_member", CAROL)])
+check("an overwrite that sets nothing is still listed, and said so",
+      result["overwrites"][0],
+      {"kind": "role", "name": "Bots", "role_id": BOTS, "allow": [], "deny": [],
+       "summary": "Bots: listed, but sets nothing - everything is inherited"})
+cl, g, http = shaped()
+http.fail["get_member"] = discord.HTTPException(_Resp(500), "Internal Server Error")
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("a member Discord wouldn't look up just now is not called gone",
+      [r for r in result["overwrites"] if r.get("user_id") == ALICE],
+      [{**ROW_ALICE, "name": "a member this bot couldn't look up just now",
+        "summary": "a member this bot couldn't look up just now: allows embed_links; "
+                   "denies send_tts_messages"}])
+
+section("list_channel_permissions - one role's or one member's")
+cl, g, http = shaped()
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD, "role_id": MEMBERS})
+check("role_id: only that role's", (result["count"], result["overwrites"]),
+      (1, [ROW_MEMBERS]))
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD, "role_id": EVERYONE})
+check("role_id of @everyone (the server's id) works too", result["overwrites"],
+      [ROW_EVERYONE])
+cl, g, http = shaped()
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD, "user_id": ALICE})
+check("user_id: only that member's", (result["count"], result["overwrites"]),
+      (1, [ROW_ALICE]))
+check("...the member looked up once (the check), then the fresh channel - no second "
+      "lookup", http.calls, [("get_member", ALICE), ("get_channel", ASD)])
+cl, g, http = shaped()
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD, "role_id": BOTS})
+check("a role with no overwrite here: an empty list, said plainly, not an error",
+      (result["count"], result["overwrites"], result["message"]),
+      (0, [], "Bots has no overwrite in #asd - it gets its server-wide permissions here."))
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD, "user_id": BOB})
+check("a member with no overwrite here: the same, in a member's words",
+      (result["count"], result["message"]),
+      (0, "Bob has no overwrite in #asd - they get what their roles give them here."))
+
+section("list_channel_permissions - refused at once, one sentence each")
+cl, g, http = shaped()
+for params, want in (
+        ({"role_id": MEMBERS, "user_id": ALICE},
+         "give role_id or user_id, not both - this reads one role's overwrite, one "
+         "member's, or with neither, all of them."),
+        ({"role_id": BOTS + 100},
+         f"no role {BOTS + 100} in Testing Server - list_roles has the ids")):
+    m = refusal(cl, "list_channel_permissions", {"channel_id": ASD, **params})
+    check(f"{sorted(params)}: one sentence, Discord never asked",
+          (m, one_sentence(m), http.calls), (want, True, []))
+m = refusal(cl, "list_channel_permissions", {"channel_id": ASD, "user_id": CAROL})
+check("not a member of the server: one sentence, nothing else asked",
+      (m, http.calls), (f"user {CAROL} is not a member of Testing Server",
+                        [("get_member", CAROL)]))
+cl, g, http = fresh()
+thread = discord.Thread(guild=g, state=g._state, data={
+    "id": "401", "guild_id": str(GUILD), "parent_id": str(ASD), "owner_id": str(BOT),
+    "name": "a-thread", "type": 11, "message_count": 0, "member_count": 1,
+    "thread_metadata": {"archived": False, "auto_archive_duration": 1440,
+                        "archive_timestamp": "2026-10-30T00:00:00+00:00",
+                        "locked": False}})
+
+
+async def _the_thread(cid):
+    return thread
+
+
+cl.fetch_channel = _the_thread
+m = refusal(cl, "list_channel_permissions", {"channel_id": 401})
+check("a thread: one sentence pointing at its parent, Discord never asked",
+      (m, http.calls),
+      ("a-thread has no permission overwrites to read - only server channels and "
+       "categories carry them. A thread inherits its parent channel's, so read the "
+       "parent's instead.", []))
+
+section("list_channel_permissions - the fresh read wins over the cache; the cache is "
+        "the fallback")
+cl, g, http = fresh()
+http._channel(ASD)["permission_overwrites"] = [
+    {"id": str(MEMBERS), "type": 0, "allow": str(VIEW), "deny": "0"}]
+g = resync(cl, g)
+http._channel(ASD)["permission_overwrites"] = [
+    {"id": str(MEMBERS), "type": 0, "allow": "0", "deny": str(SEND)}]
+check("(the cache still holds the old overwrite)",
+      capabilities._overwrite_state(g.get_channel(ASD).overwrites_for(g.get_role(MEMBERS))),
+      {"allow": ["read_messages"], "deny": []})
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("a change made in Discord seconds ago shows: the fresh fetch, no warning",
+      (result["overwrites"][0]["deny"], result["overwrites"][0]["allow"],
+       "warning" in result, http.calls),
+      (["send_messages"], [], False, [("get_channel", ASD)]))
+http.calls.clear()
+http.fail["get_channel"] = discord.HTTPException(_Resp(503), "Service Unavailable")
+result, _ = go(cl, "list_channel_permissions", {"channel_id": ASD})
+check("the fetch failing: the cached copy, never an error for a read",
+      (result["overwrites"][0]["allow"], result["overwrites"][0]["deny"], http.calls),
+      (["view_channel"], [], [("get_channel", ASD)]))
+check("...and the warning says so", result["warning"],
+      "Discord didn't answer a fresh read of #asd (HTTPException), so this is this bot's "
+      "cached copy - a change made in the last few seconds may not show yet.")
+
+section("list_channel_permissions - after set_channel_permissions, the read shows it")
+cl, g, http = fresh()
+go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": BOT,
+                                   "allow": ["view_channel"], "deny": ["send_tts_messages"]})
+result, _ = go(cl, "list_channel_permissions", {"channel_id": BETA, "user_id": BOT})
+check("the live test's round trip, offline: one member entry, allow and deny as set",
+      result["overwrites"], [{"kind": "member", "name": "benham", "user_id": BOT,
+                              "allow": ["view_channel"], "deny": ["send_tts_messages"],
+                              "summary": "benham: allows view_channel; denies "
+                                         "send_tts_messages"}])
+go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": BOT, "reset": True})
+result, _ = go(cl, "list_channel_permissions", {"channel_id": BETA})
+check("...reset: gone again, the count back to 0", (result["count"], result["overwrites"]),
+      (0, []))
 
 
 # ========================================================== list_automod_rules
