@@ -759,6 +759,16 @@ check("only a category named: to the bottom there, said so, permissions kept",
       ["After: the category Archive, position 1 of 0-1, at the bottom, below #old.",
        "No place was named, so it goes to the bottom there.",
        "Its own permissions stay as they are (sync_permissions is off)."])
+_, preview, _, _, _ = mc({"channel_id": GAMENIGHT, "category_id": str(ARCHIVE)})
+check("landing where it is the only one of its kind: nothing shifts, and it says so",
+      preview["detail"].splitlines()[1:],
+      ["After: the category Archive, position 0 of 0-0, the only one there.",
+       "No place was named, so it goes to the bottom there.",
+       "Voice channels always sit below text channels there, so this counts only the "
+       "voice channels.",
+       "Its own permissions stay as they are (sync_permissions is off).",
+       "Nothing else changes.",
+       "Its current place is saved first, so it can be put back."])
 _, preview, _, _, _ = mc({"channel_id": BETA, "category_id": str(ARCHIVE),
                           "to_top": True, "sync_permissions": True})
 check("sync_permissions on: the preview says it takes the category's permissions",
@@ -1009,7 +1019,8 @@ check("discord.py's edit_role_positions: the two roles that trade places, nothin
 check("...the audit reason is the acting face's", http.writes[0][2], capabilities.VIA)
 check("the result's place is Discord's answer, in hierarchy order",
       (result["status"], result["after"], "warning" in result),
-      ("role_moved", {"position": 2, "between": "below 'Hermes' and above 'Regulars'",
+      ("role_moved", {"position": 2, "discord_position": 2,
+                      "between": "below 'Hermes' and above 'Regulars'",
                       "above": "Regulars", "below": "Hermes"}, False))
 new = [b for b in backups() if b not in before]
 check("one backup, <guild>-role-<id>-<local stamp>.json",
@@ -1041,6 +1052,52 @@ check("below_id moves a role down past the ones between",
 check("to_bottom: just above @everyone",
       rsent(mr({"role_id": MODS, "to_bottom": True}, force=True)[2])[1],
       [(MODS, 1), (MEMBERS, 2), (REGULARS, 3), (HERMES, 4)])
+
+section("move_role - Discord's numbers can skip; the inverse is exact anyway")
+# The Testing Server read 0, 1, 5, 6, 14, 15 on 2026-10-31: @everyone, a role,
+# two managed ones, the bot's Bots, one above it.
+_GAPPY = {str(EVERYONE): 0, str(MEMBERS): 1, str(REGULARS): 5, str(HERMES): 6,
+          str(MODS): 14, str(BOTS): 15, str(OWNER_ROLE): 16}
+
+
+def gappy():
+    d = guild_data()
+    for r in d["roles"]:
+        r["position"] = _GAPPY[r["id"]]
+    return d
+
+
+g = build(gappy())
+cl = _Client([g])
+http = g._state.http
+_, preview = go(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "position": 2})
+check("the preview shows the place AND Discord's number where they differ",
+      preview["detail"].splitlines()[:2],
+      ["Now: position 1, just above @everyone, below 'Regulars'.",
+       "After: position 2 (Discord's number 5), below 'Hermes' and above 'Regulars'."])
+result, _ = go(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "position": 2},
+               force=True)
+check("moving past a role numbered 5 swaps the two numbers, not renumbers them 1, 2",
+      rsent(http)[1], [(REGULARS, 1), (MEMBERS, 5)])
+check("...read back: place 2, Discord's number 5, no warning",
+      (result["after"]["position"], result["after"]["discord_position"],
+       "warning" in result), (2, 5, False))
+with open(result["backup"], encoding="utf-8") as fh:
+    rec = json.load(fh)
+http.writes.clear()
+result, _ = go(cl, "move_role", {"guild_id": GUILD, **rec["restore"]}, force=True)
+check("...fed the backup's restore, every role is back on the number it had",
+      ({r["id"]: r["position"] for r in http.data["roles"]}, rsent(http)[1]),
+      (_GAPPY, [(MEMBERS, 1), (REGULARS, 5)]))
+g = build(gappy())
+cl = _Client([g])
+result, _ = go(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "to_top": True},
+               force=True)
+check("to_top across the gaps: each role in the span keeps a number from the span",
+      rsent(g._state.http)[1], [(REGULARS, 1), (HERMES, 5), (MODS, 6), (MEMBERS, 14)])
+check("...landing right below Bots", (result["after"]["between"],
+                                      result["after"]["discord_position"]),
+      ("below 'Bots' and above 'Mods'", 14))
 
 section("move_role - the hierarchy rule, every case, refused at the preview")
 CEILING = ("this bot can't move a role to or above its own top role 'Bots' - the "
