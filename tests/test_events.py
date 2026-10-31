@@ -705,6 +705,165 @@ check("Forbidden is run()'s permission sentence",
       "lacks the permission" in (refusal(cl, "create_event", VEV) or ""), True)
 
 
+# ================================================================== edit_event
+section("edit_event - registered like edit_server_look")
+registered("edit_event", 2, True, True, True)
+LATER = START + timedelta(hours=1)
+
+
+def one_event(**kw):
+    """A client, its guild and one event in it (voice, scheduled, at START by default)."""
+    cl, g = fresh(atts=kw.pop("atts", ()), **kw.pop("perms", {}))
+    eid, = g.add(ev_data(kw.pop("name", "stage-b-test"), kw.pop("start", START), **kw))
+    return cl, g, eid
+
+
+section("edit_event - previewed first: every change old -> new, nothing touched")
+cl, g, eid = one_event(description="old words")
+result, preview = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                                        "description": "new words", "start": naive(LATER)})
+check("a preview, and Discord asked nothing but the event itself",
+      (result, g._state.http.writes, g._state.http.reads), (None, [], [("get", eid)]))
+check("...the summary names the event, the server and what changes",
+      ("stage-b-test" in preview["summary"], "Testing Server" in preview["summary"],
+       preview["summary"].endswith(": start, description")), (True, True, True))
+d = preview["detail"]
+check("...the start OLD -> NEW, both in Detroit time and UTC",
+      f"Start: {eventtime.line(START)} -> {eventtime.line(LATER)}" in d, True)
+check("...the description OLD -> NEW", "Description: 'old words' -> 'new words'" in d, True)
+check("...and the naive-time note", "read as Detroit time" in d, True)
+
+section("edit_event - confirmed: discord.py's own edit, only what changed")
+result, _ = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                                  "description": "new words", "start": naive(LATER)},
+               force=True)
+verb, got_id, payload, reason = g._state.http.writes[0]
+check("one edit of that event, with the new start and description and the reason",
+      (len(g._state.http.writes), verb, got_id,
+       datetime.fromisoformat(payload["scheduled_start_time"]), payload["description"],
+       reason), (1, "edit", eid, LATER, "new words", capabilities.VIA))
+check("...nothing else of substance (no name, end, status or image)",
+      [k for k in ("name", "scheduled_end_time", "status", "image") if k in payload], [])
+check("the result is the event as Discord has it now",
+      (result["status"], result["changed"], result["event"]["start"],
+       result["event"]["description"]),
+      ("event_edited", ["start", "description"], eventtime.both(LATER), "new words"))
+
+section("edit_event - the other fields")
+cl, g, eid = one_event(kind=3, location="Doom's place", end=START + timedelta(hours=3),
+                       image="oldcov", atts=[_Att(1, "new.png", COVER)])
+_, preview = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid, "name": "Movies",
+                                   "location": "the park", "image": "attachment",
+                                   "message_id": MSG})
+d = preview["detail"]
+check("name, location and cover OLD -> NEW, and the old cover is promised saved",
+      ("Name: 'stage-b-test' -> 'Movies'" in d, "Location: \"Doom's place\" -> 'the park'"
+       in d, "Cover picture: a cover picture -> PNG, 800x320" in d,
+       "saved first" in d), (True, True, True, True))
+before = backups()
+result, _ = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid, "name": "Movies",
+                                  "location": "the park", "image": "attachment",
+                                  "message_id": MSG}, force=True)
+payload = g._state.http.writes[0][2]
+check("...the edit carries the name, the location metadata and the new cover",
+      (payload["name"], payload["entity_metadata"], payload["image"].startswith(
+          "data:image/png;base64,")), ("Movies", {"location": "the park"}, True))
+saved = result["old_cover_saved"]
+check("...and the old cover was saved first, byte for byte",
+      (len(saved), len(backups()) - len(before),
+       open(saved[0], "rb").read() == COVER if saved else None), (1, 1, True))
+cl, g, eid = one_event(image="oldcov", end=START + timedelta(hours=2),
+                       description="words")
+_, preview = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                                   "clear": ["image", "end", "description"]})
+check("clear: cover, end and description each say removed",
+      all(w in preview["detail"] for w in ("-> removed",
+                                           f"End: {eventtime.line(START + timedelta(hours=2))}"
+                                           " -> removed", "Description: 'words' -> removed")),
+      True)
+go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                      "clear": ["image", "end", "description"]}, force=True)
+payload = g._state.http.writes[0][2]
+check("...sent as nulls", (payload["image"], payload["scheduled_end_time"],
+                           payload["description"]), (None, None, None))
+cl, g, eid = one_event(description="words")
+go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid, "description": ""}, force=True)
+check("an empty description is a clear", g._state.http.writes[0][2]["description"], None)
+cl, g, eid = one_event()
+g.channels[8800010] = _Chan(8800010, "Lobby", discord.ChannelType.voice)
+_, preview = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                                   "channel_id": 8800010})
+check("a channel move previews old -> new", "Channel: #Game Night -> #Lobby"
+      in preview["detail"], True)
+go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid, "channel_id": 8800010}, force=True)
+check("...and sends the new voice channel by id",
+      g._state.http.writes[0][2]["channel_id"], 8800010)
+cl, g, eid = one_event(status=2, end=START + timedelta(hours=2))
+result, _ = go(cl, "edit_event", {"guild_id": GUILD, "event_id": eid,
+                                  "end": naive(START + timedelta(hours=4))}, force=True)
+check("a RUNNING event can still change its end",
+      datetime.fromisoformat(g._state.http.writes[0][2]["scheduled_end_time"]),
+      START + timedelta(hours=4))
+
+section("edit_event - refused before anything changes")
+
+
+def edit_refused(params, force=True, **kw):
+    cl, g, eid = one_event(**kw)
+    msg = refusal(cl, "edit_event", {"guild_id": GUILD, "event_id": eid, **params},
+                  force=force)
+    return msg, g._state.http.writes
+
+
+for force in (False, True):
+    msg, writes = edit_refused({"start": naive(LATER)}, force=force, status=2)
+    check(f"a running event's start can't move ({'confirm' if force else 'preview'})",
+          "already started" in (msg or "") and writes == [], True)
+for st, word in ((3, "completed"), (4, "cancelled")):
+    msg, writes = edit_refused({"name": "again"}, status=st)
+    check(f"a {word} event can't change at all", f"already {word}" in (msg or "")
+          and writes == [], True)
+msg, writes = edit_refused({"clear": ["end"]}, kind=3, location="x",
+                           end=START + timedelta(hours=1))
+check("an external event can't lose its end", "has to keep an end" in (msg or ""), True)
+msg, writes = edit_refused({"location": "the park"})
+check("a voice event has no location", "only an external event" in (msg or ""), True)
+msg, writes = edit_refused({"channel_id": VOICE}, kind=3, location="x",
+                           end=START + timedelta(hours=1))
+check("an external event has no channel", "has a location, not a channel" in (msg or ""),
+      True)
+msg, writes = edit_refused({"channel_id": STAGE})
+check("a voice event can't move into a stage channel", "say kind=stage" in (msg or ""),
+      True)
+msg, writes = edit_refused({"start": naive(NOW - timedelta(hours=1))})
+check("a new start in the past", "already in the past" in (msg or ""), True)
+msg, writes = edit_refused({"start": naive(LATER + timedelta(hours=2))},
+                           end=START + timedelta(hours=2))
+check("a start moved past the existing end", "wouldn't be after the start" in (msg or "")
+      and writes == [], True)
+msg, writes = edit_refused({"end": naive(START - timedelta(hours=1))})
+check("an end before the start", "wouldn't be after" in (msg or ""), True)
+msg, writes = edit_refused({"description": "x", "clear": ["description"]})
+check("set and clear the same thing", "set and remove it" in (msg or ""), True)
+msg, writes = edit_refused({"clear": ["name"]})
+check("clear only takes description, image, end", "isn't something I can remove"
+      in (msg or ""), True)
+msg, writes = edit_refused({})
+check("nothing to change", "nothing to change" in (msg or ""), True)
+msg, writes = edit_refused({"name": "x" * 101})
+check("a name over 100 characters", "1 to 100" in (msg or ""), True)
+cl, g = fresh()
+check("an unknown event is a sentence", "no scheduled event 4242" in (refusal(
+    cl, "edit_event", {"guild_id": GUILD, "event_id": 4242, "name": "x"}, force=False)
+    or ""), True)
+msg, writes = edit_refused({"name": "x"}, creator="draco",
+                           perms={"manage": False, "create": True})
+check("Create Events alone can't edit someone else's event",
+      "lacks Manage Events" in (msg or "") and writes == [], True)
+check("...but can edit one this bot made",
+      edit_refused({"name": "x"}, perms={"manage": False, "create": True})[0], None)
+
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

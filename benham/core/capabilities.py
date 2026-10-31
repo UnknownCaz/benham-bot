@@ -3436,6 +3436,164 @@ async def _create_event(ctx, p):
             "open_left": EVENT_CAP - open_now - 1}
 
 
+def _quoted(text):
+    return repr(text) if text else "none"
+
+
+@action("edit_event", identity.MANAGE,
+        "Change a server's scheduled event: name, start, end, description, location "
+        "(external events), channel (voice or stage events, same kind), cover "
+        "picture, or clear (description, image, end). Times as in create_event: no "
+        "Z or offset = Caz's local time (America/Detroit), and the preview shows "
+        "every change old -> new in Detroit time and UTC. Only an event that hasn't "
+        "started can move its start; a finished or cancelled one can't change at "
+        "all. Always previewed and confirmed; the old cover is saved first.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "name": {"type": "str", "desc": "New name, 1-100 characters"},
+         "start": {"type": "str", "desc": "New start, ISO 8601 (no zone = America/"
+                                          "Detroit)"},
+         "end": {"type": "str", "desc": "New end, same format"},
+         "description": {"type": "str", "desc": "New description, up to 1000 characters "
+                                                "(empty = remove it)"},
+         "location": {"type": "str", "desc": "New location of an external event"},
+         "channel_id": {"type": "int", "desc": "New voice or stage channel (same kind "
+                                               "as the event's)"},
+         "image": {"type": "str", "desc": "New cover: attachment | attachment:N | "
+                                          "asset:<file> | https://link"},
+         "clear": {"type": "list", "desc": "Things to REMOVE: any of description, "
+                                           "image, end"},
+         "message_id": {"type": "int", "desc": "Message carrying the cover attachment, "
+                                               "if you use one"},
+         "message_channel_id": {"type": "int", "desc": "That message's channel, if it "
+                                                       "isn't the one this request came "
+                                                       "from"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "edit that event", ev)
+    status = _event_closed(ev)
+    kind = _event_kind(ev)
+    clear = _look_clear(p.get("clear"), _EVENT_CLEARABLE)
+
+    name = _event_name(p["name"]) if p.get("name") is not None else None
+    desc = None
+    if p.get("description") is not None:
+        desc = _event_desc(p["description"])
+        if desc == "":
+            # An empty description is how a person says "none": same as clearing it.
+            desc = None
+            if "description" not in clear:
+                clear.append("description")
+    start = _event_time(p["start"], "start") if p.get("start") else None
+    end = _event_time(p["end"], "end") if p.get("end") else None
+    location = _event_location(p["location"]) if p.get("location") is not None else None
+    for field, given in (("description", desc is not None), ("end", end is not None),
+                         ("image", bool(p.get("image")))):
+        if given and field in clear:
+            raise ActionError(f"{field}: you asked to set and remove it in the same "
+                              "request - pick one.")
+    if not (name is not None or desc is not None or start or end or location
+            or p.get("channel_id") or p.get("image") or clear):
+        raise ActionError("nothing to change - pass name, start, end, description, "
+                          "location, channel_id, image, or clear.")
+
+    if start is not None and status != "scheduled":
+        raise ActionError(f"the event {ev.name!r} has already started, so its start "
+                          "can't move - Discord only moves the start of an event that "
+                          "hasn't begun.")
+    if location is not None and kind != "external":
+        raise ActionError(f"only an external event has a location; {ev.name!r} is a "
+                          f"{kind} event - give channel_id to move it to another channel.")
+    ch = None
+    if p.get("channel_id"):
+        if kind == "external":
+            raise ActionError(f"{ev.name!r} is an external event, which has a location, "
+                              "not a channel - give location to move it.")
+        ch, _ = _event_channel(g, p["channel_id"], kind)
+    if "end" in clear and kind == "external":
+        raise ActionError("an external event has to keep an end time - Discord requires "
+                          "one; give a new end instead.")
+    if start is not None:
+        _event_future(start, "start")
+    if end is not None:
+        _event_future(end, "end")
+    new_start = start.dt if start is not None else ev.start_time
+    new_end = None if "end" in clear else (end.dt if end is not None else ev.end_time)
+    if new_end is not None and new_end <= new_start:
+        raise ActionError(f"the end ({eventtime.line(new_end)}) wouldn't be after the "
+                          f"start ({eventtime.line(new_start)}).")
+    pic = await _event_cover(ctx, p)
+
+    changed = ([f for f, on in (("name", name is not None), ("start", start is not None),
+                                ("end", end is not None or "end" in clear),
+                                ("location", location is not None), ("channel", ch is not None),
+                                ("description", desc is not None or "description" in clear),
+                                ("cover", pic is not None or "image" in clear)) if on])
+    old_cover = ev.cover_image
+    if ctx.dry_run:
+        lines = []
+        if name is not None:
+            lines.append(f"Name: {ev.name!r} -> {name!r}")
+        if start is not None:
+            lines.append(f"Start: {eventtime.line(ev.start_time)} -> "
+                         f"{eventtime.line(start.dt)}")
+        if "end" in changed:
+            lines.append(f"End: {eventtime.line(ev.end_time)} -> "
+                         + (eventtime.line(end.dt) if end is not None else "removed"))
+        if location is not None:
+            lines.append(f"Location: {_quoted(ev.location)} -> {location!r}")
+        if ch is not None:
+            was = _event_where(g, ev).get("channel")
+            lines.append(f"Channel: {'#' + was if was else f'channel {ev.channel_id}'} "
+                         f"-> #{ch.name}")
+        if "description" in changed:
+            lines.append(f"Description: {_quoted(ev.description)} -> "
+                         + (repr(desc) if desc is not None else "removed"))
+        if "cover" in changed:
+            lines.append(f"Cover picture: {'a cover picture' if old_cover else 'none'} -> "
+                         + (pic.describe() if pic is not None else "removed"))
+            if old_cover is not None:
+                lines.append("The current cover picture is saved first, so it can be put "
+                             "back.")
+        lines += eventtime.notes(start, end)
+        if status == "active":
+            lines.append("It's running now, so the change shows to everyone in it.")
+        return {"summary": f"Edit event **{ev.name}** in **{g.name}**: "
+                           + ", ".join(changed),
+                "detail": "\n".join(lines)}
+
+    saved = []
+    if "cover" in changed and old_cover is not None:
+        saved = await _look_save_old(ctx, f"{g.id}-event-{ev.id}", [("cover", old_cover)])
+    kw = {"reason": p.get("reason") or VIA}
+    if name is not None:
+        kw["name"] = name
+    if start is not None:
+        kw["start_time"] = start.dt
+    if end is not None:
+        kw["end_time"] = end.dt
+    elif "end" in clear:
+        kw["end_time"] = None
+    if location is not None:
+        kw["location"] = location
+    if ch is not None:
+        kw["channel"] = ch
+    if desc is not None:
+        kw["description"] = desc
+    elif "description" in clear:
+        kw["description"] = None
+    if pic is not None:
+        kw["image"] = pic.raw
+    elif "image" in clear:
+        kw["image"] = None
+    after = await _event_call(ev.edit(**kw), "event change")
+    return {"status": "event_edited", "guild": g.name, "changed": changed,
+            "event": event_dict(g, after), "old_cover_saved": saved}
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
