@@ -864,6 +864,171 @@ check("a server off the destructive allowlist: refused before the dry-run",
       (m is not None and "destructive_guilds allowlist" in m, http.calls), (True, []))
 
 
+# ===================================================== set_channel_permissions
+section("set_channel_permissions - user_id joins role_id; exactly one of the two")
+a = capabilities.REGISTRY["set_channel_permissions"]
+check("its flags did not move: tier 2, outward, taints, not always-confirmed",
+      (a.tier, a.outward, a.taints, a.always_confirm, a.needs_guild),
+      (2, True, True, False, False))
+check("role_id is no longer required, its words unchanged; user_id is new",
+      (a.params["role_id"], a.params["user_id"]["type"], a.params["channel_id"]),
+      ({"type": "int", "desc": "Role to set the overwrite for (list_roles has the ids)"},
+       "int", {"type": "int", "required": True}))
+cl, g, http = fresh()
+for params, want in (
+        ({"role_id": MEMBERS, "user_id": ALICE, "allow": ["view_channel"]},
+         "give role_id or user_id, not both - one overwrite is set per call, for a role "
+         "or for one member."),
+        ({"allow": ["view_channel"]},
+         "say whose overwrite this is: role_id for a role, or user_id for one member.")):
+    check(f"{sorted(k for k in params if k.endswith('_id'))}: one sentence, nothing sent",
+          (refusal(cl, "set_channel_permissions", {"channel_id": BETA, **params}),
+           http.calls), (want, []))
+check("not a member of the server: refused, nothing sent",
+      (refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": CAROL,
+                                               "allow": ["view_channel"]}),
+       http.writes()),
+      (f"user {CAROL} is not a member of Testing Server", []))
+
+cl, g, http = fresh()
+result, preview = go(cl, "set_channel_permissions", {
+    "channel_id": BETA, "role_id": MEMBERS, "allow": ["view_channel"],
+    "deny": ["send_tts_messages"]})
+check("the role path is as it was: one call with both halves, no read-back",
+      [v for v, _ in http.calls], ["edit_channel_permissions"])
+check("...for the role, allow and deny together",
+      (http.calls[0][1]["target"], http.calls[0][1]["type"], http.calls[0][1]["allow"],
+       http.calls[0][1]["deny"], result["role"]),
+      (MEMBERS, 0, VIEW, 1 << 12, "Members"))
+
+section("set_channel_permissions - a member: allows applied and READ BACK before any deny")
+cl, g, http = fresh()
+result, preview = go(cl, "set_channel_permissions", {
+    "channel_id": BETA, "user_id": ALICE, "allow": ["view_channel", "embed_links"],
+    "deny": ["send_tts_messages"], "reason": "stage d"})
+check("no preview from a clean owner turn (the flags didn't move)", preview, None)
+check("THE ORDER: member looked up, allow sent, read back, deny sent, read back",
+      [v for v, _ in http.calls],
+      ["get_member", "edit_channel_permissions", "get_channel",
+       "edit_channel_permissions", "get_channel"])
+first, second = http.calls[1][1], http.calls[3][1]
+check("the first write carries the allows and NO deny, for the member (type 1)",
+      (first["target"], first["type"], first["allow"], first["deny"], first["reason"]),
+      (ALICE, 1, VIEW | EMBED, 0, "stage d"))
+check("the second keeps the allows Discord read back and adds the deny",
+      (second["allow"], second["deny"]), (VIEW | EMBED, 1 << 12))
+check("the result: each step with what Discord read",
+      result["steps"],
+      ["1. allowed view_channel, embed_links - Discord reads: allows embed_links, "
+       "view_channel",
+       "2. denied send_tts_messages - Discord reads: allows embed_links, view_channel; "
+       "denies send_tts_messages"])
+check("...the member by name, before and after, and the order said",
+      (result["member"], result["before"], result["after"], result["message"]),
+      ("Alice", {"allow": [], "deny": []},
+       {"allow": ["embed_links", "read_messages"], "deny": ["send_tts_messages"]},
+       "**Alice** in **#benham-beta** (Testing Server): allowed `view_channel`, "
+       "`embed_links` and denied `send_tts_messages` - the allows were applied and read "
+       "back before the deny."))
+check("...and no warning", "warning" in result, False)
+
+cl, g, http = fresh()
+go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                   "deny": ["send_tts_messages"]})
+check("a deny alone: one write, then the read-back",
+      [v for v, _ in http.calls], ["get_member", "edit_channel_permissions", "get_channel"])
+cl, g, http = fresh()
+http._channel(BETA)["permission_overwrites"] = [
+    {"id": str(ALICE), "type": 1, "allow": "0", "deny": str(EMBED)}]
+g = resync(cl, g)
+result, _ = go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                               "allow": ["embed_links"]})
+check("merged onto an existing overwrite: a denied permission flips to allowed",
+      (result["before"], result["after"]),
+      ({"allow": [], "deny": ["embed_links"]}, {"allow": ["embed_links"], "deny": []}))
+
+cl, g, http = fresh()
+
+
+def _drops_view(ow):
+    ow["allow"] = str(int(ow["allow"]) & ~VIEW)       # Discord doesn't keep it
+
+
+http.answer_override["edit_channel_permissions"] = _drops_view
+m = refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                            "allow": ["view_channel"],
+                                            "deny": ["send_tts_messages"]})
+check("THE TRAP: an allow that doesn't read back stops it - the deny is never sent",
+      (m, [v for v, _ in http.calls]),
+      ("Discord took the allow for Alice in #benham-beta, but the overwrite it reads back "
+       "doesn't allow view_channel, so the deny was NOT applied - check channel_info.",
+       ["get_member", "edit_channel_permissions", "get_channel"]))
+cl, g, http = fresh()
+_n = []
+
+
+def _second_refused(ow):
+    _n.append(1)
+    if len(_n) == 2:
+        raise discord.Forbidden(_Resp(403), "Missing Permissions")
+
+
+http.answer_override["edit_channel_permissions"] = _second_refused
+m = refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                            "allow": ["view_channel"],
+                                            "deny": ["send_tts_messages"]})
+check("Discord refusing the deny after the allow landed: says exactly what landed",
+      m, "the allows for Alice in #benham-beta landed and read back (allows "
+         "view_channel), but Discord refused the deny: Missing Permissions. The deny was "
+         "not applied.")
+
+cl, g, http = fresh()
+http._channel(BETA)["permission_overwrites"] = [
+    {"id": str(ALICE), "type": 1, "allow": str(VIEW), "deny": str(1 << 12)}]
+g = resync(cl, g)
+result, _ = go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                               "reset": True})
+check("reset: the overwrite deleted, then read back clean",
+      ([v for v, _ in http.calls], result["after"], result["status"]),
+      (["get_member", "delete_channel_permissions", "get_channel"],
+       {"allow": [], "deny": []}, "reset"))
+check("...and said in words", result["message"],
+      "Cleared **Alice**'s overwrite in **#benham-beta** (Testing Server) - they now have "
+      "the permissions their roles give them.")
+
+section("set_channel_permissions - a member: refused before anything is sent")
+cl, g, http = fresh(bot_perms=MANAGE_ROLES | VIEW | SEND)
+check("an allow this bot doesn't hold itself",
+      (refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                               "allow": ["embed_links"]}),
+       http.writes()),
+      ("this bot doesn't hold embed_links in #benham-beta itself, and Discord won't let "
+       "it grant a member a permission it lacks. Nothing was changed.", []))
+check("this bot denying itself view_channel without Administrator",
+      (refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": BOT,
+                                               "deny": ["view_channel"]}),
+       http.writes()),
+      ("denying this bot its own view_channel in #benham-beta would lock it out of that "
+       "channel's overwrites, so it won't. Nothing was changed.", []))
+cl, g, http = fresh()
+go(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": BOT,
+                                   "allow": ["view_channel"], "deny": ["send_tts_messages"]})
+check("...with Administrator it may (the live test's shape): the bot is cached, no fetch",
+      [v for v, _ in http.calls],
+      ["edit_channel_permissions", "get_channel", "edit_channel_permissions",
+       "get_channel"])
+cl, g, http = fresh()
+for params, want in (
+        ({"allow": ["view_channel"], "deny": ["read_messages"]},
+         "cannot allow and deny the same permission: view_channel/read_messages (the same "
+         "permission)"),
+        ({}, "nothing to change - pass `allow`, `deny`, or reset=true")):
+    check(f"{params or 'nothing named'}: refused like the role path",
+          refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE,
+                                                  **params}), want)
+check("...nothing written", http.writes(), [])
+
+
 # ===================================================================== the end
 print()
 if _fails:

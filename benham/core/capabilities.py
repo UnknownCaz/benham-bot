@@ -2610,19 +2610,25 @@ def _overwrite_state(ow):
 
 
 @action("set_channel_permissions", identity.MANAGE,
-        "Allow or deny specific permissions for one role in one channel (a channel "
-        "overwrite). Merges onto whatever overwrite the role already has, so naming "
-        "one permission leaves the others alone; `reset` drops the overwrite entirely "
-        "and the channel falls back to the role's server-wide permissions.",
+        "Allow or deny specific permissions for one role, or one member, in one channel "
+        "(a channel overwrite) - give role_id or user_id, not both. Merges onto whatever "
+        "overwrite the role or member already has, so naming one permission leaves the "
+        "others alone; `reset` drops the overwrite entirely and the channel falls back "
+        "to the server-wide permissions. For a member the allows are applied first and "
+        "read back from Discord before any deny is applied, and the result shows what "
+        "Discord read after each step.",
         {"channel_id": {"type": "int", "required": True},
-         "role_id": {"type": "int", "required": True,
+         "role_id": {"type": "int",
                      "desc": "Role to set the overwrite for (list_roles has the ids)"},
+         "user_id": {"type": "int",
+                     "desc": "Or one member to set it for instead of a role (find_user "
+                             "has the ids)"},
          "allow": {"type": "list",
                    "desc": "Permission names to allow, e.g. ['view_channel', 'send_messages']"},
          "deny": {"type": "list", "desc": "Permission names to deny, same spelling"},
          "reset": {"type": "bool",
-                   "desc": "Remove this role's overwrite here, back to the server "
-                           "default. Ignores allow/deny."},
+                   "desc": "Remove this role's (or member's) overwrite here, back to the "
+                           "server default. Ignores allow/deny."},
          "reason": {"type": "str"}},
         outward=True, taints=True)
 async def _set_channel_permissions(ctx, p):
@@ -2634,6 +2640,15 @@ async def _set_channel_permissions(ctx, p):
             "categories can. A thread inherits its parent channel's, so set them "
             "on the parent instead."
         )
+    has_role, has_user = p.get("role_id") is not None, p.get("user_id") is not None
+    if has_role and has_user:
+        raise ActionError("give role_id or user_id, not both - one overwrite is set per "
+                          "call, for a role or for one member.")
+    if not has_role and not has_user:
+        raise ActionError("say whose overwrite this is: role_id for a role, or user_id "
+                          "for one member.")
+    if has_user:
+        return await _member_overwrite(ctx, ch, g, p)
     role = g.get_role(int(p["role_id"]))
     if role is None:
         raise ActionError(f"no role {p['role_id']} in {g.name} - list_roles has the ids")
@@ -2692,6 +2707,150 @@ async def _set_channel_permissions(ctx, p):
             "before": before, "after": _overwrite_state(ow),
             "message": (f"**{role.name}** in **#{ch.name}** ({g.name}): "
                         + " and ".join(bits) + ".")}
+
+
+# --- one member's overwrite (INTENT 60, Stage 8 D) --------------------------
+#
+# Stage 7's trap rule, kept exactly: apply the allows FIRST, read the overwrite
+# back from Discord and check it holds them, and only then send any deny. A deny
+# that lands before its allow can lock a member - or this bot itself - out of a
+# channel, and from the bot side that is not recoverable (the 38-refusal
+# incident, 2026-08-21). The role path above sets both halves in one call, as it
+# always has; one call per target is atomic for that target.
+
+_SELF_LOCK = frozenset(_perm_key(n) for n in ("view_channel", "manage_permissions"))
+
+
+async def _overwrite_read(g, ch, target, what):
+    """The target's overwrite as Discord holds it now - a fresh fetch, not the
+    cache and not what was sent."""
+    try:
+        fresh = await asyncio.wait_for(g.fetch_channel(ch.id), LOOK_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        raise ActionError(f"{what} went to Discord, but I couldn't read #{ch.name}'s "
+                          f"overwrite back ({type(e).__name__}) - check channel_info "
+                          "before changing anything else.")
+    return _overwrite_state(fresh.overwrites_for(target))
+
+
+def _ow_words(state):
+    """An overwrite as a person reads it, in Discord's own permission names (the
+    data keeps discord.py's, which says read_messages for view_channel)."""
+    def words(names):
+        return ", ".join(sorted(_PERM_BY_BIT.get(discord.Permissions.VALID_FLAGS[n], n)
+                                for n in names))
+    bits = []
+    if state["allow"]:
+        bits.append("allows " + words(state["allow"]))
+    if state["deny"]:
+        bits.append("denies " + words(state["deny"]))
+    return "; ".join(bits) or "no overwrite"
+
+
+async def _member_overwrite(ctx, ch, g, p):
+    m = await ctx.member(g.id, p["user_id"])
+    if not ch.permissions_for(g.me).manage_permissions:
+        raise ActionError(
+            f"this bot lacks Manage Permissions in #{ch.name}, so it cannot change "
+            "overwrites there. Note Discord also refuses to let a bot grant a "
+            "permission it does not hold itself."
+        )
+    reason = p.get("reason") or VIA
+    who = m.display_name
+    before = _overwrite_state(ch.overwrites_for(m))
+    base = {"channel": ch.name, "channel_id": ch.id, "member": who, "user_id": m.id,
+            "before": before}
+
+    if p.get("reset"):
+        had = before["allow"] or before["deny"]
+        await ch.set_permissions(m, overwrite=None, reason=reason)
+        now = await _overwrite_read(g, ch, m, "The reset")
+        out = {"status": "reset", **base, "after": now,
+               "message": (f"Cleared **{who}**'s overwrite in **#{ch.name}** ({g.name}) "
+                           "- they now have the permissions their roles give them."
+                           if had else
+                           f"**{who}** already had no overwrite in **#{ch.name}** "
+                           f"({g.name}) - nothing to clear.")}
+        if now["allow"] or now["deny"]:
+            out["warning"] = (f"Discord still reads an overwrite for {who} in "
+                              f"#{ch.name}: {_ow_words(now)} - check channel_info.")
+        return out
+
+    allow, allow_keys = _perm_list(p.get("allow"), "allow")
+    deny, deny_keys = _perm_list(p.get("deny"), "deny")
+    if not allow and not deny:
+        raise ActionError("nothing to change - pass `allow`, `deny`, or reset=true")
+    clash = sorted(set(allow_keys) & set(deny_keys))
+    if clash:
+        pairs = ", ".join(
+            allow_keys[k] if allow_keys[k] == deny_keys[k]
+            else f"{allow_keys[k]}/{deny_keys[k]} (the same permission)" for k in clash)
+        raise ActionError(f"cannot allow and deny the same permission: {pairs}")
+    mine = ch.permissions_for(g.me)
+    lacking = [n for n in allow if not getattr(mine, n)]
+    if lacking:
+        raise ActionError(f"this bot doesn't hold {', '.join(lacking)} in #{ch.name} "
+                          "itself, and Discord won't let it grant a member a permission "
+                          "it lacks. Nothing was changed.")
+    if m.id == g.me.id and not g.me.guild_permissions.administrator:
+        cut = [n for n in deny if _perm_key(n) in _SELF_LOCK]
+        if cut:
+            raise ActionError(f"denying this bot its own {', '.join(cut)} in #{ch.name} "
+                              "would lock it out of that channel's overwrites, so it "
+                              "won't. Nothing was changed.")
+
+    steps, state = [], before
+    if allow:
+        ow = ch.overwrites_for(m)          # merge onto what is there
+        for n in allow:
+            setattr(ow, n, True)
+        await ch.set_permissions(m, overwrite=ow, reason=reason)
+        state = await _overwrite_read(g, ch, m, "The allow")
+        ctx.log(f"set_channel_permissions #{ch.name} member {m}: step 1 allows applied, "
+                f"read back: {state}")
+        steps.append(f"1. allowed {', '.join(allow)} - Discord reads: {_ow_words(state)}")
+        missing = [n for n in allow if _perm_key(n) not in state["allow"]]
+        if missing:
+            raise ActionError(f"Discord took the allow for {who} in #{ch.name}, but the "
+                              f"overwrite it reads back doesn't allow "
+                              f"{', '.join(missing)}, so the deny was NOT applied - "
+                              "check channel_info.")
+    if deny:
+        ow = discord.PermissionOverwrite(**{k: True for k in state["allow"]},
+                                         **{k: False for k in state["deny"]})
+        for n in deny:
+            setattr(ow, n, False)
+        try:
+            await ch.set_permissions(m, overwrite=ow, reason=reason)
+        except discord.HTTPException as e:
+            if not allow:
+                raise
+            text = " ".join((getattr(e, "text", None) or str(e) or "").split()).rstrip(".")
+            raise ActionError(f"the allows for {who} in #{ch.name} landed and read back "
+                              f"({_ow_words(state)}), but Discord refused the deny: "
+                              f"{text or 'it gave no reason'}. The deny was not applied.")
+        state = await _overwrite_read(g, ch, m, "The deny")
+        ctx.log(f"set_channel_permissions #{ch.name} member {m}: step {len(steps) + 1} "
+                f"denies applied, read back: {state}")
+        steps.append(f"{len(steps) + 1}. denied {', '.join(deny)} - Discord reads: "
+                     f"{_ow_words(state)}")
+
+    bits = []
+    if allow:
+        bits.append("allowed " + ", ".join(f"`{n}`" for n in allow))
+    if deny:
+        bits.append("denied " + ", ".join(f"`{n}`" for n in deny))
+    out = {"status": "permissions_set", **base, "allowed": allow, "denied": deny,
+           "after": state, "steps": steps,
+           "message": (f"**{who}** in **#{ch.name}** ({g.name}): " + " and ".join(bits)
+                       + (" - the allows were applied and read back before the deny."
+                          if allow and deny else "."))}
+    off = ([n for n in allow if _perm_key(n) not in state["allow"]]
+           + [n for n in deny if _perm_key(n) not in state["deny"]])
+    if off:
+        out["warning"] = (f"Discord's overwrite afterwards doesn't match the request for "
+                          f"{', '.join(off)} - check channel_info.")
+    return out
 
 
 @action("create_invite", identity.MANAGE, "Create an invite link to a channel.",
