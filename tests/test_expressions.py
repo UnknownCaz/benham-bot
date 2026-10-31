@@ -956,6 +956,41 @@ check("Discord's too-long refusal: one line, its words, ends 'Nothing was change
       "\n" not in (m or "") and "Sound is too long" in (m or "")
       and (m or "").endswith("Nothing was changed.") and ".." not in (m or ""), True)
 
+# ================================================================ delete_sound
+section("delete_sound - tier 3 like delete_emoji")
+registered("delete_sound", 3, False, False, False)
+
+section("delete_sound - the dry run names it and touches nothing")
+before = backups()
+cl, g = fresh(sounds=[_Sound(41, "airhorn", fixture("tone1.mp3"), volume=0.8,
+                             emoji="\U0001F4EF")])
+result, preview = go(cl, "delete_sound", {"guild_id": GUILD, "sound_id": 41})
+check("the first call is a dry run, nothing deleted or saved",
+      (result, g.sounds[0].deleted, backups()), (None, [], before))
+check("...names the sound, the server, its volume and the copy",
+      "airhorn" in preview["summary"] and "Testing Server" in preview["summary"]
+      and "volume 80%" in preview["detail"] and "saved" in preview["detail"], True)
+
+section("delete_sound - confirmed: a copy first, byte for byte, then the delete")
+result, _ = go(cl, "delete_sound", {"guild_id": GUILD, "sound_id": 41}, force=True)
+check("deleted once, with the audit reason", g.sounds[0].deleted, [capabilities.VIA])
+saved = result["copy_saved"]
+check("the copy is the sound's own bytes, named .mp3 from its bytes",
+      bool(saved) and open(saved, "rb").read() == fixture("tone1.mp3")
+      and os.path.basename(saved).startswith(f"{GUILD}-sound-41-") and saved.endswith(".mp3"),
+      True)
+
+section("delete_sound - no copy, no delete; and the gates")
+cl, g = fresh(sounds=[_Sound(42, "flaky", mp3(), fail_read=True)])
+m = refusal(cl, "delete_sound", {"guild_id": GUILD, "sound_id": 42})
+check("a copy that can't be made stops the delete",
+      "couldn't save a copy" in (m or "") and g.sounds[0].deleted == [], True)
+m = refusal(cl, "delete_sound", {"guild_id": GUILD, "sound_id": 99}, force=False)
+check("an unknown sound is a sentence", "no soundboard sound 99" in (m or ""), True)
+m = refusal(cl, "delete_sound", {"guild_id": WALLED, "sound_id": 42}, force=False)
+check("a guild off the destructive allowlist is refused outright",
+      "destructive_guilds" in (m or ""), True)
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

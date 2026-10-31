@@ -3558,6 +3558,30 @@ async def _delete_sticker(ctx, p):
     return {"status": "deleted", "sticker": name, "copy_saved": saved}
 
 
+@action("delete_sound", identity.DESTRUCTIVE,
+        "Delete one of a server's soundboard sounds. A copy of the sound file is "
+        "saved first.",
+        {"guild_id": {"type": "int", "required": True},
+         "sound_id": {"type": "int", "required": True}}, needs_guild=True)
+async def _delete_sound(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    try:
+        snd = await g.fetch_soundboard_sound(int(p["sound_id"]))
+    except discord.NotFound:
+        raise ActionError(f"no soundboard sound {p['sound_id']} in {g.name}")
+    if ctx.dry_run:
+        bits = [f"volume {round(snd.volume * 100)}%"]
+        if snd.emoji:
+            bits.append(f"emoji {snd.emoji}")
+        return {"summary": f"Delete sound **{snd.name}** from **{g.name}**'s soundboard",
+                "detail": f"{', '.join(bits)}\n{snd.url}\nA copy of the sound file is "
+                          "saved to look_backups first, so it can be uploaded again."}
+    saved = await _expr_keep_copy(ctx, g, "sound", snd, looksound.ext_for)
+    name = snd.name
+    await snd.delete(reason=VIA)
+    return {"status": "deleted", "sound": name, "copy_saved": saved}
+
+
 # ==========================================================================
 # Dispatch
 # ==========================================================================
