@@ -30,6 +30,7 @@ from datetime import datetime, timezone, timedelta
 
 import discord
 
+from benham.core import eventtime
 from benham.core import identity
 from benham.core import lookimage
 from benham.core import looksound
@@ -996,6 +997,82 @@ async def _list_sounds(ctx, p):
     sounds = await g.fetch_soundboard_sounds()
     return {"guild": g.name, "count": len(sounds), "limit": _sound_slots(g),
             "sounds": [sound_dict(s) for s in sounds]}
+
+
+# --- scheduled events (INTENT 60, Stage 8 B) ------------------------------
+#
+# Discord's Events screen: game nights. Every time a person reads comes in both
+# halves, Caz's clock (America/Detroit, eventtime.py) and UTC, because the bot
+# runs on a Mac whose own zone is never assumed. The status and kind words are
+# this file's, not discord.py's: its enum calls a cancelled event "canceled"
+# and a stage event "stage_instance".
+
+_EVENT_STATUS = {1: "scheduled", 2: "active", 3: "completed", 4: "cancelled"}
+_EVENT_KIND = {1: "stage", 2: "voice", 3: "external"}
+_EVENT_OPEN = ("scheduled", "active")
+# Discord's cap, JSON error 30038: "Maximum number of uncompleted guild
+# scheduled events reached (100)" - scheduled and active ones both count.
+EVENT_CAP = 100
+
+
+def _event_status(ev):
+    v = getattr(ev.status, "value", ev.status)
+    return _EVENT_STATUS.get(v, str(v))
+
+
+def _event_kind(ev):
+    v = getattr(ev.entity_type, "value", ev.entity_type)
+    return _EVENT_KIND.get(v, str(v))
+
+
+def _event_where(g, ev):
+    """Where an event happens, as data: its channel, or its location."""
+    if _event_kind(ev) == "external":
+        return {"location": ev.location}
+    ch = g.get_channel(ev.channel_id) if ev.channel_id else None
+    return {"channel": getattr(ch, "name", None), "channel_id": ev.channel_id}
+
+
+def _event_where_words(g, ev):
+    """Where an event happens, as a person says it: 'Voice event in #General'."""
+    kind = _event_kind(ev)
+    if kind == "external":
+        return f"External event at {ev.location!r}"
+    ch = g.get_channel(ev.channel_id) if ev.channel_id else None
+    label = f"#{ch.name}" if ch is not None else f"channel {ev.channel_id}"
+    return f"{kind.capitalize()} event in {label}"
+
+
+def event_dict(g, ev):
+    """One scheduled event as the Events screen shows it - no ids of people."""
+    cover = ev.cover_image
+    return {"id": ev.id, "name": ev.name, "status": _event_status(ev),
+            "kind": _event_kind(ev), "where": _event_where(g, ev),
+            "start": eventtime.both(ev.start_time), "end": eventtime.both(ev.end_time),
+            "creator": str(ev.creator) if ev.creator else None,
+            "user_count": getattr(ev, "user_count", None),
+            "description": ev.description or "",
+            "cover": cover.url if cover is not None else None, "url": ev.url}
+
+
+@action("list_events", identity.READ,
+        "A server's scheduled events (its Events list): id, name, status (scheduled, "
+        "active, completed or cancelled), kind (voice, stage or external), where (a "
+        "channel or a location), start and end in Caz's local time (America/Detroit) "
+        "and UTC, creator, how many people are interested, description and cover "
+        "picture link - plus how many of Discord's 100 open-event slots are used.",
+        {"guild_id": {"type": "int", "required": True}},
+        needs_guild=True, taints=True)
+async def _list_events(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    # Fetched, not read from guild.scheduled_events: that cache is only as good
+    # as the gateway events that fed it, and the open count decides whether a
+    # new event is refused.
+    events = sorted(await g.fetch_scheduled_events(with_counts=True),
+                    key=lambda e: (e.start_time, e.id))
+    return {"guild": g.name, "count": len(events),
+            "open": sum(1 for e in events if _event_status(e) in _EVENT_OPEN),
+            "limit": EVENT_CAP, "events": [event_dict(g, e) for e in events]}
 
 
 @action("what_i_did", identity.READ,
