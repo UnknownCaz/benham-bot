@@ -671,6 +671,178 @@ m = refusal(cl, "delete_sticker", {"guild_id": WALLED, "sticker_id": 21}, force=
 check("a guild off the destructive allowlist is refused outright",
       "destructive_guilds" in (m or ""), True)
 
+# =================================================================== looksound
+from benham.core import looksound  # noqa: E402
+
+
+def sreason(fn, *a, **k):
+    try:
+        fn(*a, **k)
+        return None
+    except looksound.LookSoundError as e:
+        return str(e)
+
+
+section("looksound - the type comes from the BYTES")
+check("hand-built Layer III frames are an MP3", looksound.sniff(mp3(1.0)), "audio/mpeg")
+check("...after an ID3 tag too", looksound.sniff(mp3(1.0, id3=True)), "audio/mpeg")
+check("an Ogg page is an OGG", looksound.sniff(ogg_vorbis()), "audio/ogg")
+check("a real LAME mp3 (ID3 + Info frame) is an MP3",
+      looksound.sniff(fixture("tone1.mp3")), "audio/mpeg")
+check("a real Opus-in-Ogg is an OGG", looksound.sniff(fixture("tone1-opus.ogg")),
+      "audio/ogg")
+check("a PNG is not a sound", looksound.sniff(png()), None)
+check("an ID3 tag with no MP3 behind it is not a sound",
+      looksound.sniff(b"ID3\x04\x00\x00\x00\x00\x00\x02xx" + b"RIFFjunk" * 8), None)
+check("text named .mp3 is refused by its bytes",
+      "isn't an MP3 or OGG" in (sreason(looksound.check, b"hello world", "x.mp3") or ""),
+      True)
+check("empty is refused", "empty" in (sreason(looksound.check, b"", "x.mp3") or ""), True)
+
+section("looksound - the length is measured from the bytes")
+def secs(raw):
+    return round(looksound.seconds(raw, looksound.sniff(raw)), 2)
+
+check("1 s of frames measures 1.0 s, to the frame", secs(mp3(1.0)), 1.02)
+check("...with an ID3 tag in front", secs(mp3(1.0, id3=True)), 1.02)
+check("the real LAME mp3: its Info frame is not counted as sound",
+      secs(fixture("tone1.mp3")), 1.04)
+check("Vorbis: the last page's position over the stated rate", secs(ogg_vorbis(2.5)), 2.5)
+check("Opus: 48 kHz less the pre-skip", secs(ogg_opus(1.5)), 1.5)
+check("the real Opus file measures 1.0 s", secs(fixture("tone1-opus.ogg")), 1.0)
+check("frames that stop making sense halfway: length unknown, not a guess",
+      looksound.seconds(mp3(1.0) + b"\x01\x02junk" * 400 + mp3(4.0), "audio/mpeg"), None)
+check("an ID3v1 tag at the end is fine",
+      round(looksound.seconds(mp3(1.0) + b"TAG" + b"\x00" * 125, "audio/mpeg"), 2), 1.02)
+check("an Ogg holding another codec: length unknown",
+      looksound.seconds(b"OggS\x00\x02" + b"\x00" * 20 + b"\x01\x10" + b"fLaC" + b"\x00" * 12,
+                        "audio/ogg"), None)
+check("over 5.2 s is refused, saying how long it is",
+      "6.01 seconds long" in (sreason(looksound.check, mp3(6.0), "long.mp3") or "")
+      and "5.2" in (sreason(looksound.check, mp3(6.0), "long.mp3") or ""), True)
+check("5.0 s passes", looksound.check(mp3(5.0), "ok.mp3").seconds is not None, True)
+check("over 512 KB is refused with both sizes in the sentence",
+      "512 KB" in (sreason(looksound.check, mp3(1.0) + b"\x00" * 600000, "big.mp3") or ""),
+      True)
+check("a good sound describes itself",
+      looksound.check(mp3(1.0), "attachment a.mp3").describe().startswith("MP3, 1.02 s, "),
+      True)
+
+section("looksound - the source grammar")
+async def _no_message():
+    raise looksound.LookSoundError("no message named")
+
+def sload(spec, getter=_no_message):
+    return asyncio.run(looksound.load(spec, getter, "sound"))
+
+async def _two():
+    return _Msg([_Att(1, "a.mp3", mp3()), _Att(2, "b.ogg", ogg_vorbis())])
+
+check("attachment:1 picks the second, typed by its bytes",
+      (sload("attachment:1", _two).media, sload("attachment:1", _two).source),
+      ("audio/ogg", "attachment b.ogg"))
+check("two attachments and no index asks which",
+      "which" in (sreason(sload, "attachment", _two) or ""), True)
+async def _huge():
+    return _Msg([_Att(1, "x.mp3", mp3(), size=9 * 1048576)])
+
+check("an attachment over the cap is refused before downloading",
+      "9.0 MB" in (sreason(sload, "attachment", _huge) or ""), True)
+check("asset: is confined to assets/",
+      "outside" in (sreason(looksound.from_asset, "../INTENT.md") or ""), True)
+check("a missing asset is a sentence",
+      "no sound called" in (sreason(looksound.from_asset, "nope.mp3") or ""), True)
+check("a nonsense source says what it can be",
+      "https://" in (sreason(sload, "banana") or ""), True)
+
+section("looksound - the URL route is lookimage's fence, in sound words")
+def svet(url):
+    return sreason(lambda: asyncio.run(
+        lookimage._vet_host(url, "sound", looksound.LookSoundError)))
+
+check("http refused, and the sentence says sounds",
+      "I only take sounds from https://" in (svet("http://example.com/a.mp3") or ""), True)
+check("...the same through load()", "https" in (sreason(sload, "http://example.com/a.mp3")
+                                                 or ""), True)
+for ip in ("127.0.0.1", "10.1.2.3", "192.168.0.9", "169.254.169.254", "100.64.0.1", "::1"):
+    host = f"[{ip}]" if ":" in ip else ip
+    check(f"literal {ip} refused (loopback/LAN/metadata/tailnet)",
+          "private or local" in (svet(f"https://{host}/a.mp3") or ""), True)
+check("a public literal address passes", svet("https://93.184.216.34/a.mp3"), None)
+
+
+async def _serve_and_fetch():
+    async def ok(_r):
+        return web.Response(body=mp3(1.0), content_type="audio/mpeg")
+
+    async def big(_r):
+        return web.Response(body=b"x" * (looksound.MAX_BYTES + 5000))
+
+    async def liar(_r):
+        # No Content-Length and an endless-ish body: only the streaming cap stops it.
+        resp = web.StreamResponse()
+        await resp.prepare(_r)
+        try:
+            for _ in range(100):
+                await resp.write(b"y" * 65536)
+        except ConnectionError:
+            pass            # the client gave up at the cap - that is the point
+        return resp
+
+    async def notsound(_r):
+        return web.Response(body=png(), content_type="audio/mpeg")   # the header lies
+
+    async def redir(_r):
+        raise web.HTTPFound("/ok")
+
+    app = web.Application()
+    app.add_routes([web.get("/ok", ok), web.get("/big", big), web.get("/liar", liar),
+                    web.get("/notsound", notsound), web.get("/redir", redir)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    base = f"http://127.0.0.1:{port}"
+
+    seen = []
+
+    async def vetted(url, *_how):
+        seen.append(url)
+    real_vet = lookimage._vet_host
+    lookimage._vet_host = vetted          # the fence would (rightly) refuse 127.0.0.1
+    out = {}
+    try:
+        for key in ("ok", "big", "liar", "redir"):
+            try:
+                out[key] = len(await looksound.fetch_url(base + "/" + key))
+            except looksound.LookSoundError as e:
+                out[key] = str(e)
+        try:
+            raw = await looksound.fetch_url(base + "/notsound")
+            looksound.check(raw, "the link")
+            out["notsound"] = "accepted"
+        except looksound.LookSoundError as e:
+            out["notsound"] = str(e)
+    finally:
+        lookimage._vet_host = real_vet
+        await runner.cleanup()
+    out["vetted_hops"] = len(seen)
+    return out
+
+
+got = asyncio.run(_serve_and_fetch())
+check("a sound downloads whole", got["ok"], len(mp3(1.0)))
+check("a redirect is followed", got["redir"], len(mp3(1.0)))
+check("over the cap with Content-Length known: refused in sound words",
+      "that sound is" in str(got["big"]) and "512 KB" in str(got["big"]), True)
+check("NO Content-Length: the streaming cap still cuts it off at 512 KB",
+      "bigger than my 512 KB limit" in str(got["liar"]), True)
+check("a server that says audio/mpeg but sends a PNG is refused by the bytes",
+      "isn't an MP3 or OGG" in str(got["notsound"]), True)
+check("every hop went through the fence (5 fetches, one redirect = 6 vets)",
+      got["vetted_hops"], 6)
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
