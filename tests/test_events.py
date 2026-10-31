@@ -864,6 +864,54 @@ check("...but can edit one this bot made",
       edit_refused({"name": "x"}, perms={"manage": False, "create": True})[0], None)
 
 
+# ================================================================= start_event
+section("start_event - registered like edit_server_look")
+registered("start_event", 2, True, True, True)
+
+section("start_event - previewed first, nothing touched")
+cl, g, eid = one_event()
+result, preview = go(cl, "start_event", {"guild_id": GUILD, "event_id": eid})
+check("a preview; Discord asked nothing but the event itself",
+      (result, g._state.http.writes), (None, []))
+check("...names the event, the server, where, when it was due, how early",
+      ("stage-b-test" in preview["summary"] and "Testing Server" in preview["summary"],
+       "Voice event in #Game Night" in preview["detail"],
+       f"Scheduled start: {eventtime.line(START)}" in preview["detail"],
+       "min early" in preview["detail"], "Interested" in preview["detail"]),
+      (True, True, True, True, True))
+
+section("start_event - confirmed: scheduled -> active, through ScheduledEvent.start")
+result, _ = go(cl, "start_event", {"guild_id": GUILD, "event_id": eid}, force=True)
+verb, got_id, payload, reason = g._state.http.writes[0]
+check("one edit of that event: status 2 (active) and nothing else, with the reason",
+      (len(g._state.http.writes), verb, got_id, payload, reason),
+      (1, "edit", eid, {"status": 2}, capabilities.VIA))
+check("the result says it's active now", (result["status"], result["event"]["status"]),
+      ("event_started", "active"))
+
+section("start_event - refused before anything changes")
+for st, words in ((2, "already running"), (3, "already completed"),
+                  (4, "already cancelled")):
+    cl, g, eid = one_event(status=st)
+    for force in (False, True):
+        m = refusal(cl, "start_event", {"guild_id": GUILD, "event_id": eid}, force=force)
+        check(f"status {st}: {words} ({'confirm' if force else 'preview'})",
+              words in (m or "") and g._state.http.writes == [], True)
+cl, g, eid = one_event()
+g._state.http.raise_on_write = discord.HTTPException(
+    _Resp(400), {"code": 50091, "message": "The entity type of the event is different "
+                                           "from the entity you are trying to start the "
+                                           "event for"})
+m = refusal(cl, "start_event", {"guild_id": GUILD, "event_id": eid})
+check("Discord refusing a start is one sentence ending 'Nothing was changed.'",
+      "\n" not in (m or "") and "entity type of the event" in (m or "")
+      and (m or "").endswith("Nothing was changed."), True)
+cl, g, eid = one_event(creator="draco", perms={"manage": False, "create": True})
+check("Create Events alone can't start someone else's event", "lacks Manage Events" in (
+    refusal(cl, "start_event", {"guild_id": GUILD, "event_id": eid}, force=False) or ""),
+      True)
+
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

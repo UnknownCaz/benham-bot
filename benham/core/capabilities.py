@@ -3594,6 +3594,38 @@ async def _edit_event(ctx, p):
             "event": event_dict(g, after), "old_cover_saved": saved}
 
 
+@action("start_event", identity.MANAGE,
+        "Start a server's scheduled event now (scheduled -> active), early or on time. "
+        "Discord tells everyone who marked it Interested. To finish a running event "
+        "or call one off, use cancel_event. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _start_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "start that event", ev)
+    status = _event_closed(ev)
+    if status != "scheduled":
+        raise ActionError(f"the event {ev.name!r} is already running - nothing to start. "
+                          "To finish it, use cancel_event.")
+    if ctx.dry_run:
+        lines = [_event_where_words(g, ev),
+                 f"Scheduled start: {eventtime.line(ev.start_time)}"]
+        early = ev.start_time - eventtime.now()
+        if early > timedelta(minutes=1):
+            hours, mins = divmod(int(early.total_seconds() // 60), 60)
+            lines.append(f"That's {f'{hours} h ' if hours else ''}{mins} min early; it "
+                         "starts now instead.")
+        lines.append("Discord tells everyone who marked it Interested that it has "
+                     "started.")
+        return {"summary": f"Start event **{ev.name}** in **{g.name}** now",
+                "detail": "\n".join(lines)}
+    after = await _event_call(ev.start(reason=p.get("reason") or VIA), "event start")
+    return {"status": "event_started", "guild": g.name, "event": event_dict(g, after)}
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
