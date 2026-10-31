@@ -4355,6 +4355,193 @@ async def _move_channel(ctx, p):
     return out
 
 
+# --- role order ---------------------------------------------------------------
+#
+# The hierarchy rule, said before anything changes: a bot can only move roles
+# BELOW its own top role, never to or above it, and never its own top role
+# (Discord's rule); @everyone never moves (Discord's too); and a managed role -
+# a bot's or an integration's - is not this bot's to move (Stage 8's rule; one
+# CAN be shifted a place when another role is moved past it, as in the
+# Server Settings drag). Each case is its own sentence, so the refusal says
+# which one. Positions count from
+# @everyone at 0, in discord.py's hierarchy order (Guild.roles, lowest first;
+# ties broken by id) - the same numbers list_roles shows when Discord's are
+# contiguous. Only the roles between the old place and the new one are sent,
+# each with its new place (discord.py's own Role._move does the same span), so
+# nothing at or above this bot's top role is ever in the request.
+
+
+def _role_between(order, i):
+    """Words for where order[i] sits; order is lowest first, the list shows it
+    highest first."""
+    under = order[i - 1] if i > 0 else None
+    over = order[i + 1] if i + 1 < len(order) else None
+    if over is None:
+        return f"at the top, above '{under.name}'"
+    if under is not None and under.is_default():
+        return f"just above @everyone, below '{over.name}'"
+    return f"below '{over.name}' and above '{under.name}'"
+
+
+def _role_place(order, i):
+    under = order[i - 1] if i > 0 else None
+    over = order[i + 1] if i + 1 < len(order) else None
+    return {"position": i, "between": _role_between(order, i),
+            "above": under.name if under is not None else None,
+            "below": over.name if over is not None else None}
+
+
+@action("move_role", identity.MANAGE,
+        "Move a role up or down a server's role list (a higher role shows its color "
+        "first and can manage the roles under it): to a position (1 = just above "
+        "@everyone; list_roles shows each role's), directly above_id / below_id "
+        "another role, or to_top (as high as this bot can place it: right below its "
+        "own top role) / to_bottom (just above @everyone). This bot can't move a role "
+        "to or above its own top role, nor its own top role, a managed (bot or "
+        "integration) role, a role above its own, or @everyone - each refused before "
+        "anything changes, saying which. The current order is saved first and the "
+        "result is the order Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "role_id": {"type": "int", "required": True, "desc": "The role to move "
+                                                              "(list_roles)"},
+         "position": {"type": "int", "desc": "New place, counted from @everyone at 0 "
+                                             "(1 = the lowest a role can go)"},
+         "above_id": {"type": "int", "desc": "Put it directly above this role"},
+         "below_id": {"type": "int", "desc": "Put it directly below this role"},
+         "to_top": {"type": "bool", "desc": "As high as this bot can: right below its own "
+                                            "top role"},
+         "to_bottom": {"type": "bool", "desc": "Just above @everyone"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _move_role(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    role = g.get_role(int(p["role_id"]))
+    if role is None:
+        raise ActionError(f"there's no role {p['role_id']} in {g.name} - list_roles has "
+                          "the ids.")
+    if not g.me.guild_permissions.manage_roles:
+        raise ActionError(f"this bot lacks Manage Roles in {g.name}, so it can't move "
+                          "roles there - give its role Manage Roles (or Administrator) "
+                          "first.")
+    places = [k for k in ("position", "above_id", "below_id") if p.get(k) is not None] \
+        + [k for k in ("to_top", "to_bottom") if p.get(k)]
+    if len(places) > 1:
+        raise ActionError("give one place - position, above_id, below_id, to_top or "
+                          f"to_bottom - not {' and '.join(places)}.")
+    if not places:
+        raise ActionError("nothing to change - say where: position, above_id, below_id, "
+                          "to_top or to_bottom.")
+
+    order = list(g.roles)                    # lowest first, @everyone at 0
+    top = g.me.top_role
+    if role.is_default():
+        raise ActionError("@everyone always sits at the bottom of the role list; Discord "
+                          "doesn't let it move.")
+    if role.id == top.id:
+        raise ActionError(f"'{role.name}' is this bot's own top role, and this bot can't "
+                          "move its own top role - it can only move roles below it.")
+    if role.managed:
+        raise ActionError(f"'{role.name}' is a managed role - it belongs to a bot or an "
+                          "integration, so this bot leaves its place alone; move it by "
+                          "hand in Server Settings > Roles if it has to go.")
+    cur_idx = order.index(role)
+    if cur_idx > order.index(top):
+        raise ActionError(f"'{role.name}' sits above this bot's top role '{top.name}', so "
+                          "this bot can't move it.")
+    others = [r for r in order if r.id != role.id]
+    highest = others.index(top)              # landing here puts it right below `top`
+
+    def too_high():
+        return ActionError(
+            f"this bot can't move a role to or above its own top role '{top.name}' - the "
+            f"highest it can put '{role.name}' is position {highest}, right below "
+            f"'{top.name}'.")
+
+    def other_role(key):
+        r = g.get_role(int(p[key]))
+        if r is None:
+            raise ActionError(f"{key}: there's no role {p[key]} in {g.name} - list_roles "
+                              "has the ids.")
+        if r.id == role.id:
+            raise ActionError(f"{key}: a role can't go above or below itself.")
+        return r
+
+    if p.get("position") is not None:
+        idx = int(p["position"])
+        if idx < 1:
+            raise ActionError("position 0 is @everyone's; the lowest a role can go is 1.")
+        if idx > highest:
+            raise too_high()
+    elif p.get("above_id") is not None:
+        idx = others.index(other_role("above_id")) + 1
+        if idx > highest:
+            raise too_high()
+    elif p.get("below_id") is not None:
+        anchor = other_role("below_id")
+        if anchor.is_default():
+            raise ActionError("below_id: nothing can go below @everyone - it's always the "
+                              "bottom role.")
+        idx = others.index(anchor)
+        if idx > highest:
+            raise too_high()
+    elif p.get("to_top"):
+        idx = highest
+    else:
+        idx = 1
+    before = _role_place(order, cur_idx)
+    if idx == cur_idx:
+        raise ActionError(f"'{role.name}' is already there (position {cur_idx}, "
+                          f"{before['between']}) - nothing to change.")
+    new_order = others[:idx] + [role] + others[idx:]
+    lo, hi = min(cur_idx, idx), max(cur_idx, idx)
+    span = [(r, i) for i, r in enumerate(new_order) if lo <= i <= hi]
+    planned = _role_place(new_order, idx)
+
+    if ctx.dry_run:
+        shifted = [r.name for r, _ in span if r.id != role.id]
+        lines = [f"Now: position {cur_idx}, {before['between']}.",
+                 f"After: position {idx}, {planned['between']}.",
+                 f"{len(shifted)} other role(s) move one place "
+                 f"{'down' if idx > cur_idx else 'up'} to make room: "
+                 f"{', '.join(repr(n) for n in shifted)}. Nothing else changes.",
+                 f"This bot's top role is '{top.name}' (position {order.index(top)}); "
+                 "nothing goes to or above it.",
+                 "The current order is saved first, so it can be put back."]
+        return {"summary": f"Move the role **{role.name}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    payload = [{"id": r.id, "position": i} for r, i in span]
+    saved = _settings_keep(
+        ctx, g, f"role-{role.id}",
+        {"role_id": role.id, "name": role.name,
+         "before": {**before, "raw_position": role.position},
+         "order_before": [[r.id, r.name, r.position] for r in order],
+         "planned": planned, "payload": payload,
+         # Feed this back to move_role (with guild_id) to undo.
+         "restore": {"role_id": role.id, "position": cur_idx}},
+        f"the role order around '{role.name}'")
+    roles = await _settings_call(
+        g.edit_role_positions(positions={r: i for r, i in span},
+                              reason=p.get("reason") or VIA),
+        "role move", "list_roles")
+    # Discord answers with every role; that answer, in hierarchy order, is the read.
+    read = sorted(roles)
+    ids = [r.id for r in read]
+    out = {"status": "role_moved", "guild": g.name, "role": role.name, "before": before,
+           "backup": saved}
+    if role.id not in ids:
+        out["warning"] = (f"Discord took the move, but '{role.name}' isn't in the role "
+                          "list it answered with - check list_roles.")
+        return out
+    ridx = ids.index(role.id)
+    out["after"] = _role_place(read, ridx)
+    if ids != [r.id for r in new_order]:
+        out["warning"] = (f"Discord's order afterwards isn't the planned one: "
+                          f"'{role.name}' reads position {ridx}, "
+                          f"{out['after']['between']} - check list_roles.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},

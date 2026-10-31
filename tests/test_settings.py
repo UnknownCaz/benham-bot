@@ -949,6 +949,184 @@ check("a failed read-back after a move that went through never says 'Nothing was
                                "failed (HTTPException) - check list_channels."))
 
 
+# =================================================================== move_role
+section("move_role - registered like edit_server_look")
+registered("move_role", 2, True, True, True)
+
+
+def mr(params, force=False, **gkw):
+    """(result, preview, http, client, guild) for one move_role call."""
+    cl, g, http = fresh(**gkw)
+    result, preview = go(cl, "move_role", {"guild_id": GUILD, **params}, force=force)
+    return result, preview, http, cl, g
+
+
+def mr_refused(params, **gkw):
+    """The refusal, at the preview AND at the confirm, with Discord never asked."""
+    out = []
+    for force in (False, True):
+        cl, g, http = fresh(**gkw)
+        before = backups()
+        m = refusal(cl, "move_role", {"guild_id": GUILD, **params}, force=force)
+        out.append((m, http.writes == [], backups() == before))
+    (m1, w1, b1), (m2, w2, b2) = out
+    return m1 if (m1 == m2 and w1 and w2 and b1 and b2) else ("MISMATCH", out)
+
+
+def rsent(http):
+    verb, payload, _ = http.writes[0]
+    return verb, [(d["id"], d["position"]) for d in payload]
+
+
+section("move_role - previewed first, nothing touched, neighbours named")
+before = backups()
+result, preview, http, cl, g = mr({"role_id": MEMBERS, "position": 2})
+check("the first call is a preview; Discord asked nothing, nothing saved",
+      (result, http.writes, backups() == before), (None, [], True))
+check("...the summary names the role and the server",
+      preview["summary"], "Move the role **Members** in **Testing Server**")
+check("...where it is, where it lands, who shifts, the ceiling, the backup",
+      preview["detail"].splitlines(),
+      ["Now: position 1, just above @everyone, below 'Regulars'.",
+       "After: position 2, below 'Hermes' and above 'Regulars'.",
+       "1 other role(s) move one place down to make room: 'Regulars'. Nothing else "
+       "changes.",
+       "This bot's top role is 'Bots' (position 5); nothing goes to or above it.",
+       "The current order is saved first, so it can be put back."])
+_, preview, _, _, _ = mr({"role_id": MODS, "to_bottom": True})
+check("moving down: the ones it passes move up",
+      preview["detail"].splitlines()[:3],
+      ["Now: position 4, below 'Bots' and above 'Hermes'.",
+       "After: position 1, just above @everyone, below 'Members'.",
+       "3 other role(s) move one place up to make room: 'Members', 'Regulars', "
+       "'Hermes'. Nothing else changes."])
+
+section("move_role - confirmed: only the span between is sent, then read back")
+before = backups()
+result, _, http, cl, g = mr({"role_id": MEMBERS, "position": 2}, force=True)
+check("discord.py's edit_role_positions: the two roles that trade places, nothing else",
+      rsent(http), ("move_role_position", [(REGULARS, 1), (MEMBERS, 2)]))
+check("...the audit reason is the acting face's", http.writes[0][2], capabilities.VIA)
+check("the result's place is Discord's answer, in hierarchy order",
+      (result["status"], result["after"], "warning" in result),
+      ("role_moved", {"position": 2, "between": "below 'Hermes' and above 'Regulars'",
+                      "above": "Regulars", "below": "Hermes"}, False))
+new = [b for b in backups() if b not in before]
+check("one backup, <guild>-role-<id>-<local stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-role-{MEMBERS}-2"),
+       result["backup"] == os.path.join(capabilities.LOOK_BACKUP_DIR, new[0])),
+      (1, True, True))
+with open(result["backup"], encoding="utf-8") as fh:
+    rec = json.load(fh)
+check("...the old place, the whole old order, and the parameters that put it back",
+      (rec["before"]["position"], rec["order_before"][:3], rec["restore"]),
+      (1, [[EVERYONE, "@everyone", 0], [MEMBERS, "Members", 1],
+           [REGULARS, "Regulars", 2]], {"role_id": MEMBERS, "position": 1}))
+http.writes.clear()
+result, _ = go(cl, "move_role", {"guild_id": GUILD, **rec["restore"]}, force=True)
+check("...fed back, they do (the cache was updated from Discord's answer)",
+      (rsent(http)[1], result["after"]["position"]), ([(MEMBERS, 1), (REGULARS, 2)], 1))
+for params, want, label in (
+        ({"to_top": True}, [(REGULARS, 1), (HERMES, 2), (MODS, 3), (MEMBERS, 4)],
+         "to_top: right below Bots"),
+        ({"below_id": BOTS}, [(REGULARS, 1), (HERMES, 2), (MODS, 3), (MEMBERS, 4)],
+         "below_id Bots: the same place"),
+        ({"above_id": MODS}, [(REGULARS, 1), (HERMES, 2), (MODS, 3), (MEMBERS, 4)],
+         "above_id Mods: the same place"),
+        ({"above_id": REGULARS}, [(REGULARS, 1), (MEMBERS, 2)], "above_id Regulars")):
+    check(label, rsent(mr({"role_id": MEMBERS, **params}, force=True)[2])[1], want)
+check("below_id moves a role down past the ones between",
+      rsent(mr({"role_id": MODS, "below_id": REGULARS}, force=True)[2])[1],
+      [(MODS, 2), (REGULARS, 3), (HERMES, 4)])
+check("to_bottom: just above @everyone",
+      rsent(mr({"role_id": MODS, "to_bottom": True}, force=True)[2])[1],
+      [(MODS, 1), (MEMBERS, 2), (REGULARS, 3), (HERMES, 4)])
+
+section("move_role - the hierarchy rule, every case, refused at the preview")
+CEILING = ("this bot can't move a role to or above its own top role 'Bots' - the "
+           "highest it can put 'Members' is position 4, right below 'Bots'.")
+for params in ({"above_id": BOTS}, {"position": 5}, {"position": 6},
+               {"above_id": OWNER_ROLE}, {"below_id": OWNER_ROLE}):
+    check(f"to or above this bot's top role ({params})",
+          mr_refused({"role_id": MEMBERS, **params}), CEILING)
+check("this bot's own top role", mr_refused({"role_id": BOTS, "position": 1}),
+      "'Bots' is this bot's own top role, and this bot can't move its own top role - it "
+      "can only move roles below it.")
+check("a role above this bot's top role", mr_refused({"role_id": OWNER_ROLE, "to_bottom": True}),
+      "'Owner' sits above this bot's top role 'Bots', so this bot can't move it.")
+check("a managed role", mr_refused({"role_id": HERMES, "to_bottom": True}),
+      "'Hermes' is a managed role - it belongs to a bot or an integration, so this bot "
+      "leaves its place alone; move it by hand in Server Settings > Roles if it has to go.")
+check("@everyone", mr_refused({"role_id": EVERYONE, "position": 2}),
+      "@everyone always sits at the bottom of the role list; Discord doesn't let it move.")
+check("position 0", mr_refused({"role_id": MODS, "position": 0}),
+      "position 0 is @everyone's; the lowest a role can go is 1.")
+check("below @everyone", mr_refused({"role_id": MODS, "below_id": EVERYONE}),
+      "below_id: nothing can go below @everyone - it's always the bottom role.")
+
+section("move_role - the other refusals")
+check("two places at once", mr_refused({"role_id": MEMBERS, "position": 2, "to_top": True}),
+      "give one place - position, above_id, below_id, to_top or to_bottom - not position "
+      "and to_top.")
+check("no place", mr_refused({"role_id": MEMBERS}),
+      "nothing to change - say where: position, above_id, below_id, to_top or to_bottom.")
+for params in ({"position": 1}, {"to_bottom": True}, {"above_id": EVERYONE},
+               {"below_id": REGULARS}):
+    check(f"already there ({params})", mr_refused({"role_id": MEMBERS, **params}),
+          "'Members' is already there (position 1, just above @everyone, below "
+          "'Regulars') - nothing to change.")
+check("next to itself", mr_refused({"role_id": MEMBERS, "above_id": MEMBERS}),
+      "above_id: a role can't go above or below itself.")
+check("a role that doesn't exist", mr_refused({"role_id": 4242, "to_top": True}),
+      "there's no role 4242 in Testing Server - list_roles has the ids.")
+check("an anchor that doesn't exist", mr_refused({"role_id": MEMBERS, "below_id": 4242}),
+      "below_id: there's no role 4242 in Testing Server - list_roles has the ids.")
+check("no Manage Roles",
+      mr_refused({"role_id": MEMBERS, "to_top": True}, bot_perms=VIEW | SEND | MANAGE_GUILD),
+      "this bot lacks Manage Roles in Testing Server, so it can't move roles there - give "
+      "its role Manage Roles (or Administrator) first.")
+
+section("move_role - backup first; Discord's refusals; the read-back is Discord's")
+cl, g, http = fresh()
+http.raise_on_write = discord.Forbidden(_Resp(403), {"code": 50013,
+                                                         "message": "Missing Permissions"})
+before = backups()
+m = refusal(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "to_top": True},
+            force=True)
+check("Discord's refusal is one sentence (a 403 is run()'s: the permission it lacks)",
+      (one_sentence(m), "Missing Permissions" in m), (True, True))
+check("...the backup was written before Discord was asked", len(backups()) - len(before), 1)
+http.raise_on_write = discord.HTTPException(_Resp(429), "You are being rate limited.")
+check("a rate limit says so", refusal(cl, "move_role", {"guild_id": GUILD,
+                                                        "role_id": MEMBERS, "to_top": True},
+                                      force=True),
+      "Discord is rate-limiting role moves right now. Nothing was changed; try again in a "
+      "while.")
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+cl, g, http = fresh()
+m = refusal(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "to_top": True},
+            force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("no backup, no move: one sentence, Discord never asked",
+      (m.startswith("I couldn't save the role order around 'Members' first ("),
+       m.endswith("so I didn't change anything. Nothing was changed."), http.writes),
+      (True, True, []))
+cl, g, http = fresh()
+
+
+def _members_stays(by_id):
+    by_id[str(MEMBERS)]["position"] = 0             # Discord keeps it at the bottom
+
+
+http.answer_override = _members_stays
+result, _ = go(cl, "move_role", {"guild_id": GUILD, "role_id": MEMBERS, "position": 2},
+               force=True)
+check("Discord's order disagreeing with the plan: the result says what it reads, and warns",
+      (result["after"]["position"], result["warning"]),
+      (1, "Discord's order afterwards isn't the planned one: 'Members' reads position 1, "
+          "just above @everyone, below 'Regulars' - check list_roles."))
+
+
 # ===================================================================== the end
 print()
 if _fails:
