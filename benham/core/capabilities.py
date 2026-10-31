@@ -5652,17 +5652,20 @@ def _am_off(now, want, keys):
 
 _AM_PARAMS = {
     "keywords": {"type": "list",
-                 "desc": "keyword and member_profile rules: words or phrases to match "
-                         "(up to 1000, 60 characters each; Discord's * wildcards work)"},
+                 "desc": "keyword and member_profile rules: words or phrases to match, "
+                         "as plain strings, e.g. ['badword', 'buy now*'] (up to 1000, 60 "
+                         "characters each; Discord's * wildcards work)"},
     "regex_patterns": {"type": "list",
-                       "desc": "keyword and member_profile rules: regex patterns, Rust "
-                               "syntax (up to 10, 260 characters each)"},
+                       "desc": "keyword and member_profile rules: regex patterns as "
+                               "plain strings, Rust syntax, e.g. ['b+a+d'] (up to 10, 260 "
+                               "characters each)"},
     "allow_list": {"type": "list",
-                   "desc": "Words the rule lets through (up to 100; up to 1000 on a "
-                           "keyword_preset rule)"},
+                   "desc": "Words the rule lets through, as plain strings, e.g. "
+                           "['badminton'] (up to 100; up to 1000 on a keyword_preset "
+                           "rule)"},
     "presets": {"type": "list",
-                "desc": "keyword_preset rules: Discord's word lists - profanity, "
-                        "sexual_content, slurs"},
+                "desc": "keyword_preset rules: Discord's word lists, e.g. "
+                        "['profanity', 'slurs'] - profanity, sexual_content, slurs"},
     "mention_limit": {"type": "int",
                       "desc": "mention_spam rules: the most user and role mentions one "
                               "message may carry, 1-50"},
@@ -5678,10 +5681,10 @@ _AM_PARAMS = {
     "timeout_seconds": {"type": "int",
                         "desc": "keyword and mention_spam rules: also time the member "
                                 "out this long, 1-2419200 (28 days)"},
-    "exempt_role_ids": {"type": "list", "desc": "Roles the rule never applies to (up "
-                                                "to 20)"},
-    "exempt_channel_ids": {"type": "list", "desc": "Channels the rule never applies in "
-                                                   "(up to 50)"},
+    "exempt_role_ids": {"type": "list", "desc": "Role ids the rule never applies to, "
+                                                "e.g. [123, 456] (up to 20)"},
+    "exempt_channel_ids": {"type": "list", "desc": "Channel ids the rule never applies "
+                                                   "in, e.g. [123] (up to 50)"},
     "enabled": {"type": "bool", "desc": "On from the start (default true)"},
     "reason": {"type": "str", "desc": "Audit-log reason"},
 }
@@ -5795,17 +5798,20 @@ def _am_restore_value(key, value):
          "name": {"type": "str", "desc": "A new name"},
          **{k: dict(v) for k, v in _AM_PARAMS.items()},
          "keywords": {"type": "list",
-                      "desc": "REPLACES the rule's keywords (keyword and member_profile "
-                              "rules; up to 1000, 60 characters each)"},
+                      "desc": "REPLACES the rule's keywords, as plain strings, e.g. "
+                              "['badword', 'buy now*'] (keyword and member_profile rules; "
+                              "up to 1000, 60 characters each)"},
          "regex_patterns": {"type": "list",
-                            "desc": "REPLACES the rule's regex patterns (up to 10, 260 "
-                                    "characters each)"},
+                            "desc": "REPLACES the rule's regex patterns, as plain "
+                                    "strings, e.g. ['b+a+d'] (up to 10, 260 characters "
+                                    "each)"},
          "allow_list": {"type": "list",
-                        "desc": "REPLACES the rule's allow list (up to 100; 1000 on a "
-                                "keyword_preset rule)"},
+                        "desc": "REPLACES the rule's allow list, as plain strings, "
+                                "e.g. ['badminton'] (up to 100; 1000 on a keyword_preset "
+                                "rule)"},
          "presets": {"type": "list",
-                     "desc": "REPLACES the word lists of a keyword_preset rule: "
-                             "profanity, sexual_content, slurs"},
+                     "desc": "REPLACES the word lists of a keyword_preset rule, e.g. "
+                             "['profanity', 'slurs'] - profanity, sexual_content, slurs"},
          "custom_message": {"type": "str",
                             "desc": "The note shown to a blocked sender; empty or none "
                                     "drops it"},
@@ -5815,10 +5821,12 @@ def _am_restore_value(key, value):
          "timeout_seconds": {"type": "int",
                              "desc": "keyword and mention_spam rules: 1-2419200 (28 "
                                      "days); 0 drops the timeout"},
-         "exempt_role_ids": {"type": "list", "desc": "REPLACES the exempt roles (up to "
-                                                     "20; [] for none)"},
-         "exempt_channel_ids": {"type": "list", "desc": "REPLACES the exempt channels (up "
-                                                        "to 50; [] for none)"},
+         "exempt_role_ids": {"type": "list", "desc": "REPLACES the exempt roles: role "
+                                                     "ids, e.g. [123] (up to 20; [] for "
+                                                     "none)"},
+         "exempt_channel_ids": {"type": "list", "desc": "REPLACES the exempt channels: "
+                                                        "channel ids, e.g. [123] (up to 50; "
+                                                        "[] for none)"},
          "enabled": {"type": "bool", "desc": "Turn the rule on or off"}},
         needs_guild=True, outward=True, always_confirm=True, taints=True)
 async def _edit_automod_rule(ctx, p):
