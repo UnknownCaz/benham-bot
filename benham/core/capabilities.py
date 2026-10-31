@@ -1124,12 +1124,21 @@ def _audit_action(raw):
            "invite_create or message_delete."))
 
 
+def _is_enum_value(v):
+    """A discord.py enum member. Not an instance of discord.enums.Enum: each one
+    is a namedtuple of (name, value), so without this a verification level reads
+    as the tuple '"low", 1' (found in the live log, 2026-10-31)."""
+    return type(v).__name__.startswith("_EnumValue_") and hasattr(v, "name")
+
+
 def _audit_value(v):
-    """One before/after value as a person reads it, or None to leave the
-    attribute out (a picture, an overwrite list - anything that isn't a short
-    fact)."""
+    """One before/after value as a person reads it, or None when it isn't a
+    short fact (a picture, an overwrite list) - the caller then says only that
+    the attribute changed."""
     if v is None:
         return "none"
+    if _is_enum_value(v):
+        return v.name
     if isinstance(v, bool):
         return "on" if v else "off"
     if isinstance(v, (int, float)):
@@ -1139,8 +1148,6 @@ def _audit_value(v):
         return '"' + (t if len(t) <= _AUDIT_TEXT else t[:_AUDIT_TEXT - 3] + "...") + '"'
     if isinstance(v, datetime):
         return eventtime.local(v)
-    if isinstance(type(v), discord.enums.EnumMeta):
-        return v.name
     if isinstance(v, discord.Colour):
         return str(v)
     if isinstance(v, (discord.Member, discord.User)):
@@ -1170,6 +1177,25 @@ def _audit_perm_change(before, after):
     return " ".join(words[:8]) + (f" +{len(words) - 8} more" if len(words) > 8 else "")
 
 
+def _audit_flag_change(before, after):
+    """Which toggles of a flags value (system-channel toggles and the like)
+    flipped, in discord.py's own on/off reading of them."""
+    ref = after if after is not None else before
+    words = []
+    for name, _ in ref:
+        b = bool(getattr(before, name)) if before is not None else None
+        a = bool(getattr(after, name)) if after is not None else None
+        if b == a:
+            continue
+        words.append(f"{name} {'none' if b is None else 'on' if b else 'off'} -> "
+                     f"{'none' if a is None else 'on' if a else 'off'}")
+    return ", ".join(words[:6]) + (f" +{len(words) - 6} more" if len(words) > 6 else "")
+
+
+def _audit_empty(v):
+    return v is None or v == [] or v == () or v == ""
+
+
 def _audit_changes(entry):
     before, after = dict(entry.changes.before), dict(entry.changes.after)
     lines = []
@@ -1178,10 +1204,18 @@ def _audit_changes(entry):
         if isinstance(b, discord.Permissions) or isinstance(a, discord.Permissions):
             lines.append(f"{attr}: {_audit_perm_change(b, a)}")
             continue
+        if isinstance(b, discord.flags.BaseFlags) or isinstance(a, discord.flags.BaseFlags):
+            words = _audit_flag_change(b, a)
+            if words:
+                lines.append(f"{attr}: {words}")
+            continue
         wb, wa = _audit_value(b), _audit_value(a)
         if wb is None or wa is None:
+            if not (_audit_empty(b) and _audit_empty(a)):
+                lines.append(f"{attr}: changed")
             continue
-        lines.append(f"{attr}: {wb} -> {wa}")
+        if wb != wa:
+            lines.append(f"{attr}: {wb} -> {wa}")
     if len(lines) > _AUDIT_SHOWN:
         lines = lines[:_AUDIT_SHOWN] + [f"+{len(lines) - _AUDIT_SHOWN} more"]
     return lines
@@ -1205,6 +1239,14 @@ def _audit_target(entry):
         name = f"#{t.name}"
     elif t is not None and not isinstance(t, discord.Object):
         name = getattr(t, "name", None)
+    if not name:
+        # A deleted channel or role is gone from the cache; its entry still
+        # carries the name it had (before a delete, after a create).
+        for side in (entry.changes.before, entry.changes.after):
+            n = getattr(side, "name", None)
+            if isinstance(n, str) and n:
+                name = f"#{n}" if out["kind"] == "channel" else n
+                break
     if name:
         out["name"] = name
     return out
@@ -1231,6 +1273,10 @@ def audit_dict(entry):
          "who": entry.user.display_name if entry.user is not None else "unknown",
          "what": entry.action.name, "target": _audit_target(entry),
          "reason": entry.reason or None, "changes": _audit_changes(entry)}
+    if entry.action.name.startswith("unknown_"):
+        d["note"] = (f"Discord logs this action (number {entry.action.value}) without "
+                     "documenting it; by its number it concerns a "
+                     f"{d['target']['kind']}.")
     extra = _audit_extra(entry)
     if extra:
         d["extra"] = extra
