@@ -938,6 +938,29 @@ async def _list_emojis(ctx, p):
         for e in g.emojis]}
 
 
+def guild_sticker_dict(s):
+    """One of a server's own stickers: sticker_dict plus what the Stickers screen
+    shows - its description and related emoji (both other people's text) and
+    whether Discord still has it available (a lost boost level can lock some)."""
+    d = sticker_dict(s)
+    d.update({"description": getattr(s, "description", "") or "",
+              "emoji": getattr(s, "emoji", "") or "",
+              "available": bool(getattr(s, "available", True))})
+    return d
+
+
+@action("list_stickers", identity.READ,
+        "A server's own stickers: id, name, description, related emoji, format "
+        "(png, apng, gif or lottie) and link, plus how many sticker slots it has.",
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
+async def _list_stickers(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    stickers = list(g.stickers)
+    return {"guild": g.name, "count": len(stickers), "limit": g.sticker_limit,
+            "stickers": [guild_sticker_dict(s) for s in stickers]}
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "

@@ -515,6 +515,23 @@ m = refusal(cl, "create_emoji", {"guild_id": GUILD, "name": "late", "image": "at
                                  **ATT})
 check("Forbidden is run()'s permission sentence", "lacks the permission" in (m or ""), True)
 
+# =============================================================== list_stickers
+section("list_stickers - a read that taints (names and descriptions are other people's)")
+registered("list_stickers", 0, False, False, True)
+cl, g = fresh(stickers=[_Sticker(11, "hello", fmt="png", description="says hi",
+                                 emoji="\U0001F44B"),
+                        _Sticker(12, "dance", fmt="lottie")], sticker_limit=5)
+result, preview = go(cl, "list_stickers", {"guild_id": GUILD})
+check("no preview for a read", preview, None)
+check("count and the server's sticker slots", (result["count"], result["limit"]), (2, 5))
+check("each sticker: id, name, description, related emoji, format, link",
+      result["stickers"][0], {"id": 11, "name": "hello", "format": "png",
+                              "url": "https://media.discordapp.net/stickers/11.png",
+                              "description": "says hi", "emoji": "\U0001F44B",
+                              "available": True})
+check("a Lottie one says so (it can't be downloaded)", result["stickers"][1]["format"],
+      "lottie")
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
