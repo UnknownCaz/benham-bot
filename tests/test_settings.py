@@ -437,6 +437,262 @@ check("...a JSON list is not a flags value, so it stays text (and is refused lat
 check("the model is told it's an object", _agent._JSON_TYPE["flags"], "object")
 
 
+# ======================================================== edit_server_settings
+section("edit_server_settings - registered like edit_server_look")
+registered("edit_server_settings", 2, True, True, True)
+_tool = next(t for t in _agent.build_tools() if t["name"] == "edit_server_settings")
+check("the model sees system_flags as an object of booleans",
+      _tool["input_schema"]["properties"]["system_flags"],
+      {"type": "object", "description": capabilities.REGISTRY["edit_server_settings"]
+       .params["system_flags"]["desc"], "additionalProperties": {"type": "boolean"}})
+
+
+def es(params, force=False, **gkw):
+    """(result, preview, http, client, guild) for one edit_server_settings call."""
+    cl, g, http = fresh(**gkw)
+    result, preview = go(cl, "edit_server_settings", {"guild_id": GUILD, **params},
+                         force=force)
+    return result, preview, http, cl, g
+
+
+def es_refused(params, **gkw):
+    """The refusal, at the preview AND at the confirm, with Discord never asked."""
+    out = []
+    for force in (False, True):
+        cl, g, http = fresh(**gkw)
+        before = backups()
+        m = refusal(cl, "edit_server_settings", {"guild_id": GUILD, **params}, force=force)
+        out.append((m, http.writes == [], backups() == before))
+    (m1, w1, b1), (m2, w2, b2) = out
+    return m1 if (m1 == m2 and w1 and w2 and b1 and b2) else ("MISMATCH", out)
+
+
+section("edit_server_settings - previewed first, nothing touched")
+before = backups()
+result, preview, http, cl, g = es({"afk_timeout": "15m"})
+check("the first call is a preview; Discord is asked nothing, nothing is saved",
+      (result, http.writes, backups() == before), (None, [], True))
+check("...the summary names the server and the field",
+      preview["summary"], "Change **Testing Server**'s settings: AFK timeout")
+check("...the field old -> new, then 'Nothing else changes' and the backup promise",
+      preview["detail"].splitlines(),
+      ["AFK timeout: 5m (300 s) -> 15m (900 s)", "Nothing else changes.",
+       "The current values are saved first, so this can be put back."])
+_, preview, http, _, _ = es({"afk_channel_id": str(GENERAL), "afk_timeout": 300,
+                             "system_channel_id": "none",
+                             "system_flags": {"setup_tips": True, "join_notifications": True},
+                             "default_notifications": "all messages",
+                             "verification_level": "low",
+                             "explicit_content_filter": "no_role"})
+check("several fields at once: every change on its own line, old -> new",
+      preview["detail"].splitlines()[:6],
+      ["AFK channel: #AFK -> #General", "System channel: #welcome -> none",
+       "System toggle setup_tips: off -> on", "Default notifications: only_mentions -> "
+       "all_messages", "Verification level: none -> low",
+       "Explicit-content filter: disabled -> no_role"])
+check("...the ones already that way are named and left alone",
+      "Already that way, left alone: afk_timeout (5m (300 s)), join_notifications (on)."
+      in preview["detail"], True)
+check("...the side effects a person should know, in words",
+      all(w in preview["detail"] for w in (
+          "no system channel, so the toggles have nowhere to post",
+          "can't send messages until they do",
+          "notified of every message")), True)
+check("...and still nothing asked of Discord", http.writes, [])
+
+section("edit_server_settings - refused at the preview, whole (and at the confirm)")
+for raw in ("10m", "7", "2h", "soon", "-60", "0"):
+    m = es_refused({"afk_timeout": raw})
+    check(f"afk_timeout {raw!r}: Discord's five values named",
+          isinstance(m, str) and m.startswith("afk_timeout can only be 1m, 5m, 15m, 30m "
+                                              "or 1h") and one_sentence(m), True)
+for raw, secs in (("1m", 60), ("300", 300), ("15 min", 900), ("30m", 1800),
+                  ("1h", 3600), ("3600s", 3600), ("1 hour", 3600)):
+    check(f"afk_timeout {raw!r} reads as {secs} s", capabilities._afk_timeout(raw), secs)
+for field, raw, words in (
+        ("default_notifications", "loud", "all_messages, only_mentions"),
+        ("verification_level", "extreme", "none, low, medium, high, highest"),
+        ("explicit_content_filter", "everyone", "disabled, no_role, all_members")):
+    m = es_refused({field: raw})
+    check(f"{field} {raw!r}: unknown, the known values listed",
+          m, f"{field} is one of {words}, and {raw!r} isn't one of those.")
+for field, cid, words in (
+        ("afk_channel_id", ASD, "#asd is a text channel, and the AFK channel has to be a "
+                                "voice channel."),
+        ("afk_channel_id", TOWNHALL, "#Town Hall is a stage channel, and the AFK channel "
+                                     "has to be a voice channel."),
+        ("afk_channel_id", GAMES, "#Games is a category channel, and the AFK channel has "
+                                  "to be a voice channel."),
+        ("system_channel_id", GENERAL, "#General is a voice channel, and the system "
+                                       "channel has to be a text channel.")):
+    check(f"{field} -> a channel of the wrong kind ({cid})", es_refused({field: str(cid)}),
+          f"{field}: {words}")
+check("a channel from another server",
+      es_refused({"system_channel_id": str(ELSEWHERE)}),
+      "system_channel_id: channel 901 belongs to another server, not Testing Server.")
+check("a channel that doesn't exist",
+      es_refused({"afk_channel_id": "4242"}),
+      "afk_channel_id: there's no channel 4242 in Testing Server that this bot can see.")
+check("a channel id that isn't one", es_refused({"afk_channel_id": "#AFK"}),
+      "afk_channel_id takes a channel id, or none to clear it - '#AFK' is neither.")
+for field in ("rules_channel_id", "public_updates_channel_id"):
+    m = es_refused({field: str(OLD)})
+    check(f"{field} on a server that isn't Community: 'needs a Community server'",
+          isinstance(m, str) and "needs a Community server, and Testing Server isn't one"
+          in m and one_sentence(m), True)
+m = es_refused({"rules_channel_id": "none"}, community=True)
+check("a Community server can't clear its rules channel",
+      m, "rules_channel_id: a Community server has to keep a rules channel - name another "
+         "text channel instead of none.")
+m = es_refused({"rules_channel_id": str(GENERAL)}, community=True)
+check("...and its rules channel has to be a text channel",
+      m, "rules_channel_id: #General is a voice channel, and a rules channel has to be a "
+         "text channel.")
+check("a request that changes nothing",
+      es_refused({"afk_timeout": "5m", "default_notifications": "only_mentions",
+                  "system_flags": {"setup_tips": False}}),
+      "nothing would change - Testing Server already has afk_timeout (5m (300 s)), "
+      "setup_tips (off), default_notifications (only_mentions).")
+check("no field at all", es_refused({}).startswith("nothing to change - pass "), True)
+check("an empty toggle map is no field either",
+      es_refused({"system_flags": {}}).startswith("nothing to change"), True)
+m = es_refused({"system_flags": {"pings": False}})
+check("a toggle that doesn't exist, the real ones listed",
+      m, "system_flags: 'pings' isn't a system-channel toggle - the toggles are "
+         "join_notifications, boost_notifications, setup_tips, join_sticker_replies, "
+         "role_subscription_notifications, role_subscription_sticker_replies, "
+         "emoji_added_notifications.")
+m = es_refused({"system_flags": {"boost_notifications": True,
+                                 "premium_subscriptions": False}})
+check("one toggle named twice (two spellings), on and off",
+      m, "system_flags names boost_notifications twice, once on and once off - pick one.")
+check("no Manage Server", es_refused({"afk_timeout": "1h"}, bot_perms=VIEW | SEND),
+      "this bot lacks Manage Server in Testing Server, so it can't change the server's "
+      "settings - give its role Manage Server (or Administrator) first.")
+
+section("edit_server_settings - confirmed: backup, discord.py's own edit, read back")
+before = backups()
+result, _, http, cl, g = es({"afk_timeout": "15m", "reason": "stage c test"}, force=True)
+check("one edit, only the field named, the typed reason",
+      http.writes, [("edit_guild", {"afk_timeout": 900}, "stage c test")])
+new = [b for b in backups() if b not in before]
+check("one backup, <guild>-settings-<local stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-settings-2"), new[0].endswith(".json")),
+      (1, True, True))
+with open(os.path.join(capabilities.LOOK_BACKUP_DIR, new[0]), encoding="utf-8") as fh:
+    rec = json.load(fh)
+check("...it holds the old value as the parameter that puts it back",
+      (rec["changed"], rec["restore"], rec["before"]),
+      (["afk_timeout"], {"afk_timeout": "300"}, {"AFK timeout": "5m (300 s)"}))
+check("...and the whole settings block as it was",
+      (rec["settings_before"]["afk_timeout"], rec["guild_id"], rec["guild"],
+       len(rec["saved_at"])), (300, GUILD, "Testing Server", 19))
+check("the result is what Discord answered, and where the backup is",
+      (result["status"], result["changed"], result["now"], result["settings"]["afk_timeout"],
+       result["backup"], "warning" in result),
+      ("settings_changed", ["afk_timeout"], {"afk_timeout": 900}, 900,
+       os.path.join(capabilities.LOOK_BACKUP_DIR, new[0]), False))
+check("...an audit reason defaults to the acting face",
+      es({"afk_timeout": "1h"}, force=True)[2].writes[0][2], capabilities.VIA)
+
+result, _, http, cl, g = es({"system_flags": "setup_tips=true"}, force=True)
+check("a toggle: the current bits with only that one flipped (4 -> 0)",
+      http.writes[0][1], {"system_channel_flags": 0})
+check("...read back on, the others untouched",
+      (result["now"], result["settings"]["system_flags"]["join_notifications"]),
+      ({"setup_tips": True}, True))
+_, _, http, _, _ = es({"system_flags": {"join_notifications": False}}, force=True)
+check("switching one off sets only its suppress bit (4 -> 5)",
+      http.writes[0][1], {"system_channel_flags": 5})
+_, _, http, _, _ = es({"system_flags": {"premium_subscriptions": False}}, force=True)
+check("discord.py's own spelling reaches the same toggle (4 -> 6)",
+      http.writes[0][1], {"system_channel_flags": 6})
+_, _, http, _, _ = es({"system_flags": {"setup_tips": True}}, force=True,
+                      system_channel_flags=4 | 64)
+check("a bit discord.py doesn't name survives the edit (68 -> 64)",
+      http.writes[0][1], {"system_channel_flags": 64})
+result, _, http, cl, g = es({"afk_channel_id": str(GENERAL), "system_channel_id": "0",
+                             "default_notifications": "all_messages",
+                             "verification_level": "medium",
+                             "explicit_content_filter": "all_members"}, force=True)
+check("channels by id (or null to clear), the levels as Discord's numbers",
+      http.writes[0][1], {"afk_channel_id": GENERAL, "system_channel_id": None,
+                          "default_message_notifications": 0, "verification_level": 2,
+                          "explicit_content_filter": 2})
+check("...read back field by field",
+      result["now"], {"afk_channel": GENERAL, "system_channel": None,
+                      "default_notifications": "all_messages",
+                      "verification_level": "medium", "explicit_content_filter": "all_members"})
+check("...the read-back names channels from the cache, though Discord's answer has none",
+      result["settings"]["afk_channel"], {"name": "General", "id": GENERAL})
+result, _, http, _, _ = es({"rules_channel_id": str(OLD),
+                            "public_updates_channel_id": str(ASD)}, force=True,
+                           community=True)
+check("a Community server's rules and public-updates channels",
+      (http.writes[0][1], result["now"]),
+      ({"rules_channel_id": OLD, "public_updates_channel_id": ASD},
+       {"rules_channel": OLD, "public_updates_channel": ASD}))
+
+section("edit_server_settings - the read-back is Discord's, not the request's")
+cl, g, http = fresh()
+http.answer_override = lambda fields: {"afk_timeout": 300}
+result, _ = go(cl, "edit_server_settings", {"guild_id": GUILD, "afk_timeout": "1h"},
+               force=True)
+check("Discord answers 300 to a 3600: the result says 300, and warns",
+      (result["now"], result["settings"]["afk_timeout"], result["warning"]),
+      ({"afk_timeout": 300}, 300, "Discord accepted the change but doesn't read back what "
+                                  "was asked for: afk_timeout (it reads 300) - check "
+                                  "guild_info."))
+
+section("edit_server_settings - the backup comes first, and no backup means no change")
+cl, g, http = fresh()
+http.raise_on_write = discord.HTTPException(_Resp(400), {"code": 50035, "message":
+                                                         "Invalid Form Body"})
+before = backups()
+m = refusal(cl, "edit_server_settings", {"guild_id": GUILD, "afk_timeout": "1h"}, force=True)
+check("Discord's refusal is one sentence ending 'Nothing was changed.'",
+      (one_sentence(m), m.startswith("Discord turned the settings change down: "),
+       m.endswith("Nothing was changed.")), (True, True, True))
+check("...and the backup had already been written before Discord was asked",
+      len(backups()) - len(before), 1)
+http.raise_on_write = discord.HTTPException(_Resp(429), "You are being rate limited.")
+m = refusal(cl, "edit_server_settings", {"guild_id": GUILD, "afk_timeout": "1h"}, force=True)
+check("a rate limit says so", m, "Discord is rate-limiting settings changes right now. "
+                                 "Nothing was changed; try again in a while.")
+_real_dir = capabilities.LOOK_BACKUP_DIR
+_blocker = os.path.join(TMP, "not-a-folder")
+with open(_blocker, "w") as fh:
+    fh.write("x")
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+cl, g, http = fresh()
+m = refusal(cl, "edit_server_settings", {"guild_id": GUILD, "afk_timeout": "1h"}, force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("a backup that can't be written stops the change: one sentence, Discord never asked",
+      (m.startswith("I couldn't save the current settings first ("),
+       m.endswith("so I didn't change anything. Nothing was changed."), http.writes),
+      (True, True, []))
+
+section("edit_server_settings - the backup's restore puts it back")
+cl, g, http = fresh()
+before = backups()
+go(cl, "edit_server_settings", {"guild_id": GUILD, "afk_timeout": "15m",
+                                "afk_channel_id": "none",
+                                "system_flags": {"setup_tips": True, "join_notifications": False},
+                                "verification_level": "high"}, force=True)
+with open(os.path.join(capabilities.LOOK_BACKUP_DIR,
+                       [b for b in backups() if b not in before][0]), encoding="utf-8") as fh:
+    rec = json.load(fh)
+check("restore holds every old value, toggles as a map",
+      rec["restore"], {"afk_timeout": "300", "afk_channel_id": str(AFK),
+                       "system_flags": {"setup_tips": False, "join_notifications": True},
+                       "verification_level": "none"})
+g = resync(cl, g)
+result, _ = go(cl, "edit_server_settings", {"guild_id": GUILD, **rec["restore"]}, force=True)
+g = resync(cl, g)
+check("...fed back to edit_server_settings, the settings block is what it was",
+      capabilities._settings_block(g), rec["settings_before"])
+
+
 # ===================================================================== the end
 print()
 if _fails:

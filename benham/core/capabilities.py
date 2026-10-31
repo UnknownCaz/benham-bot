@@ -3699,6 +3699,388 @@ async def _start_event(ctx, p):
     return {"status": "event_started", "guild": g.name, "event": event_dict(g, after)}
 
 
+# --- server settings and ordering (INTENT 60, Stage 8 C) --------------------
+#
+# The settings on Server Settings > Overview and Moderation, and the order of
+# channels and roles. The posture is edit_server_look's, argued once here:
+#
+#   tier MANAGE - every change has an exact inverse, and the handler MAKES that
+#       true rather than assuming it: the confirmed call first writes what it is
+#       about to replace to state/look_backups/ (local-time stamped; a settings
+#       file holds the old values as the very parameters that put them back),
+#       then changes, then reads Discord back and reports what Discord holds -
+#       never what was sent. The backup is NOT best effort: the preview promised
+#       it, so a backup that can't be written stops the change.
+#   outward + always_confirm - everyone in the server sees a reorder, and a
+#       verification level or a notification default changes what every member
+#       can do or is pinged by.
+#   taints - the preview and the result repeat channel and role names, which
+#       are attacker-writable strings.
+#
+# Refusals come at the PREVIEW, whole, in one plain sentence: an unknown value, a
+# channel of the wrong kind or from another server, a Community-only setting on
+# a server that isn't Community, a request that changes nothing. Caz is never
+# asked to confirm what Discord would refuse, or what would do nothing.
+
+_AFK_TIMEOUTS = {60: "1m", 300: "5m", 900: "15m", 1800: "30m", 3600: "1h"}
+_TIME_UNITS = {"": 1, "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+               "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+               "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600}
+_NOTIFY_LEVELS = {lv.name: lv for lv in discord.NotificationLevel}
+_VERIFY_LEVELS = {lv.name: lv for lv in discord.VerificationLevel}
+_CONTENT_FILTERS = {lv.name: lv for lv in discord.ContentFilter}
+_CLEAR_WORDS = ("", "0", "none", "null", "off", "clear")
+# Either spelling of a toggle reaches the same flag: the name guild_info shows,
+# or discord.py's own attribute name.
+_FLAG_ATTRS = {**{name: attr for name, attr in _SYSTEM_FLAGS},
+               **{attr: attr for _, attr in _SYSTEM_FLAGS}}
+_FLAG_NAMES = {attr: name for name, attr in _SYSTEM_FLAGS}
+_TYPE_WORDS = {"text": "text", "voice": "voice", "category": "category",
+               "stage_voice": "stage", "news": "announcement", "forum": "forum",
+               "media": "media"}
+
+
+def _type_word(ch):
+    t = getattr(getattr(ch, "type", None), "name", "unknown")
+    return _TYPE_WORDS.get(t, t)
+
+
+def _ch_words(g, cid):
+    """How a settings channel reads in a preview: #name, or none."""
+    if not cid:
+        return "none"
+    ch = g.get_channel(int(cid))
+    return f"#{ch.name}" if ch is not None else f"channel {cid}"
+
+
+def _afk_timeout(raw):
+    m = re.fullmatch(r"(\d+)\s*([a-z]*)", str(raw).strip().lower())
+    unit = _TIME_UNITS.get(m.group(2)) if m else None
+    secs = int(m.group(1)) * unit if unit else None
+    if secs not in _AFK_TIMEOUTS:
+        raise ActionError(
+            f"afk_timeout can only be 1m, 5m, 15m, 30m or 1h (60, 300, 900, 1800 or "
+            f"3600 seconds) - Discord offers no other, and {raw!r} isn't one of those.")
+    return secs
+
+
+def _timeout_words(secs):
+    return f"{_AFK_TIMEOUTS.get(secs, f'{secs}s')} ({secs} s)"
+
+
+def _settings_word(raw, table, field):
+    word = re.sub(r"[\s-]+", "_", str(raw).strip().lower())
+    if word not in table:
+        raise ActionError(f"{field} is one of {', '.join(table)}, and {raw!r} isn't "
+                          "one of those.")
+    return table[word]
+
+
+def _settings_channel(ctx, g, raw, field, kind, what):
+    """The channel a settings parameter names, or None for "clear it".
+    `kind` is the one discord.ChannelType it must be; `what` names the slot."""
+    text = str(raw).strip().lower()
+    if text in _CLEAR_WORDS:
+        return None
+    try:
+        cid = int(text)
+    except ValueError:
+        raise ActionError(f"{field} takes a channel id, or none to clear it - {raw!r} "
+                          "is neither.")
+    ch = g.get_channel(cid)
+    if ch is None:
+        other = ctx.client.get_channel(cid)
+        if other is not None and getattr(other, "guild", None) is not None:
+            raise ActionError(f"{field}: channel {cid} belongs to another server, not "
+                              f"{g.name}.")
+        raise ActionError(f"{field}: there's no channel {cid} in {g.name} that this bot "
+                          "can see.")
+    if ch.type != kind:
+        raise ActionError(f"{field}: #{ch.name} is a {_type_word(ch)} channel, and {what} "
+                          f"has to be a {_TYPE_WORDS.get(kind.name, kind.name)} channel.")
+    return ch
+
+
+def _settings_keep(ctx, g, label, record, what):
+    """Write `record` as JSON to look_backups/<guild>-<label>-<local stamp>.json and
+    return the path. NOT best effort, like _event_keep_copy: the preview promised
+    the copy, so a copy that can't be made stops the change."""
+    try:
+        now = datetime.now()                      # local time, house rule
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        base = os.path.join(LOOK_BACKUP_DIR,
+                            f"{g.id}-{label}-{now.strftime('%Y%m%d-%H%M%S')}")
+        path, n = base + ".json", 1
+        while os.path.exists(path):
+            n += 1
+            path = f"{base}-{n}.json"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"saved_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                       "guild_id": g.id, "guild": g.name, **record}, fh,
+                      indent=2, ensure_ascii=False, default=str)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"settings: could not save {what} ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save {what} first ({type(e).__name__}), so I "
+                          "didn't change anything. Nothing was changed.")
+
+
+async def _settings_call(awaitable, what, check_with):
+    """One Discord settings or ordering change, with a ceiling and one plain
+    sentence for every refusal. Forbidden is NOT handled here - run() words it."""
+    try:
+        return await asyncio.wait_for(awaitable, LOOK_TIMEOUT)
+    except discord.Forbidden:
+        raise
+    except discord.HTTPException as e:
+        text = " ".join((getattr(e, "text", None) or str(e) or "").split()).rstrip(".")
+        low = text.lower()
+        if getattr(e, "status", None) == 429 or any(
+                w in low for w in ("too fast", "rate limit", "rate_limit", "ratelimit")):
+            raise ActionError(f"Discord is rate-limiting {what}s right now. Nothing was "
+                              "changed; try again in a while.")
+        raise ActionError(f"Discord turned the {what} down: "
+                          f"{text or 'it gave no reason'}. Nothing was changed.")
+    except (TypeError, ValueError) as e:
+        # discord.py's own guards on the arguments, before any request.
+        raise ActionError(f"the {what} couldn't go to Discord ({e}). Nothing was "
+                          "changed.")
+    except asyncio.TimeoutError:
+        raise ActionError(f"Discord didn't answer the {what} within {LOOK_TIMEOUT} "
+                          f"seconds. Nothing was confirmed changed; check {check_with} "
+                          "and try again later.")
+
+
+def _settings_plan(ctx, g, p):
+    """(changes, already): every requested field that differs from what the server
+    holds now, and the ones that already match. Raises ActionError, whole, on the
+    first thing Discord would refuse. Each change is a dict:
+      label, old, new   - the preview line, in words
+      kw, value         - the Guild.edit keyword and what goes to it
+      restore           - (param, value) that would put the old value back
+      key, want         - where the read-back holds it, and what it should say"""
+    ids = _settings_ids(g)
+    feats = set(getattr(g, "features", None) or ())
+    changes, already = [], []
+
+    def channel_field(param, slot, kind, what, label, community=False):
+        if p.get(param) is None:
+            return
+        if community and "COMMUNITY" not in feats:
+            raise ActionError(f"{param}: {what} needs a Community server, and {g.name} "
+                              "isn't one - Discord only has that setting on Community "
+                              "servers.")
+        ch = _settings_channel(ctx, g, p[param], param, kind, what)
+        if community and ch is None:
+            raise ActionError(f"{param}: a Community server has to keep {what} - name "
+                              "another text channel instead of none.")
+        old, new = ids[slot], (ch.id if ch is not None else None)
+        if old == new:
+            already.append(f"{param} ({_ch_words(g, old)})")
+            return
+        changes.append({"label": label, "old": _ch_words(g, old),
+                        "new": _ch_words(g, new), "kw": slot, "value": ch,
+                        "restore": (param, str(old) if old else "none"),
+                        "key": slot, "want": new})
+
+    def word_field(param, table, current, label):
+        if p.get(param) is None:
+            return
+        level = _settings_word(p[param], table, param)
+        if level == current:
+            already.append(f"{param} ({current.name})")
+            return
+        changes.append({"label": label, "old": current.name, "new": level.name,
+                        "kw": param, "value": level,
+                        "restore": (param, current.name), "key": param,
+                        "want": level.name})
+
+    channel_field("afk_channel_id", "afk_channel", discord.ChannelType.voice,
+                  "the AFK channel", "AFK channel")
+    if p.get("afk_timeout") is not None:
+        secs = _afk_timeout(p["afk_timeout"])
+        if secs == g.afk_timeout:
+            already.append(f"afk_timeout ({_timeout_words(secs)})")
+        else:
+            changes.append({"label": "AFK timeout", "old": _timeout_words(g.afk_timeout),
+                            "new": _timeout_words(secs), "kw": "afk_timeout",
+                            "value": secs, "restore": ("afk_timeout", str(g.afk_timeout)),
+                            "key": "afk_timeout", "want": secs})
+    channel_field("system_channel_id", "system_channel", discord.ChannelType.text,
+                  "the system channel", "System channel")
+
+    if p.get("system_flags"):
+        flags = g.system_channel_flags          # a fresh object from the current bits
+        asked = {}
+        for raw, want in p["system_flags"].items():
+            attr = _FLAG_ATTRS.get(str(raw).strip().lower())
+            if attr is None:
+                raise ActionError(
+                    f"system_flags: {raw!r} isn't a system-channel toggle - the toggles "
+                    f"are {', '.join(n for n, _ in _SYSTEM_FLAGS)}.")
+            if asked.get(attr, want) != want:
+                raise ActionError(f"system_flags names {_FLAG_NAMES[attr]} twice, once "
+                                  "on and once off - pick one.")
+            asked[attr] = want
+        flipped = {}
+        for attr, want in asked.items():
+            name = _FLAG_NAMES[attr]
+            if bool(getattr(flags, attr)) == want:
+                already.append(f"{name} ({'on' if want else 'off'})")
+                continue
+            setattr(flags, attr, want)
+            flipped[name] = want
+            changes.append({"label": f"System toggle {name}",
+                            "old": "off" if want else "on", "new": "on" if want else "off",
+                            "kw": None, "value": None, "restore": None,
+                            "key": ("system_flags", name), "want": want})
+        if flipped:
+            # One keyword carries every toggle: the current bits with only the
+            # named ones flipped (a SystemChannelFlags built from keywords starts
+            # from all-suppressed and would switch every other toggle off).
+            changes.append({"label": None, "kw": "system_channel_flags", "value": flags,
+                            "restore": ("system_flags",
+                                        {n: not v for n, v in flipped.items()}),
+                            "key": None})
+
+    word_field("default_notifications", _NOTIFY_LEVELS, g.default_notifications,
+               "Default notifications")
+    word_field("verification_level", _VERIFY_LEVELS, g.verification_level,
+               "Verification level")
+    word_field("explicit_content_filter", _CONTENT_FILTERS, g.explicit_content_filter,
+               "Explicit-content filter")
+    channel_field("rules_channel_id", "rules_channel", discord.ChannelType.text,
+                  "a rules channel", "Rules channel", community=True)
+    channel_field("public_updates_channel_id", "public_updates_channel",
+                  discord.ChannelType.text, "a public-updates channel",
+                  "Public-updates channel", community=True)
+    return changes, already
+
+
+_SETTINGS_PARAMS = ("afk_channel_id", "afk_timeout", "system_channel_id", "system_flags",
+                    "default_notifications", "verification_level",
+                    "explicit_content_filter", "rules_channel_id",
+                    "public_updates_channel_id")
+
+
+@action("edit_server_settings", identity.MANAGE,
+        "Change a server's settings (Server Settings > Overview and Moderation): the "
+        "AFK channel and timeout, the system channel and its toggles, the default "
+        "notifications, the verification level, the explicit-content filter, and "
+        "(Community servers only) the rules and public-updates channels. Only the "
+        "fields named change; guild_info's `settings` block shows what they are now. "
+        "The preview shows every change old -> new; the old values are saved first "
+        "so it can be put back, and the result is what Discord reads afterwards. "
+        "Refused before anything changes if a value is unknown, a channel is the "
+        "wrong kind or from another server, or nothing would change. Always "
+        "previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "afk_channel_id": {"type": "str", "desc": "A voice channel, or none to clear "
+                                                   "it"},
+         "afk_timeout": {"type": "str", "desc": "1m | 5m | 15m | 30m | 1h (or 60, 300, "
+                                                "900, 1800, 3600 seconds) - Discord "
+                                                "offers no other"},
+         "system_channel_id": {"type": "str", "desc": "The text channel for system "
+                                                      "messages, or none to turn them "
+                                                      "off"},
+         "system_flags": {"type": "flags",
+                          "desc": "System-channel toggles to change, name -> true/false; "
+                                  "only the named ones change: join_notifications, "
+                                  "boost_notifications, setup_tips, join_sticker_replies, "
+                                  "role_subscription_notifications, "
+                                  "role_subscription_sticker_replies, "
+                                  "emoji_added_notifications"},
+         "default_notifications": {"type": "str", "desc": "all_messages | only_mentions"},
+         "verification_level": {"type": "str", "desc": "none | low | medium | high | "
+                                                       "highest"},
+         "explicit_content_filter": {"type": "str", "desc": "disabled | no_role | "
+                                                            "all_members"},
+         "rules_channel_id": {"type": "str", "desc": "Community servers only: the rules "
+                                                     "text channel"},
+         "public_updates_channel_id": {"type": "str", "desc": "Community servers only: "
+                                                              "the text channel Discord "
+                                                              "sends moderator notices to"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_server_settings(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(
+            f"this bot lacks Manage Server in {g.name}, so it can't change the server's "
+            "settings - give its role Manage Server (or Administrator) first.")
+    if not any(p.get(k) is not None and p.get(k) != {} for k in _SETTINGS_PARAMS):
+        raise ActionError("nothing to change - pass afk_channel_id, afk_timeout, "
+                          "system_channel_id, system_flags, default_notifications, "
+                          "verification_level, explicit_content_filter, "
+                          "rules_channel_id or public_updates_channel_id.")
+    changes, already = _settings_plan(ctx, g, p)
+    shown = [c for c in changes if c.get("label")]
+    if not shown:
+        raise ActionError(f"nothing would change - {g.name} already has "
+                          f"{', '.join(already)}.")
+    params_changed = sorted({c["restore"][0] for c in changes if c.get("restore")})
+
+    if ctx.dry_run:
+        lines = [f"{c['label']}: {c['old']} -> {c['new']}" for c in shown]
+        if already:
+            lines.append("Already that way, left alone: " + ", ".join(already) + ".")
+        lines.append("Nothing else changes.")
+        new_system = next((c["want"] for c in changes if c.get("key") == "system_channel"),
+                          _settings_ids(g)["system_channel"])
+        if any(isinstance(c.get("key"), tuple) for c in changes) and not new_system:
+            lines.append("There's no system channel, so the toggles have nowhere to post "
+                         "until one is set.")
+        rank = {name: i for i, name in enumerate(_VERIFY_LEVELS)}
+        for c in changes:
+            if c.get("key") == "verification_level" and \
+                    rank[c["want"]] > rank.get(g.verification_level.name, -1):
+                lines.append("Members who don't meet the new verification level can't "
+                             "send messages until they do.")
+            if c.get("key") == "default_notifications" and c["want"] == "all_messages":
+                lines.append("Members who never chose their own setting will be notified "
+                             "of every message.")
+        lines.append("The current values are saved first, so this can be put back.")
+        return {"summary": f"Change **{g.name}**'s settings: "
+                           + ", ".join(c["label"] for c in shown),
+                "detail": "\n".join(lines)}
+
+    restore = {}
+    for c in changes:
+        if c.get("restore"):
+            restore[c["restore"][0]] = c["restore"][1]
+    saved = _settings_keep(
+        ctx, g, "settings",
+        {"changed": params_changed,
+         "before": {c["label"]: c["old"] for c in shown},
+         # Feed this back to edit_server_settings (with guild_id) to undo.
+         "restore": restore,
+         "settings_before": _settings_block(g)},
+        "the current settings")
+    kw = {c["kw"]: c["value"] for c in changes if c.get("kw")}
+    after = await _settings_call(g.edit(reason=p.get("reason") or VIA, **kw),
+                                 "settings change", "guild_info")
+    # What Discord holds now - its answer to the edit - not what was asked for.
+    read = _settings_block(g, after)
+
+    def value_at(key):
+        v = read[key[0]][key[1]] if isinstance(key, tuple) else read[key]
+        return v["id"] if isinstance(v, dict) and "id" in v else v
+
+    now, off = {}, []
+    for c in shown:
+        got = value_at(c["key"])
+        label = c["key"][1] if isinstance(c["key"], tuple) else c["key"]
+        now[label] = got
+        if got != c["want"]:
+            off.append(f"{label} (it reads {got!r})")
+    out = {"status": "settings_changed", "guild": g.name, "changed": params_changed,
+           "now": now, "settings": read, "backup": saved}
+    if off:
+        out["warning"] = ("Discord accepted the change but doesn't read back what was "
+                          "asked for: " + "; ".join(off) + " - check guild_info.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
