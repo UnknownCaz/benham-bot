@@ -24,6 +24,7 @@ import asyncio
 import io
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone, timedelta
 
 import discord
@@ -2770,6 +2771,125 @@ async def _create_emoji(ctx, p):
                       "usage": str(e)},
             "roles": [r.name for r in roles],
             "slots_left": limit - used - 1}
+
+
+STICKER_MAX_BYTES = 512 * 1024
+STICKER_SIDE = 320
+# What one Unicode emoji is made of: symbols (So), skin-tone modifiers (Sk),
+# variation selectors and combining marks (Mn, Me - the keycap ring), and the
+# zero-width joiner and tag characters (Cf); keycaps add a digit, # or *.
+_EMOJI_CATEGORIES = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
+
+
+def _unicode_emoji(text):
+    """`text` if it is one Unicode emoji, else None.
+
+    Stricter than Discord on purpose. A sticker's related emoji goes into
+    Discord's free-text `tags` field, and `emoji` is a parameter the privacy
+    screen leaves alone as not-free-text - so this check is what keeps words
+    out of it: nothing but emoji characters, at most 16 of them."""
+    s = str(text or "").strip()
+    if not s or len(s) > 16:
+        return None
+    if not all(unicodedata.category(c) in _EMOJI_CATEGORIES or c in "0123456789#*"
+               for c in s):
+        return None
+    if not any(unicodedata.category(c) == "So" or c == "⃣" for c in s):
+        return None
+    return s
+
+
+def _is_apng(raw):
+    """An animated PNG carries an acTL chunk before its first IDAT."""
+    i = 8
+    while i + 8 <= len(raw):
+        length = int.from_bytes(raw[i:i + 4], "big")
+        tag = raw[i + 4:i + 8]
+        if tag == b"acTL":
+            return True
+        if tag in (b"IDAT", b"IEND"):
+            return False
+        i += 12 + length
+    return False
+
+
+@action("create_sticker", identity.MANAGE,
+        "Add a sticker to a server, from a picture: an attachment "
+        "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:x.png') or a public https "
+        "link. Discord wants a PNG or APNG of exactly 320x320 pixels, at most 512 KB, "
+        "a name of 2-30 characters and one related Unicode emoji; the description is "
+        "optional (2-100 characters). Refused before anything changes if a limit is "
+        "broken or the server has no free sticker slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "Sticker name, 2-30 characters"},
+         "emoji": {"type": "str", "required": True,
+                   "desc": "The related emoji Discord requires: one Unicode emoji"},
+         "image": {"type": "str", "required": True,
+                   "desc": "Picture source: attachment | attachment:N | asset:<file> | "
+                           "https://link (a 320x320 PNG or APNG)"},
+         "description": {"type": "str", "desc": "Optional, 2-100 characters"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_sticker(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "stickers")
+    name = str(p["name"]).strip()
+    if not 2 <= len(name) <= 30:
+        raise ActionError(f"a sticker name has to be 2 to 30 characters; that's "
+                          f"{len(name)}.")
+    desc = str(p.get("description") or "").strip()
+    if desc and not 2 <= len(desc) <= 100:
+        raise ActionError(f"a sticker description has to be 2 to 100 characters "
+                          f"(or none); that's {len(desc)}.")
+    emoji = _unicode_emoji(p["emoji"])
+    if emoji is None:
+        raise ActionError(f"a sticker's related emoji has to be one Unicode emoji "
+                          f"(from the emoji keyboard), and {p['emoji']!r} isn't one.")
+
+    pic = (await _look_pictures(ctx, p, ("image",)))["image"]
+    if pic.media != "image/png":
+        raise ActionError(f"a sticker has to be a PNG or APNG, and that picture is a "
+                          f"{_expr_kind(pic)}.")
+    if len(pic.raw) > STICKER_MAX_BYTES:
+        raise ActionError(
+            f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
+            f"at most {lookimage._limit_words(STICKER_MAX_BYTES)} for a sticker - "
+            "shrink it and ask again.")
+    if not pic.width:
+        raise ActionError(f"I couldn't read that PNG's size, and a sticker has to be "
+                          f"exactly {STICKER_SIDE}x{STICKER_SIDE}.")
+    if (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
+        raise ActionError(f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
+                          f"pixels, and that picture is {pic.width}x{pic.height}.")
+    used = len(g.stickers)
+    limit = g.sticker_limit
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free sticker slot ({used} of {limit} in use) - delete "
+            "one first, or boost the server for more.")
+    animated = _is_apng(pic.raw)
+
+    if ctx.dry_run:
+        kind = "APNG (animated)" if animated else "PNG"
+        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}",
+                 f"Related emoji: {emoji}",
+                 f"Description: {desc!r}" if desc else "No description.",
+                 f"Slots: {used} of {limit} stickers in use; "
+                 f"{limit - used - 1} left after this."]
+        return {"summary": f"Add sticker **{name}** to **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    s = await _expr_call(
+        g.create_sticker(name=name, description=desc, emoji=emoji,
+                         file=discord.File(io.BytesIO(pic.raw), filename="sticker.png"),
+                         reason=p.get("reason") or VIA),
+        "sticker", "it limits how fast a server's stickers can change.")
+    return {"status": "sticker_created", "guild": g.name,
+            "sticker": guild_sticker_dict(s), "slots_left": limit - used - 1}
 
 
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",

@@ -532,6 +532,97 @@ check("each sticker: id, name, description, related emoji, format, link",
 check("a Lottie one says so (it can't be downloaded)", result["stickers"][1]["format"],
       "lottie")
 
+# ============================================================== create_sticker
+section("create_sticker - registered like edit_server_look")
+registered("create_sticker", 2, True, True, True)
+WAVE = "\U0001F44B"
+STK = {"guild_id": GUILD, "name": "hello there", "emoji": WAVE, "image": "attachment",
+       **ATT}
+
+section("create_sticker - previewed first, nothing touched")
+cl, g = fresh([_Att(1, "hi.png", png(320, 320))], stickers=[_Sticker(1, "old")])
+result, preview = go(cl, "create_sticker", {**STK, "description": "says hi"})
+check("the first call is a preview, Discord never asked", (result, g.calls), (None, []))
+check("...names the sticker and the server",
+      "hello there" in preview["summary"] and "Testing Server" in preview["summary"], True)
+check("...type, dimensions, size, source, hash",
+      all(w in preview["detail"] for w in ("PNG, 320x320", "hi.png", "#")), True)
+check("...the related emoji and the description",
+      WAVE in preview["detail"] and "'says hi'" in preview["detail"], True)
+check("...and the slots (1 of 5 used -> 3 left)",
+      "1 of 5 stickers in use; 3 left" in preview["detail"], True)
+cl, g = fresh([_Att(1, "hi.png", png(320, 320, apng=True))])
+_, preview = go(cl, "create_sticker", STK)
+check("an animated PNG is named as one", "APNG (animated), 320x320" in preview["detail"],
+      True)
+
+section("create_sticker - confirmed: a File with the PNG's bytes")
+cl, g = fresh([_Att(1, "hi.png", png(320, 320))])
+result, _ = go(cl, "create_sticker", {**STK, "description": "says hi"}, force=True)
+kind, kw = g.calls[0]
+check("one create call, the bytes inside the File",
+      (len(g.calls), kind, kw["file_bytes"] == png(320, 320)), (1, "sticker", True))
+check("...name, description, emoji and reason",
+      (kw["name"], kw["description"], kw["emoji"], kw["reason"]),
+      ("hello there", "says hi", WAVE, capabilities.VIA))
+check("the result names it and the slots left",
+      (result["status"], result["sticker"]["name"], result["slots_left"]),
+      ("sticker_created", "hello there", 4))
+
+section("create_sticker - refused BEFORE anything changes")
+def sticker_refused(params, atts=None, force=True, **gkw):
+    cl, g = fresh(atts if atts is not None else [_Att(1, "p.png", png(320, 320))], **gkw)
+    msg = refusal(cl, "create_sticker", {**STK, **params}, force=force)
+    return msg, g.calls
+
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.png", png(512, 512))])
+check("not 320x320 -> says the size it got",
+      "exactly 320x320" in (msg or "") and "512x512" in (msg or "") and calls == [], True)
+msg, _ = sticker_refused({}, atts=[_Att(1, "p.png", png(512, 512))], force=False)
+check("...at the preview too", "512x512" in (msg or ""), True)
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.jpg", jpeg(320, 320))])
+check("a JPEG is refused by type", "PNG or APNG" in (msg or "") and "JPEG" in (msg or "")
+      and calls == [], True)
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.gif", gif(320, 320))])
+check("a GIF is refused by type", "PNG or APNG" in (msg or "") and calls == [], True)
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.png", png(320, 320, pad=600 * 1024))])
+check("over 512 KB -> the size and the cap", "512 KB" in (msg or "") and calls == [], True)
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.png", b"\x89PNG\r\n\x1a\n")])
+check("a PNG whose size can't be read is refused, not guessed",
+      "couldn't read that PNG's size" in (msg or "") and calls == [], True)
+msg, calls = sticker_refused({}, stickers=[_Sticker(i, f"s{i}") for i in range(5)])
+check("no free sticker slot -> says how many are used",
+      "no free sticker slot (5 of 5 in use)" in (msg or "") and calls == [], True)
+for bad in ("x", "y" * 31):
+    msg, calls = sticker_refused({"name": bad})
+    check(f"name of {len(bad)} characters refused", "2 to 30 characters" in (msg or "")
+          and calls == [], True)
+msg, calls = sticker_refused({"description": "y" * 101})
+check("a 101-character description refused", "2 to 100" in (msg or "") and calls == [],
+      True)
+for bad in ("smile", "my name", ":smile:", "<:wave:123456789012345678>", WAVE + " hi",
+            "名", ""):
+    msg, calls = sticker_refused({"emoji": bad})
+    check(f"related emoji {bad!a} refused (words can't ride in the tags field)",
+          msg is not None and calls == [], True)
+for good in ("\U0001F600", "❤️", "1️⃣", "\U0001F44D\U0001F3FD",
+             "\U0001F1FA\U0001F1F8"):
+    check(f"related emoji {good!a} accepted", capabilities._unicode_emoji(good), good)
+msg, calls = sticker_refused({}, create=False, manage=False)
+check("no Create Expressions permission -> says which",
+      "lacks Create Expressions" in (msg or "") and calls == [], True)
+
+section("create_sticker - Discord's own refusal is one sentence")
+cl, g = fresh([_Att(1, "p.png", png(320, 320))])
+g.raise_on_create = discord.HTTPException(
+    _Resp(400), {"code": 50045, "message": "Invalid Form Body",
+                 "errors": {"file": {"_errors": [{"code": "BINARY_TYPE_MAX_SIZE",
+                                                  "message": "File too large"}]}}})
+m = refusal(cl, "create_sticker", STK)
+check("a multi-line form error is flattened to one line ending 'Nothing was changed.'",
+      "\n" not in (m or "") and "File too large" in (m or "")
+      and (m or "").endswith("Nothing was changed."), True)
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
