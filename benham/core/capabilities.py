@@ -1180,15 +1180,14 @@ def _audit_perm_change(before, after):
 def _audit_flag_change(before, after):
     """Which toggles of a flags value (system-channel toggles and the like)
     flipped, in discord.py's own on/off reading of them."""
-    ref = after if after is not None else before
-    words = []
-    for name, _ in ref:
-        b = bool(getattr(before, name)) if before is not None else None
-        a = bool(getattr(after, name)) if after is not None else None
-        if b == a:
-            continue
-        words.append(f"{name} {'none' if b is None else 'on' if b else 'off'} -> "
-                     f"{'none' if a is None else 'on' if a else 'off'}")
+    if before is None or after is None:
+        # A create or a delete: only the toggles that were on say anything.
+        ref = after if after is not None else before
+        words = [f"{name} on" for name, on in ref if on]
+    else:
+        words = [f"{name} {'on' if getattr(before, name) else 'off'} -> "
+                 f"{'on' if on else 'off'}"
+                 for name, on in after if bool(getattr(before, name)) != bool(on)]
     return ", ".join(words[:6]) + (f" +{len(words) - 6} more" if len(words) > 6 else "")
 
 
@@ -1208,6 +1207,17 @@ def _audit_changes(entry):
             words = _audit_flag_change(b, a)
             if words:
                 lines.append(f"{attr}: {words}")
+            continue
+        if attr == "id":
+            continue        # a raw id is not for a person; extra says whose it is
+        if attr == "type" and entry.action.name.startswith("overwrite_"):
+            # discord.py reads an overwrite's type (0 role, 1 member) as a
+            # channel type, which would print "private" for a member.
+            wb, wa = ("none" if x is None else
+                      "member" if getattr(x, "value", x) in (1, "1") else "role"
+                      for x in (b, a))
+            if wb != wa:
+                lines.append(f"{attr}: {wb} -> {wa}")
             continue
         wb, wa = _audit_value(b), _audit_value(a)
         if wb is None or wa is None:
@@ -1264,6 +1274,12 @@ def _audit_extra(entry):
     ch = getattr(extra, "channel", None)
     if isinstance(ch, (discord.abc.GuildChannel, discord.Thread)):
         bits.append(f"in #{ch.name}")
+    # An overwrite entry's extra is whose overwrite it is.
+    if isinstance(extra, (discord.Member, discord.User)):
+        bits.append(f"for {extra.display_name}")
+    elif isinstance(extra, discord.Role) or (isinstance(extra, discord.Object)
+                                             and getattr(extra, "name", None)):
+        bits.append(f"for the role {extra.name}")
     return bits
 
 

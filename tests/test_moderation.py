@@ -560,6 +560,13 @@ http.audit = [
                  ("permission_overwrites", None, []), ("nsfw", None, False)]),
     audit_entry(WHEN + timedelta(minutes=3), 16, BOT, ASD),
     audit_entry(WHEN + timedelta(minutes=4), 33, BOT, MODS),
+    audit_entry(WHEN + timedelta(minutes=5), 13, BOT, BETA,
+                [("id", None, str(ALICE)), ("type", None, 1), ("allow", None, str(VIEW)),
+                 ("deny", None, "0")], options={"id": str(ALICE), "type": "1"}),
+    audit_entry(WHEN + timedelta(minutes=6), 15, BOT, BETA,
+                [("id", str(MODS), None), ("type", 0, None), ("allow", str(VIEW), None),
+                 ("deny", str(1 << 12), None)],
+                options={"id": str(MODS), "type": "0", "role_name": "Mods"}),
 ]
 res, _ = go(cl, "read_audit_log", {"guild_id": GUILD})
 by = {e["when"]["utc"]: e for e in res["entries"]}
@@ -588,6 +595,22 @@ check("an action type Discord doesn't document: kept, with a note in words",
 e = by["2026-10-30T23:34:00Z"]
 check("...on a role too", (e["what"], e["target"]["kind"], "note" in e),
       ("unknown_33", "role", True))
+e = by["2026-10-30T23:35:00Z"]
+check("a member's overwrite: whose by name, member not 'private', no raw id",
+      (e["what"], e["target"], e["changes"], e["extra"]),
+      ("overwrite_create", {"kind": "channel", "name": "#benham-beta"},
+       ["type: none -> member", "allow: +view_channel", "deny: unchanged"],
+       ["for Alice"]))
+e = by["2026-10-30T23:36:00Z"]
+check("a role's overwrite removed: the role by name, what it allowed and denied",
+      (e["what"], e["changes"], e["extra"]),
+      ("overwrite_delete", ["type: role -> none", "allow: -view_channel",
+                            "deny: -send_tts_messages"], ["for the role Mods"]))
+check("...and a create's flags say only what was on",
+      capabilities._audit_flag_change(None, discord.SystemChannelFlags._from_value(4)),
+      "join_notifications on, premium_subscriptions on, join_notification_replies on, "
+      "role_subscription_purchase_notifications on, "
+      "role_subscription_purchase_notification_replies on, emoji_added on")
 check("no person's id anywhere in an entry",
       any(str(x) in json.dumps(result["entries"]) for x in (ALICE, BOB, BOT, OWNER)),
       False)
