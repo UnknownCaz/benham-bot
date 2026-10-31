@@ -1116,6 +1116,233 @@ check("no Manage Server: one sentence, Discord never asked",
        "rules - give its role Manage Server (or Administrator) first.", []))
 
 
+# ========================================================= create_automod_rule
+section("create_automod_rule - tier 2, outward, always confirmed; the whole rule shown")
+registered("create_automod_rule", 2, True, True, True)
+LIVE_SHAPE = {"guild_id": GUILD, "name": "stage-d-test", "trigger": "keyword",
+              "keywords": ["stage-d-blocked-xyz"], "block_message": True,
+              "custom_message": "stage D test"}
+cl, g, http = fresh()
+result, preview = go(cl, "create_automod_rule", LIVE_SHAPE)
+check("the first call is a preview: Discord only read the rules",
+      (result, http.verbs()), (None, ["get_auto_moderation_rules"]))
+check("...the summary names the rule and the server",
+      preview["summary"], "Make the AutoMod rule **stage-d-test** in **Testing Server**")
+check("...and the whole rule as it will be made, the slot count, the way back",
+      preview["detail"].splitlines(),
+      ['Name: "stage-d-test"', "Trigger: keyword - messages with these words or patterns",
+       'Keywords: (1) "stage-d-blocked-xyz"', "Regex patterns: none", "Allow list: none",
+       'Actions: block the message, telling the sender "stage D test"',
+       "Exempt roles: none", "Exempt channels: none", "Enabled: yes",
+       "It acts on everyone's messages as soon as it's made, except the exempt roles "
+       "and channels.",
+       "That makes 1 of 6 keyword rule(s) Discord allows; delete_automod_rule removes it "
+       "again."])
+
+cl, g, http = fresh()
+result, _ = go(cl, "create_automod_rule", {**LIVE_SHAPE, "reason": "stage d"}, force=True)
+check("confirmed: rules read, the rule created, then fetched back",
+      http.verbs(), ["get_auto_moderation_rules", "create_auto_moderation_rule",
+                     "get_auto_moderation_rule"])
+sent = http.calls[1][1]
+check("...what went to Discord: name, message_send, keyword, the list, the action, on",
+      {k: sent[k] for k in ("name", "event_type", "trigger_type", "trigger_metadata",
+                            "actions", "enabled", "reason")},
+      {"name": "stage-d-test", "event_type": 1, "trigger_type": 1,
+       "trigger_metadata": {"keyword_filter": ["stage-d-blocked-xyz"],
+                            "regex_patterns": [], "allow_list": []},
+       "actions": [{"type": 1, "metadata": {"custom_message": "stage D test"}}],
+       "enabled": True, "reason": "stage d"})
+check("...no exempt lists sent when there are none",
+      ("exempt_roles" in sent, "exempt_channels" in sent), (False, False))
+check("...the result is the rule Discord reads back",
+      (result["status"], result["rule"]["name"], result["rule"]["keywords"],
+       result["rule"]["actions"], result["rule"]["creator"], "warning" in result),
+      ("automod_rule_created", "stage-d-test", ["stage-d-blocked-xyz"],
+       [{"type": "block_message", "custom_message": "stage D test"}], "benham", False))
+
+cl, g, http = fresh()
+go(cl, "create_automod_rule", {
+    "guild_id": GUILD, "name": "Everything", "trigger": "keyword",
+    "keywords": ["a", "b", "a"], "regex_patterns": ["x+"], "allow_list": ["ab"],
+    "custom_message": "no", "alert_channel_id": str(WELCOME), "timeout_seconds": 3600,
+    "exempt_role_ids": [MODS, str(MEMBERS)], "exempt_channel_ids": [BETA],
+    "enabled": False}, force=True)
+sent = http.calls[1][1]
+check("every field: the lists deduped, three actions in order, exempts, off",
+      {k: sent[k] for k in ("trigger_metadata", "actions", "exempt_roles",
+                            "exempt_channels", "enabled")},
+      {"trigger_metadata": {"keyword_filter": ["a", "b"], "regex_patterns": ["x+"],
+                            "allow_list": ["ab"]},
+       "actions": [{"type": 1, "metadata": {"custom_message": "no"}},
+                   {"type": 2, "metadata": {"channel_id": str(WELCOME)}},
+                   {"type": 3, "metadata": {"duration_seconds": 3600}}],
+       "exempt_roles": [str(MEMBERS), str(MODS)], "exempt_channels": [str(BETA)],
+       "enabled": False})
+for params, words in (
+        ({"trigger": "keyword_preset", "presets": ["Slurs", "profanity"],
+          "allow_list": ["darn"]},
+         {"trigger_type": 4, "trigger_metadata": {"presets": [1, 3],
+                                                  "allow_list": ["darn"]}}),
+        ({"trigger": "spam"}, {"trigger_type": 3}),
+        ({"trigger": "mention_spam", "mention_limit": 8, "timeout_seconds": 60},
+         {"trigger_type": 5, "trigger_metadata": {"mention_total_limit": 8,
+                                                  "mention_raid_protection_enabled":
+                                                      False}}),
+        ({"trigger": "member_profile", "keywords": ["spammer"]},
+         {"event_type": 2, "trigger_type": 6,
+          "actions": [{"type": 4, "metadata": {}}]})):
+    cl, g, http = fresh()
+    go(cl, "create_automod_rule", {"guild_id": GUILD, "name": "r", **params}, force=True)
+    sent = http.calls[1][1]
+    check(f"a {params['trigger']} rule goes to Discord as {sorted(words)}",
+          {k: sent.get(k) for k in words}, words)
+cl, g, http = fresh()
+_, preview = go(cl, "create_automod_rule", {"guild_id": GUILD, "name": "Names",
+                                            "trigger": "member_profile",
+                                            "keywords": ["spammer"]})
+check("a member_profile preview: profiles, and the block reads as interactions",
+      [l for l in preview["detail"].splitlines() if l.startswith(("Trigger", "Actions",
+                                                                  "It acts"))],
+      ["Trigger: member_profile - member names and profiles with these words or patterns",
+       "Actions: block the member from chatting, talking and other interactions until "
+       "their profile passes",
+       "It acts on everyone's profiles as soon as it's made, except the exempt roles and "
+       "channels."])
+
+section("create_automod_rule - refused at the preview (and at the confirm), nothing sent")
+cl, g, http = ruled()
+
+
+def am_refused(params, client=None):
+    out = []
+    for force in (False, True):
+        c, gg, h = (client or ruled())
+        m = refusal(c, "create_automod_rule", {"guild_id": GUILD, "name": "new rule",
+                                               **params}, force=force)
+        out.append((m, "create_auto_moderation_rule" in h.verbs()))
+    (m1, s1), (m2, s2) = out
+    return m1 if (m1 == m2 and not s1 and not s2) else ("MISMATCH", out)
+
+
+for params, want in (
+        ({"trigger": "regex"}, "trigger is one of keyword, keyword_preset, spam, "
+                               "mention_spam, member_profile, and 'regex' isn't one of "
+                               "those."),
+        ({"trigger": "keyword_preset", "presets": ["rude"]},
+         "presets: 'rude' isn't one of Discord's word lists - they are profanity, "
+         "sexual_content and slurs."),
+        ({"trigger": "spam", "keywords": ["x"]},
+         "keywords doesn't fit a spam rule - a spam rule uses Discord's own spam "
+         "detection and takes no list."),
+        ({"trigger": "mention_spam", "mention_limit": 5, "presets": ["slurs"]},
+         "presets doesn't fit a mention_spam rule - presets fits keyword_preset rules."),
+        ({"trigger": "keyword", "keywords": ["x"], "mention_limit": 5},
+         "mention_limit doesn't fit a keyword rule - mention_limit fits mention_spam "
+         "rules."),
+        ({"trigger": "keyword", "keywords": ["x"], "block_message": False},
+         "a rule with no action does nothing - turn block_message on, or give "
+         "alert_channel_id or timeout_seconds."),
+        ({"trigger": "keyword"}, "a keyword rule needs at least one keyword or regex "
+                                 "pattern to match."),
+        ({"trigger": "keyword_preset"}, "a keyword_preset rule needs at least one of "
+                                        "Discord's word lists: profanity, sexual_content "
+                                        "or slurs."),
+        ({"trigger": "mention_spam", "mention_limit": 51},
+         "a mention_spam rule needs mention_limit, 1 to 50 mentions per message."),
+        ({"trigger": "keyword", "keywords": ["x"], "timeout_seconds": 2419201},
+         "timeout_seconds has to be 1 to 2419200 (28 days), or 0 for no timeout."),
+        ({"trigger": "member_profile", "keywords": ["x"], "timeout_seconds": 60},
+         "a timeout only goes on keyword and mention_spam rules - Discord doesn't allow "
+         "one on a member_profile rule."),
+        ({"trigger": "member_profile", "keywords": ["x"], "custom_message": "hi"},
+         "custom_message is shown to someone whose message was blocked, and a "
+         "member_profile rule blocks members, not messages."),
+        ({"trigger": "keyword", "keywords": ["x"], "block_message": False,
+          "alert_channel_id": str(WELCOME), "custom_message": "hi"},
+         "custom_message needs block_message on - it's what the sender sees when their "
+         "message is blocked."),
+        ({"trigger": "keyword", "keywords": ["x"], "custom_message": "y" * 151},
+         "custom_message is 151 characters, and Discord allows 150."),
+        ({"trigger": "keyword", "keywords": ["x" * 61]},
+         'keywords: "' + "x" * 30 + '..." is 61 characters, and Discord allows 60 per '
+         "entry."),
+        ({"trigger": "keyword", "regex_patterns": [f"r{i}" for i in range(11)]},
+         "regex_patterns has 11 entries, and Discord allows 10 on one rule."),
+        ({"trigger": "keyword", "keywords": ["x"], "allow_list": [f"w{i}" for i in
+                                                                 range(101)]},
+         "allow_list has 101 entries, and Discord allows 100 on one rule."),
+        ({"trigger": "keyword", "keywords": [{"keyword": "x"}]},
+         'keywords is a list of plain words or phrases, like ["word", "two words"] - '
+         "{'keyword': 'x'} isn't one."),
+        ({"trigger": "keyword", "keywords": ["x"], "alert_channel_id": str(VOICE)},
+         "alert_channel_id: alerts post in a text channel, and #General is a voice "
+         "channel."),
+        ({"trigger": "keyword", "keywords": ["x"], "alert_channel_id": str(ELSEWHERE)},
+         f"alert_channel_id: channel {ELSEWHERE} belongs to another server, not Testing "
+         "Server."),
+        ({"trigger": "keyword", "keywords": ["x"], "exempt_role_ids": [999]},
+         "exempt_role_ids: there's no role 999 in Testing Server - list_roles has the "
+         "ids."),
+        ({"trigger": "keyword", "keywords": ["x"], "exempt_channel_ids": [999]},
+         "exempt_channel_ids: there's no channel 999 in Testing Server that this bot can "
+         "see."),
+        ({"trigger": "keyword", "keywords": ["Zebulon"]},
+         "keywords carries a personal term the privacy screen keeps on this machine, and "
+         "rewriting it would change what the rule matches - so it isn't sent. Nothing "
+         "was changed."),
+        ({"trigger": "keyword", "keywords": ["x"], "name": "no SLURS"},
+         'Testing Server already has an AutoMod rule named "no SLURS" - pick another '
+         "name."),
+        ({"trigger": "keyword_preset", "presets": ["slurs"]},
+         "Testing Server already has 1 of 1 keyword_preset rule(s) Discord allows - edit "
+         "or delete one first."),
+        ({"trigger": "mention_spam", "mention_limit": 5},
+         "Testing Server already has 1 of 1 mention_spam rule(s) Discord allows - edit "
+         "or delete one first.")):
+    m = am_refused(params)
+    check(f"{want[:60]}...", m, want)
+    check("...one sentence", one_sentence(m) if isinstance(m, str) else False, True)
+
+
+def six_keyword_rules():
+    cl, g, http = fresh()
+    http.rules = [am_rule(7100 + i, f"k{i}", 1, {"keyword_filter": ["x"],
+                                                 "regex_patterns": [], "allow_list": []},
+                          [{"type": 1, "metadata": {}}]) for i in range(6)]
+    return cl, g, http
+
+
+check("the seventh keyword rule: N of M said",
+      am_refused({"trigger": "keyword", "keywords": ["y"]}, six_keyword_rules()),
+      "Testing Server already has 6 of 6 keyword rule(s) Discord allows - edit or delete "
+      "one first.")
+cl, g, http = fresh(bot_perms=MANAGE_GUILD)
+check("a timeout without Timeout Members", refusal(cl, "create_automod_rule", {
+    "guild_id": GUILD, "name": "t", "trigger": "keyword", "keywords": ["x"],
+    "timeout_seconds": 60}),
+    "a timeout needs this bot to hold Timeout Members in Testing Server, and it doesn't.")
+cl, g, http = fresh(bot_perms=SEND)
+check("no Manage Server: one sentence, Discord never asked",
+      (refusal(cl, "create_automod_rule", LIVE_SHAPE), http.calls),
+      ("this bot lacks Manage Server in Testing Server, so it can't make AutoMod rules - "
+       "give its role Manage Server (or Administrator) first.", []))
+cl, g, http = fresh()
+http.fail["create_auto_moderation_rule"] = discord.HTTPException(_Resp(400),
+                                                                 "Invalid Form Body")
+check("Discord's own refusal is one sentence, Nothing was changed",
+      refusal(cl, "create_automod_rule", LIVE_SHAPE, force=True),
+      "Discord turned the AutoMod rule create down: Invalid Form Body. Nothing was "
+      "changed.")
+cl, g, http = fresh()
+http.fail["get_auto_moderation_rule"] = discord.HTTPException(_Resp(500), "boom")
+result, _ = go(cl, "create_automod_rule", LIVE_SHAPE, force=True)
+check("a read-back that fails after the create: Discord's answer shown, and said",
+      (result["rule"]["name"], result["warning"].startswith("Discord took it, but I "
+                                                            "couldn't read the rule back")),
+      ("stage-d-test", True))
+
+
 # ===================================================================== the end
 print()
 if _fails:
