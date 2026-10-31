@@ -1541,6 +1541,75 @@ async def _deliver_unprompted(ctx, p):
             "message_id": sent.id, "silent": notify.is_silent("curious")}
 
 
+# --- a server's settings, as one block (INTENT 60, Stage 8 C) ---------------
+#
+# guild_info's `settings` and edit_server_settings's OLD -> NEW lines are built
+# from this one table, so the read Caz takes before an edit and the preview of
+# the edit can never spell a field two ways.
+#
+# The system-channel toggles: the name a person reads, then the attribute of
+# discord.py 2.7.1's SystemChannelFlags. Discord stores these as "suppress"
+# bits; discord.py inverts them, so True means the toggle is ON the way the
+# Server Settings screen shows it. test_settings.py pins this table against
+# SystemChannelFlags.VALID_FLAGS, so a toggle discord.py learns later fails the
+# suite instead of going missing from the read.
+_SYSTEM_FLAGS = (
+    ("join_notifications", "join_notifications"),
+    ("boost_notifications", "premium_subscriptions"),
+    ("setup_tips", "guild_reminder_notifications"),
+    ("join_sticker_replies", "join_notification_replies"),
+    ("role_subscription_notifications", "role_subscription_purchase_notifications"),
+    ("role_subscription_sticker_replies",
+     "role_subscription_purchase_notification_replies"),
+    ("emoji_added_notifications", "emoji_added"),
+)
+_SETTINGS_CHANNELS = ("afk_channel", "system_channel", "rules_channel",
+                      "public_updates_channel")
+
+
+def _guild_channel_ref(g, cid):
+    """{name, id} of one of g's channels, or None when the setting is empty.
+    A name of None means Discord holds an id this bot can't see as a channel."""
+    if not cid:
+        return None
+    ch = g.get_channel(int(cid))
+    return {"name": getattr(ch, "name", None), "id": int(cid)}
+
+
+def _settings_ids(src):
+    """The settings channels' ids as `src` holds them, {field: id or None}.
+
+    Read off the id fields, not the properties, on purpose: the Guild that
+    Guild.edit returns in discord.py 2.7.1 is built from Discord's PATCH answer
+    alone, carries no channel cache, and so answers None from every channel
+    property even when a channel is set. The ids are what Discord said."""
+    return {key: getattr(src, f"_{key}_id", None) for key in _SETTINGS_CHANNELS}
+
+
+def _settings_block(g, src=None):
+    """A server's settings as plain data. `src` is the guild object to read
+    (default `g`, the cached one); channel names always come from `g`."""
+    src = g if src is None else src
+    ids = _settings_ids(src)
+    flags = src.system_channel_flags
+    feats = sorted(getattr(src, "features", None) or ())
+    return {
+        "afk_channel": _guild_channel_ref(g, ids["afk_channel"]),
+        "afk_timeout": src.afk_timeout,
+        "system_channel": _guild_channel_ref(g, ids["system_channel"]),
+        "system_flags": {name: bool(getattr(flags, attr)) for name, attr in _SYSTEM_FLAGS},
+        "default_notifications": src.default_notifications.name,
+        "verification_level": src.verification_level.name,
+        "explicit_content_filter": src.explicit_content_filter.name,
+        "rules_channel": _guild_channel_ref(g, ids["rules_channel"]),
+        "public_updates_channel": _guild_channel_ref(g, ids["public_updates_channel"]),
+        "premium_tier": src.premium_tier,
+        "boost_count": src.premium_subscription_count,
+        "community": "COMMUNITY" in feats,
+        "features": feats,
+    }
+
+
 @action("guild_info", identity.READ, "Overview of one server.",
         {"guild_id": {"type": "int", "required": True}},
         taints=True)
@@ -1555,6 +1624,9 @@ async def _guild_info(ctx, p):
         "benham_top_role": g.me.top_role.name,
         "benham_can": sorted(n for n, v in perms if v),
         "destructive_allowed": identity.destructive_allowed(g.id),
+        # The read Caz takes before and after edit_server_settings: every
+        # field it can change, plus the boost and Community facts that gate them.
+        "settings": _settings_block(g),
     }
 
 
