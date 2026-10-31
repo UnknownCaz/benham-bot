@@ -408,7 +408,7 @@ try:
         port = site._server.sockets[0].getsockname()[1]
         base = f"http://127.0.0.1:{port}"
 
-        async def vetted(_url):
+        async def vetted(_url, *_how):
             return None
         real_vet = lookimage._vet_host
         lookimage._vet_host = vetted
