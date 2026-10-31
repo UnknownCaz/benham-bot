@@ -1029,6 +1029,66 @@ scaffolding:
 
 ---
 
+### Stage 8 — Admin parity in the friends server (2026-10-30)
+
+**Goal, his words (2026-10-30, the friends-server tooling session):** *"Anything and everyhting an
+admin can do through the UI, I should be able to do through asking Benham and prompts."* Set in
+stone 2026-10-30 21:41 local on the plan as shown in chat (decision 60). Orders come from his DM or
+a session over the CLI (decision 59: `agent_guilds` unchanged, the 10-05 "Not yet" stands).
+Measured before the plan: Benham holds Administrator in that guild; the 68 registered verbs already
+cover most of Discord's admin screens; the holes below were read off those screens against the
+registry. He picked all four groups.
+
+Four stages, one Opus hand each, in order, each landing clean before the next starts:
+
+- **A. Expressions** - `create_emoji`, `create_sticker`, `delete_sticker`, `list_stickers`, and the
+  soundboard: `create_sound`, `delete_sound`, `list_sounds`. *Why:* he can only list and delete
+  emoji today; the `create_expressions` / `manage_expressions` permission is already held. Pictures
+  come through `core/lookimage.py`'s one grammar (attachment | attachment:N | asset:<file> | public
+  https) with the same fences (decision 52); a sound gets a sibling fetcher with the same vetting and
+  its type read from the bytes. Creates are tier 2, `outward` + `always_confirm`, like
+  `edit_server_look` - everyone sees them and a picture or a sound cannot be previewed in full.
+  Deletes are tier 3 like `delete_emoji`. Lists are READ and taint (names and descriptions are other
+  people's text).
+- **B. Events** - `list_events`, `create_event`, `edit_event`, `start_event`, `cancel_event`. *Why:*
+  game nights; nothing exists. Create, edit and start are tier 2 `outward` + `always_confirm` (a
+  scheduled event notifies the whole server); cancel is tier 3.
+- **C. Settings and ordering** - `edit_server_settings` (AFK channel and timeout, system channel and
+  its toggles, default notifications, verification level, explicit-content filter, rules and
+  public-updates channels), `move_channel` (position and category), `move_role` (position). *Why:*
+  today he edits name, icon, banner, splash, description and topic only. All tier 2 `outward` +
+  `always_confirm`; a settings change records what it replaces and reports it (decision 52's "exact
+  inverse is made true"). `move_role` never moves a role above the bot's own top role, and says so.
+- **D. Moderation set** - `read_audit_log`, `list_bans`, `list_invites`, `revoke_invite`,
+  `prune_members`, per-member channel overwrites (`set_channel_permissions` gains `user_id`; `role_id`
+  stays), AutoMod: `list_automod_rules`, `create_automod_rule`, `edit_automod_rule`,
+  `delete_automod_rule`. *Why:* his pick. Reads are READ and taint. `revoke_invite` is tier 2 (an
+  invite is re-creatable); `prune_members` and `delete_automod_rule` are tier 3. Per-member overwrites
+  keep Stage 7's trap rule: apply allows first, verify the returned overwrite, only then any deny.
+
+Rules every stage keeps, all already law:
+
+- One behaviour per commit on a branch, merged to master with a "Merge:" line naming decision 60.
+  A green fix deploys itself (decision 26): suite green on the PC and the Mac, `git pull` on the Mac,
+  `restart`, boot banner read (`Capabilities registered: N`, zero tracebacks). A deploy is not done
+  until the banner is.
+- Every new verb lands in `tests/registry_fingerprint.json` by a reviewed `--update` (the diff is the
+  security review and goes in the hand's report), in `test_policy.py`'s expected sets, and in the docs
+  (`gen_readme`, `gen_manual`, both checked by the suite). A verb that takes a picture or a file gets
+  an offline test in the shape of `test_look.py`.
+- Live tests in the Testing Server only (guild 736988645562646619); destructive twins through the
+  real two-step (preview, then `confirm_token=`), and the hand cleans up what it made. Nothing is
+  posted anywhere else; the friends server is touched only by Caz, from his DM, after a stage ships.
+- Tier 3 keeps the three gates (allowlist, dry-run, Approve tap or the 6-hex token - decision 37).
+  The privacy screen (55) and the Caz-name rule (58) cover every new model-facing string. No policy
+  rule is loosened; `faces.codex.capabilities` is not widened; CLI words (decision 38) do not change.
+- Each stage ends with a human test for Caz on the Benham board: one action, one observation, from
+  his phone.
+- Done = the four stages live, the registry near 90, his four tests passed. Use is measured
+  afterwards by §2's method; whether an unused verb is cut is his call, never assumed.
+
+---
+
 ## 5. Decisions — settled, do not re-litigate
 
 All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 29 and 30 are the exception in a second sense: 30 is a decision Claude made about what Claude may do, and Tyler ratified it by asking for it in writing.
@@ -1093,6 +1153,8 @@ All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 
 | 56 | **A bot guest's thread is its parent channel** (2026-10-19, issue 9, Caz's yes relayed by the hub; amends 53). A THREAD counts as its parent channel. Hermes answers inside a thread under the message that pinged it, a thread is its own channel id to Discord, so the list never matched and Caz was asked about his own bot. `policy.may_answer_bot_guest(..., parent_id=)` allows a thread whose parent is listed (only `discord.Thread` carries `parent_id`), and the cap counts per parent, so a new thread never buys a fresh hour |
 | 57 | **Who a two-bot message is for** (2026-10-20, Caz, set in stone in the hub's chat after #kestra on 10-19, where *"<@Hermes> Say hi to <@Benham> pls."* got an answer from both bots; his yes to this row in the skiff's chat; tracker issue 18). **A:** the first inline mention is the addressee. If a bot listed in bot_guests is named before Benham, Benham is its subject and says nothing until that bot @'s it. **B:** every Benham reply to a bot @'s it back. When Caz names Benham first and a listed bot after, Benham's reply opens by @'ing that bot. **C:** a bot message with no inline @ of Benham ends the exchange, and a Discord reply-ping alone counts as a close. Benham says nothing back. The caps (Benham 10/hour, Hermes 20 per 5 min) stay as the loop guard. Only listed bots count: a person named first is ordinary group chat (decisions 49/50). A listed bot in its own channel or thread never makes Benham DM Caz; when in doubt it's silence plus a log line. People in #kestra still get decision 50's ask. Known gap, stated to Caz: Benham itself never closes - every reply passes the turn, so an exchange ends when Hermes closes or the cap runs out. `policy.may_answer_addressee`, `bot_guest_turn_open`, `turn_pass_to`; `tests/test_bot_guests.py` |
 | 58 | **His name is Caz - Benham never uses his legal name** (2026-10-20, Caz in the skiff's chat after the #kestra test, where Benham tried to tell Hermes his legal name and the privacy screen turned the line into "I go by the owner, Caz goes by Caz": *"just dont have it name me legally EVER, simply occlude that as an important fact my name is Caz."*). Every string the model reads or Discord shows - persona.md, the system prompt and hard rules in agent.py, tool descriptions, policy reasons, the friend and bot-guest notes, notify kinds, the owner-only slash refusal - says Caz, and persona.md states it as a fact: his name is Caz, the only name used for him, with everyone. Rooms now record his lines as `caz` (older lines keep their old author tag). Not changed: comments and docstrings (no model reads them), and the PC CLI's printed words, which are a pinned contract read by sessions (decision 38). The privacy screen (55) stays as the net under this. |
+| 59 | **Tier 3 opens in the friends server; admin there runs from his DM** (2026-10-30 21:26 local, Caz, in a friends-server tooling session. His words: *"Heyo can we do some work on Benham? I want to grant him some tooling for the friends server."* and, asked what the server should get out of it, *"Anything and everyhting an admin can do through the UI, I should be able to do through asking Benham and prompts."*; then two card picks, "Yes, open tier 3 there" and "DM only for now"). Measured first: Benham has held Administrator in that guild since 2026-07-25, tier 2 was already reachable there from his DM, and only the eight tier-3 verbs refused. `faces.benham.destructive_guilds` gains the friends guild (Mac `config/control.json`, backup `control.json.bak-2026-10-30-2124` beside it; restart 01:25:20Z, pid 52136; banner "Destructive actions allowed in guilds: [2]"; `guild_info` reads `destructive_allowed: true` there, Testing unchanged, RadioTower and NBN still walled; the PC's `config/control.json` copy now mirrors the Mac's). What this amends: the 2026-07-26 posture that the friends server is "structurally safe, not safe-because-Claude-was-careful" - for this one guild the guard is now the three gates (allowlist passed, mandatory dry-run, Approve tap or the 6-hex token on a typed yes; decision 37), not the wall. Not changed: `agent_guilds` (his @ there still does nothing - decision 49's "Not yet" of 10-05 stands; orders come from his DM or a session over the CLI), `post_guilds`, the guest lane. The parity build scoped the same night (expressions, events, settings and ordering, moderation) is NOT set in stone and gets its own row when he says so. |
+| 60 | **Admin parity in the friends server - four stages, set in stone** (2026-10-30 21:41 local, Caz: *"Set in stone"* on the plan as shown in chat, after picking all four groups on the scoping card). The plan is Stage 8, verbatim: A expressions (emoji, sticker and soundboard uploads, lists, tier-3 deletes), B events, C settings and ordering, D the moderation set - about 22 verbs, 68 to about 90, one Opus hand per stage, in order, Testing-only live tests, decision 26 deploys, a human test for him per stage. Goal line, his words: *"Anything and everyhting an admin can do through the UI, I should be able to do through asking Benham and prompts."* What this does not change: decision 59's DM-only route, the three tier-3 gates, the privacy screen, the Caz-name rule, Codex's grant table, the CLI words. Opinion recorded as the session's, not his: build in Benham rather than Hermes because the gates, tests and the admin role already live here; Hermes reaches the same verbs later through a skill over `benham.py do`. |
 
 ### Baseline — clean as of 2026-08-16
 
