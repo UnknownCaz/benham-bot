@@ -1300,6 +1300,81 @@ async def _list_bans(ctx, p):
     return out
 
 
+def _invite_expires(inv):
+    """When an invite runs out, or None for never. Discord's list gives the age
+    limit and the creation time; expires_at is only on a single fetch."""
+    if not inv.max_age:
+        return None
+    if inv.expires_at is not None:
+        return inv.expires_at
+    if inv.created_at is not None:
+        return inv.created_at + timedelta(seconds=inv.max_age)
+    return None
+
+
+def invite_dict(inv, vanity=False):
+    """One invite as the Invites screen shows it - the inviter by name, no ids of
+    people. max_uses 0 means unlimited; expires "never" means no age limit."""
+    ch = inv.channel
+    exp = _invite_expires(inv)
+    return {"code": inv.code, "url": inv.url,
+            "channel": f"#{ch.name}" if getattr(ch, "name", None) else None,
+            "channel_id": getattr(ch, "id", None),
+            "inviter": inv.inviter.display_name if inv.inviter is not None else None,
+            "uses": inv.uses or 0, "max_uses": inv.max_uses or 0,
+            "expires": eventtime.both(exp) if exp is not None else "never",
+            "temporary": bool(inv.temporary),
+            "created": eventtime.both(inv.created_at), "vanity": vanity}
+
+
+def _invites_can(g, what):
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(f"this bot lacks Manage Server in {g.name}, so it can't {what} "
+                          "- give its role Manage Server (or Administrator) first.")
+
+
+async def _invites_fetch(g):
+    return await asyncio.wait_for(g.invites(), LOOK_TIMEOUT)
+
+
+@action("list_invites", identity.READ,
+        "A server's active invites (Server Settings > Invites): code and link, channel, "
+        "who made it, uses / max_uses (0 = unlimited), when it expires (Caz's local "
+        "time, America/Detroit, and UTC - or never), whether it grants temporary "
+        "membership, and when it was made; plus the vanity link if the server has one.",
+        {"guild_id": {"type": "int", "required": True},
+         "channel_id": {"type": "int", "desc": "Only invites to this channel"}},
+        needs_guild=True, taints=True)
+async def _list_invites(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _invites_can(g, "read its invites")
+    only = None
+    if p.get("channel_id"):
+        only = g.get_channel(int(p["channel_id"]))
+        if only is None:
+            raise ActionError(f"channel_id: there's no channel {p['channel_id']} in "
+                              f"{g.name} that this bot can see.")
+    invites = [i for i in await _invites_fetch(g)
+               if only is None or getattr(i.channel, "id", None) == only.id]
+    invites.sort(key=lambda i: (i.created_at or datetime.min.replace(tzinfo=timezone.utc)),
+                 reverse=True)
+    rows = [invite_dict(i) for i in invites]
+    if "VANITY_URL" in (getattr(g, "features", None) or ()):
+        try:
+            v = await asyncio.wait_for(g.vanity_invite(), LOOK_TIMEOUT)
+        except Exception:  # noqa: BLE001 - no vanity link (or none readable) is quiet
+            v = None
+        if v is not None and (only is None or getattr(v.channel, "id", None) == only.id):
+            rows.insert(0, invite_dict(v, vanity=True))
+    out = {"guild": g.name, "count": len(rows), "invites": rows}
+    if only is not None:
+        out["channel"] = f"#{only.name}"
+    if not rows:
+        out["message"] = (f"No active invites in {g.name}"
+                          + (f" to #{only.name}." if only is not None else "."))
+    return out
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "

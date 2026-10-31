@@ -599,6 +599,19 @@
     "taints": true,
     "tier": 0
   },
+  "list_invites": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_members": {
     "always_confirm": false,
     "blocked_when_tainted": false,

@@ -621,6 +621,82 @@ check("no Ban Members: one sentence, Discord never asked",
        "give its role Ban Members (or Administrator) first.", []))
 
 
+# ================================================================ list_invites
+section("list_invites - every active invite, both clocks, the vanity link")
+registered("list_invites", 0, False, False, True)
+
+
+def invite(code, cid, cname, inviter=ALICE, uses=1, max_uses=5, max_age=600,
+           temporary=False, created=WHEN):
+    d = {"code": code, "channel": {"id": str(cid), "name": cname, "type": 0},
+         "guild": {"id": str(GUILD), "name": "Testing Server"},
+         "uses": uses, "max_uses": max_uses, "max_age": max_age,
+         "temporary": temporary, "created_at": created.isoformat()}
+    if inviter is not None:
+        d["inviter"] = copy.deepcopy(PEOPLE[inviter]["user"]) if inviter in PEOPLE \
+            else user(inviter, "benham", bot=True)
+    return d
+
+
+def invited(**gkw):
+    cl, g, http = fresh(**gkw)
+    http.invites = [invite("aB3dE9f", ASD, "asd"),
+                    invite("forever1", WELCOME, "welcome", inviter=BOT, uses=12,
+                           max_uses=0, max_age=0, temporary=True,
+                           created=WHEN + timedelta(hours=1))]
+    return cl, g, http
+
+
+cl, g, http = invited()
+result, preview = go(cl, "list_invites", {"guild_id": GUILD})
+check("a read: no preview, nothing written, one list call (no vanity feature)",
+      (preview, http.writes(), http.verbs()), (None, [], ["invites_from"]))
+check("newest first, both counted", ([i["code"] for i in result["invites"]],
+                                     result["count"]), (["forever1", "aB3dE9f"], 2))
+check("an invite: code, link, channel, inviter, uses, expiry and creation on both "
+      "clocks, temporary", result["invites"][1],
+      {"code": "aB3dE9f", "url": "https://discord.gg/aB3dE9f", "channel": "#asd",
+       "channel_id": ASD, "inviter": "Alice", "uses": 1, "max_uses": 5,
+       "expires": {"local": "Fri 2026-10-30 19:40 EDT", "utc": "2026-10-30T23:40:00Z"},
+       "temporary": False,
+       "created": {"local": "Fri 2026-10-30 19:30 EDT", "utc": "2026-10-30T23:30:00Z"},
+       "vanity": False})
+check("no age limit reads 'never', unlimited uses is 0, temporary membership true",
+      {k: result["invites"][0][k] for k in ("expires", "max_uses", "temporary",
+                                             "inviter")},
+      {"expires": "never", "max_uses": 0, "temporary": True, "inviter": "benham"})
+result, _ = go(cl, "list_invites", {"guild_id": GUILD, "channel_id": WELCOME})
+check("a channel filter", ([i["code"] for i in result["invites"]], result["channel"]),
+      (["forever1"], "#welcome"))
+check("a channel from another server is refused",
+      refusal(cl, "list_invites", {"guild_id": GUILD, "channel_id": ELSEWHERE}),
+      f"channel_id: there's no channel {ELSEWHERE} in Testing Server that this bot can "
+      "see.")
+cl, g, http = invited(features=("VANITY_URL",))
+http.vanity = "testing"
+result, _ = go(cl, "list_invites", {"guild_id": GUILD})
+check("a server with a vanity link: it comes first, marked",
+      (result["invites"][0]["code"], result["invites"][0]["vanity"],
+       result["invites"][0]["channel"], result["count"]), ("testing", True, "#welcome", 3))
+cl, g, http = invited(features=("VANITY_URL",))
+http.vanity = None
+result, _ = go(cl, "list_invites", {"guild_id": GUILD})
+check("...the feature but no code set: quietly none", result["count"], 2)
+cl, g, http = invited(features=("VANITY_URL",))
+http.fail["get_vanity_code"] = discord.HTTPException(_Resp(400), "nope")
+result, _ = go(cl, "list_invites", {"guild_id": GUILD})
+check("...and a vanity read Discord refuses is quiet too", result["count"], 2)
+cl, g, http = fresh()
+result, _ = go(cl, "list_invites", {"guild_id": GUILD})
+check("no invites is said plainly", (result["count"], result["message"]),
+      (0, "No active invites in Testing Server."))
+cl, g, http = fresh(bot_perms=SEND)
+check("no Manage Server: one sentence, Discord never asked",
+      (refusal(cl, "list_invites", {"guild_id": GUILD}), http.calls),
+      ("this bot lacks Manage Server in Testing Server, so it can't read its invites - "
+       "give its role Manage Server (or Administrator) first.", []))
+
+
 # ===================================================================== the end
 print()
 if _fails:
