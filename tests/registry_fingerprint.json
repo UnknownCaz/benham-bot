@@ -547,6 +547,19 @@
     "taints": false,
     "tier": 0
   },
+  "list_sounds": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_stickers": {
     "always_confirm": false,
     "blocked_when_tainted": false,

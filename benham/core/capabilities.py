@@ -962,6 +962,40 @@ async def _list_stickers(ctx, p):
             "stickers": [guild_sticker_dict(s) for s in stickers]}
 
 
+# Discord's soundboard slots by Boost Level. discord.py 2.7.1 has emoji_limit and
+# sticker_limit but no soundboard limit, so these are Discord's published numbers.
+# Level 2 is 36 although one Discord help page says 35: a number too HIGH costs one
+# Discord refusal at the confirmed call, a number too LOW would refuse a sound that
+# fits - so the higher one wins.
+_SOUND_SLOTS = {0: 8, 1: 24, 2: 36, 3: 48}
+
+
+def _sound_slots(g):
+    return _SOUND_SLOTS.get(getattr(g, "premium_tier", 0) or 0, 8)
+
+
+def sound_dict(s):
+    """One soundboard sound as metadata - not its bytes, and not who uploaded it."""
+    return {"id": s.id, "name": s.name, "volume": s.volume,
+            "emoji": str(s.emoji) if s.emoji else None,
+            "available": bool(getattr(s, "available", True)), "url": s.url}
+
+
+@action("list_sounds", identity.READ,
+        "A server's own soundboard sounds: id, name, volume (0-1), emoji and link, "
+        "plus how many sound slots it has.",
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
+async def _list_sounds(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    # Fetched, not read from guild.soundboard_sounds: that cache is only as good
+    # as the gateway events that fed it, and the slot count decides whether an
+    # upload is refused - one API call buys the number as it is right now.
+    sounds = await g.fetch_soundboard_sounds()
+    return {"guild": g.name, "count": len(sounds), "limit": _sound_slots(g),
+            "sounds": [sound_dict(s) for s in sounds]}
+
+
 @action("what_i_did", identity.READ,
         "Your OWN action record - what you actually did, read from the log the bot "
         "writes on every capability run. Use this whenever you are asked what you "

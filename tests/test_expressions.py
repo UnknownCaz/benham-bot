@@ -843,6 +843,23 @@ check("a server that says audio/mpeg but sends a PNG is refused by the bytes",
 check("every hop went through the fence (5 fetches, one redirect = 6 vets)",
       got["vetted_hops"], 6)
 
+# ================================================================= list_sounds
+section("list_sounds - a read that taints")
+registered("list_sounds", 0, False, False, True)
+cl, g = fresh(sounds=[_Sound(31, "airhorn", volume=0.5, emoji="\U0001F4EF"),
+                      _Sound(32, "boop")], tier=1)
+result, preview = go(cl, "list_sounds", {"guild_id": GUILD})
+check("no preview for a read", preview, None)
+check("count, and the slots for Boost Level 1 (24)", (result["count"], result["limit"]),
+      (2, 24))
+check("each sound: id, name, volume, emoji, link - and not who uploaded it",
+      result["sounds"][0], {"id": 31, "name": "airhorn", "volume": 0.5,
+                            "emoji": "\U0001F4EF", "available": True,
+                            "url": "https://cdn.discordapp.com/soundboard-sounds/31"})
+check("no emoji is None", result["sounds"][1]["emoji"], None)
+check("the slot table: 8 / 24 / 36 / 48 by Boost Level",
+      [capabilities._sound_slots(_Guild(tier=t)) for t in (0, 1, 2, 3)], [8, 24, 36, 48])
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
