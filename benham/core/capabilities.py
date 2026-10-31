@@ -5554,6 +5554,81 @@ async def _cancel_event(ctx, p):
             "copy_saved": saved}
 
 
+# Discord counts a prune's inactivity in whole days, 1 to 30 (its Prune screen
+# and the API's GET/POST /guilds/{id}/prune both).
+PRUNE_DAYS = (1, 30)
+
+
+def _prune_roles(g, raw):
+    roles = []
+    for item in raw or []:
+        try:
+            rid = int(item)
+        except (TypeError, ValueError):
+            raise ActionError(f"include_role_ids takes role ids - {item!r} isn't one "
+                              "(list_roles has them).")
+        r = g.get_role(rid)
+        if r is None:
+            raise ActionError(f"include_role_ids: there's no role {rid} in {g.name} - "
+                              "list_roles has the ids.")
+        if r.is_default():
+            raise ActionError("include_role_ids: @everyone isn't needed - members with "
+                              "no roles are always counted.")
+        if r not in roles:
+            roles.append(r)
+    return roles
+
+
+@action("prune_members", identity.DESTRUCTIVE,
+        "Prune a server (Server Settings > Members > Prune): kick every member who has "
+        "no roles and hasn't been seen for `days` days (1-30, default 7). Members whose "
+        "only roles are in include_role_ids are counted too. The dry-run asks Discord "
+        "how many would go - Discord never says WHO. They can rejoin with an invite, "
+        "but the prune itself can't be undone.",
+        {"guild_id": {"type": "int", "required": True},
+         "days": {"type": "int", "desc": "Inactive for this many days, 1-30 (default 7)"},
+         "include_role_ids": {"type": "list",
+                              "desc": "Role ids whose holders are counted too, if those "
+                                      "are their only roles (default: none - members "
+                                      "with no roles only)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _prune_members(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    perms = g.me.guild_permissions
+    if not (perms.kick_members and perms.manage_guild):
+        raise ActionError(f"this bot needs both Kick Members and Manage Server in "
+                          f"{g.name} to prune it - give its role both (or "
+                          "Administrator) first.")
+    days = int(p["days"]) if p.get("days") is not None else 7
+    lo, hi = PRUNE_DAYS
+    if not lo <= days <= hi:
+        raise ActionError(f"days has to be {lo} to {hi} - Discord counts a prune's "
+                          f"inactivity in whole days up to {hi}, and {days} isn't in "
+                          "that range.")
+    roles = _prune_roles(g, p.get("include_role_ids"))
+    names = [r.name for r in roles]
+    plus = (" (plus members whose only roles are "
+            + ", ".join(f"'{n}'" for n in names) + ")") if names else ""
+    if ctx.dry_run:
+        est = await _settings_call(g.estimate_pruned_members(days=days, roles=roles),
+                                   "prune estimate", "the member list")
+        count = "an unknown number of" if est is None else str(est)
+        lines = [f"{count} member(s) would be kicked: no roles{plus}, no activity for "
+                 f"{days} day(s).",
+                 "Discord doesn't say WHICH members - only how many.",
+                 "They can rejoin with an invite, but a prune can't be undone."]
+        return {"summary": f"Prune **{g.name}**: **{count} member(s)** inactive "
+                           f"{days} day(s) would be kicked",
+                "detail": "\n".join(lines), "count": est}
+    pruned = await _settings_call(
+        g.prune_members(days=days, compute_prune_count=True, roles=roles,
+                        reason=p.get("reason") or VIA),
+        "prune", "the member list")
+    return {"status": "pruned", "guild": g.name, "days": days, "included_roles": names,
+            "pruned": pruned}
+
+
 # ==========================================================================
 # Dispatch
 # ==========================================================================

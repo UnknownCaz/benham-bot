@@ -792,6 +792,78 @@ check("a rate limit says so, Nothing was changed",
       "in a while.")
 
 
+# =============================================================== prune_members
+section("prune_members - tier 3: the dry-run asks how many, the confirm prunes the same")
+a = capabilities.REGISTRY["prune_members"]
+check("prune_members: tier 3 (allowlist, dry-run, token), needs a guild, never a guest",
+      (a.tier, a.destructive, a.needs_confirm, a.needs_guild, a.guest),
+      (3, True, True, True, False))
+cl, g, http = fresh()
+http.prune_count = 4
+result, preview = go(cl, "prune_members", {"guild_id": GUILD})
+check("the first call is a dry-run: Discord asked for an estimate only, 7 days, no roles",
+      (result, http.calls), (None, [("estimate_pruned_members", {"days": 7, "roles": []})]))
+check("...the summary and the three sentences",
+      (preview["summary"], preview["detail"].splitlines(), preview["count"]),
+      ("Prune **Testing Server**: **4 member(s)** inactive 7 day(s) would be kicked",
+       ["4 member(s) would be kicked: no roles, no activity for 7 day(s).",
+        "Discord doesn't say WHICH members - only how many.",
+        "They can rejoin with an invite, but a prune can't be undone."], 4))
+cl, g, http = fresh()
+http.prune_count = 0
+_, preview = go(cl, "prune_members", {"guild_id": GUILD, "days": 30,
+                                      "include_role_ids": [str(MEMBERS), MODS, MEMBERS]})
+check("days and roles go to the estimate (each role once)",
+      http.calls, [("estimate_pruned_members", {"days": 30,
+                                                "roles": sorted([str(MEMBERS), str(MODS)])})])
+check("...and the preview names the roles counted too",
+      preview["detail"].splitlines()[0],
+      "0 member(s) would be kicked: no roles (plus members whose only roles are "
+      "'Members', 'Mods'), no activity for 30 day(s).")
+cl, g, http = fresh()
+http.prune_count = 2
+result, _ = go(cl, "prune_members", {"guild_id": GUILD, "days": 30,
+                                     "include_role_ids": [MEMBERS], "reason": "cleanup"},
+               force=True)
+check("confirmed: one prune with the same days and roles, the count asked for, the reason",
+      http.calls, [("prune_members", {"days": 30, "roles": [str(MEMBERS)],
+                                      "compute_prune_count": True, "reason": "cleanup"})])
+check("...and the result is Discord's count",
+      result, {"status": "pruned", "guild": "Testing Server", "days": 30,
+               "included_roles": ["Members"], "pruned": 2})
+cl, g, http = fresh()
+go(cl, "prune_members", {"guild_id": GUILD}, force=True)
+check("no reason given: the audit log still names the face", http.calls[0][1]["reason"],
+      capabilities.VIA)
+
+section("prune_members - refused before Discord is asked anything")
+cl, g, http = fresh()
+for days in (0, 31, -3):
+    check(f"days={days}", refusal(cl, "prune_members", {"guild_id": GUILD, "days": days}),
+          f"days has to be 1 to 30 - Discord counts a prune's inactivity in whole days "
+          f"up to 30, and {days} isn't in that range.")
+check("an unknown role",
+      refusal(cl, "prune_members", {"guild_id": GUILD, "include_role_ids": [999]}),
+      "include_role_ids: there's no role 999 in Testing Server - list_roles has the ids.")
+check("@everyone",
+      refusal(cl, "prune_members", {"guild_id": GUILD, "include_role_ids": [EVERYONE]}),
+      "include_role_ids: @everyone isn't needed - members with no roles are always "
+      "counted.")
+check("...not a role id at all",
+      refusal(cl, "prune_members", {"guild_id": GUILD, "include_role_ids": ["mods"]}),
+      "include_role_ids takes role ids - 'mods' isn't one (list_roles has them).")
+check("...and none of those reached Discord", http.calls, [])
+cl, g, http = fresh(bot_perms=KICK)
+check("Kick Members without Manage Server is not enough",
+      refusal(cl, "prune_members", {"guild_id": GUILD}),
+      "this bot needs both Kick Members and Manage Server in Testing Server to prune it "
+      "- give its role both (or Administrator) first.")
+cl, g, http = fresh()
+m = refusal(cl, "prune_members", {"guild_id": OTHER_GUILD})
+check("a server off the destructive allowlist: refused before the dry-run",
+      (m is not None and "destructive_guilds allowlist" in m, http.calls), (True, []))
+
+
 # ===================================================================== the end
 print()
 if _fails:
