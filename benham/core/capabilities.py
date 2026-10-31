@@ -4157,6 +4157,78 @@ async def _delete_sound(ctx, p):
     return {"status": "deleted", "sound": name, "copy_saved": saved}
 
 
+async def _event_keep_copy(ctx, g, ev):
+    """Save an event's details (JSON) and its cover's bytes before it closes;
+    the paths, JSON first.
+
+    Discord never reopens a cancelled or completed event, so this is what makes
+    the cancel reversible by hand (create_event again from the saved record).
+    NOT best effort, like _expr_keep_copy: the preview promised the copy, so a
+    copy that can't be made stops the cancel - one sentence, nothing changed."""
+    try:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")     # local time, house rule
+        base = os.path.join(LOOK_BACKUP_DIR, f"{g.id}-event-{ev.id}-{stamp}")
+        record = event_dict(g, ev)
+        cover_raw = None
+        if ev.cover_image is not None:
+            cover_raw = await asyncio.wait_for(ev.cover_image.read(), LOOK_TIMEOUT)
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        paths = [base + ".json"]
+        if cover_raw is not None:
+            paths.append(base + "-cover" + lookimage.ext_for(cover_raw))
+            with open(paths[1], "wb") as fh:
+                fh.write(cover_raw)
+            record["cover_saved"] = os.path.basename(paths[1])
+        import json
+        with open(paths[0], "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, ensure_ascii=False)
+        return paths
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"events: could not save the event ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save a copy of the event first "
+                          f"({type(e).__name__}), so I didn't close it. Nothing was "
+                          "changed.")
+
+
+@action("cancel_event", identity.DESTRUCTIVE,
+        "Close a server's scheduled event: one that hasn't started is CANCELLED, one "
+        "that is running now is ENDED (completed). Discord never reopens either. Its "
+        "details and cover picture are saved first, so it can be made again with "
+        "create_event.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _cancel_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "close that event", ev)
+    status = _event_closed(ev)
+    running = status == "active"
+    if ctx.dry_run:
+        lines = [_event_where_words(g, ev),
+                 f"Start: {eventtime.line(ev.start_time)}",
+                 f"End: {eventtime.line(ev.end_time)}",
+                 ("It's running now, so this ENDS it (completed)." if running else
+                  "It hasn't started, so this CANCELS it."),
+                 "Discord never reopens a closed event.",
+                 "Its details" + (" and cover picture" if ev.cover_image else "")
+                 + " are saved to look_backups first, so it can be made again."]
+        verb = "End" if running else "Cancel"
+        return {"summary": f"{verb} event **{ev.name}** in **{g.name}**"
+                           + (" (it's running now)" if running else ""),
+                "detail": "\n".join(lines)}
+    saved = await _event_keep_copy(ctx, g, ev)
+    reason = p.get("reason") or VIA
+    if running:
+        after = await _event_call(ev.end(reason=reason), "event end")
+    else:
+        after = await _event_call(ev.cancel(reason=reason), "event cancel")
+    return {"status": "event_ended" if running else "event_cancelled",
+            "guild": g.name, "event": ev.name, "now": _event_status(after),
+            "copy_saved": saved}
+
+
 # ==========================================================================
 # Dispatch
 # ==========================================================================

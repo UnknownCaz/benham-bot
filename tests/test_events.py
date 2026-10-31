@@ -912,6 +912,84 @@ check("Create Events alone can't start someone else's event", "lacks Manage Even
       True)
 
 
+# ================================================================ cancel_event
+section("cancel_event - tier 3 like delete_emoji")
+registered("cancel_event", 3, False, False, False)
+CAN = {"guild_id": GUILD}
+
+section("cancel_event - the dry run names which move it makes, and touches nothing")
+before = backups()
+cl, g, eid = one_event(image="cov3r", description="game night")
+result, preview = go(cl, "cancel_event", {**CAN, "event_id": eid})
+check("a dry run: nothing written, nothing saved",
+      (result, g._state.http.writes, backups()), (None, [], before))
+check("...a scheduled event is CANCELLED, and the copy is promised",
+      (preview["summary"].startswith("Cancel event **stage-b-test** in **Testing Server**"),
+       "CANCELS it" in preview["detail"], "never reopens" in preview["detail"],
+       "details and cover picture are saved" in preview["detail"]),
+      (True, True, True, True))
+cl2, g2, eid2 = one_event(status=2)
+_, preview = go(cl2, "cancel_event", {**CAN, "event_id": eid2})
+check("...a running one is ENDED, and the summary says it's running",
+      ("(it's running now)" in preview["summary"] and preview["summary"].startswith("End"),
+       "ENDS it (completed)" in preview["detail"],
+       "Its details are saved" in preview["detail"]), (True, True, True))
+
+section("cancel_event - confirmed: the copy first, then scheduled -> cancelled")
+result, _ = go(cl, "cancel_event", {**CAN, "event_id": eid}, force=True)
+verb, got_id, payload, reason = g._state.http.writes[0]
+check("one edit: status 4 (cancelled), nothing else, the audit reason",
+      (len(g._state.http.writes), verb, got_id, payload, reason),
+      (1, "edit", eid, {"status": 4}, capabilities.VIA))
+check("the result: cancelled, and Discord now says so",
+      (result["status"], result["now"]), ("event_cancelled", "cancelled"))
+saved = result["copy_saved"]
+record = json.load(open(saved[0], encoding="utf-8"))
+check("the copy is a JSON record of the event as it was, plus its cover's bytes",
+      (os.path.basename(saved[0]).startswith(f"{GUILD}-event-{eid}-"),
+       saved[0].endswith(".json"), record["name"], record["status"], record["description"],
+       record["start"], record["where"], record["cover_saved"] == os.path.basename(saved[1]),
+       open(saved[1], "rb").read() == COVER),
+      (True, True, "stage-b-test", "scheduled", "game night", eventtime.both(START),
+       {"channel": "Game Night", "channel_id": VOICE}, True, True))
+
+section("cancel_event - confirmed on a running event: active -> completed")
+result, _ = go(cl2, "cancel_event", {**CAN, "event_id": eid2}, force=True)
+check("one edit: status 3 (completed), through ScheduledEvent.end",
+      (g2._state.http.writes[0][2], result["status"], result["now"]),
+      ({"status": 3}, "event_ended", "completed"))
+check("...a copy without a cover is the JSON alone", len(result["copy_saved"]), 1)
+
+section("cancel_event - closed is refused; no copy, no cancel; the gates")
+for st, word in ((3, "completed"), (4, "cancelled")):
+    cl, g, eid = one_event(status=st)
+    for force in (False, True):
+        m = refusal(cl, "cancel_event", {**CAN, "event_id": eid}, force=force)
+        check(f"a {word} event is already closed ({'confirm' if force else 'preview'})",
+              f"already {word}" in (m or "") and g._state.http.writes == [], True)
+before = backups()
+cl, g, eid = one_event(image="cov3r")
+g._state.http.cdn_fails = True
+m = refusal(cl, "cancel_event", {**CAN, "event_id": eid})
+check("a cover that can't be saved stops the cancel, and leaves no half copy",
+      ("couldn't save a copy" in (m or ""), "Nothing was changed" in (m or ""),
+       g._state.http.writes, backups()), (True, True, [], before))
+cl, g = fresh()
+check("an unknown event is a sentence", "no scheduled event 4242" in (refusal(
+    cl, "cancel_event", {**CAN, "event_id": 4242}, force=False) or ""), True)
+cl, g = fresh()
+g2 = cl.guilds[WALLED]
+eid, = g2.add(ev_data("elsewhere"))
+m = refusal(cl, "cancel_event", {"guild_id": WALLED, "event_id": eid}, force=False)
+check("a guild off the destructive allowlist is refused before any read",
+      ("destructive_guilds" in (m or ""), g2._state.http.reads), (True, []))
+cl, g, eid = one_event()
+g._state.http.raise_on_write = discord.HTTPException(_Resp(500), "Internal Server Error")
+m = refusal(cl, "cancel_event", {**CAN, "event_id": eid})
+check("Discord refusing the cancel is one sentence (the copy is kept)",
+      "\n" not in (m or "") and (m or "").endswith("Nothing was changed."), True)
+
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
