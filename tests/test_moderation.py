@@ -475,7 +475,10 @@ def audit_entry(at, action_type, user_id, target_id=None, changes=(), reason=Non
                 options=None):
     e = {"id": snow(at), "action_type": action_type, "user_id": str(user_id),
          "target_id": str(target_id) if target_id is not None else None,
-         "changes": [{"key": k, "old_value": o, "new_value": n} for k, o, n in changes]}
+         # Discord leaves a side out when it has no value (a create has no old).
+         "changes": [{"key": k, **({"old_value": o} if o is not None else {}),
+                      **({"new_value": n} if n is not None else {})}
+                     for k, o, n in changes]}
     if reason is not None:
         e["reason"] = reason
     if options is not None:
@@ -519,9 +522,10 @@ check("an entry: when in both halves, who by name, what, target, reason, changes
       e, {"when": {"local": "Fri 2026-10-30 19:30 EDT", "utc": "2026-10-30T23:30:00Z"},
           "who": "benham", "what": "guild_update",
           "target": {"kind": "server", "name": "Testing Server"},
-          "reason": "via Benham", "changes": ["afk_timeout: 300 -> 900"]})
-check("...a picture's change (the icon) is left out, not printed as a blob",
-      any("icon" in c for c in e["changes"]), False)
+          "reason": "via Benham", "changes": ["afk_timeout: 300 -> 900",
+                                              "icon: changed"]})
+check("...a picture's change (the icon) is named, its bytes never printed",
+      [c for c in e["changes"] if "icon" in c], ["icon: changed"])
 e = result["entries"][-2]
 check("a channel edit by another member: their display name, the channel by #name",
       (e["who"], e["target"], e["reason"], e["changes"]),
@@ -541,6 +545,49 @@ check("a prune: how many it removed and the day count",
 e = result["entries"][0]
 check("many changes: six shown, then how many more", e["changes"][-1], "+2 more")
 check("...a long text is cut short", e["changes"][1], 'topic: none -> "' + "x" * 77 + '..."')
+
+section("read_audit_log - what the live log taught (2026-10-31)")
+cl, g, http = fresh()
+http.audit = [
+    audit_entry(WHEN, 1, BOT, GUILD, [("verification_level", 1, 0),
+                                      ("default_message_notifications", 0, 1),
+                                      ("system_channel_flags", 4, 5)]),
+    audit_entry(WHEN + timedelta(minutes=1), 12, BOT, 555,
+                [("name", "stage-c-cat", None), ("type", 4, None),
+                 ("permission_overwrites", [], None)]),
+    audit_entry(WHEN + timedelta(minutes=2), 10, BOT, 556,
+                [("name", None, "stage-c-new"), ("type", None, 0),
+                 ("permission_overwrites", None, []), ("nsfw", None, False)]),
+    audit_entry(WHEN + timedelta(minutes=3), 16, BOT, ASD),
+    audit_entry(WHEN + timedelta(minutes=4), 33, BOT, MODS),
+]
+res, _ = go(cl, "read_audit_log", {"guild_id": GUILD})
+by = {e["when"]["utc"]: e for e in res["entries"]}
+e = by["2026-10-30T23:30:00Z"]
+check("Discord's enums by name, not as (name, number) tuples",
+      e["changes"][:2], ["verification_level: low -> none",
+                         "default_notifications: all_messages -> only_mentions"])
+check("a flags value: only the toggles that flipped, on/off",
+      e["changes"][2], "system_channel_flags: join_notifications on -> off")
+e = by["2026-10-30T23:31:00Z"]
+check("a deleted channel is named from its own entry; the type by name; no empty lines",
+      (e["what"], e["target"], e["changes"]),
+      ("channel_delete", {"kind": "channel", "name": "#stage-c-cat"},
+       ['name: "stage-c-cat" -> none', "type: category -> none"]))
+e = by["2026-10-30T23:32:00Z"]
+check("a created channel the same way, from the after side",
+      (e["target"], e["changes"]),
+      ({"kind": "channel", "name": "#stage-c-new"},
+       ['name: none -> "stage-c-new"', "type: none -> text", "nsfw: none -> off"]))
+e = by["2026-10-30T23:33:00Z"]
+check("an action type Discord doesn't document: kept, with a note in words",
+      (e["what"], e["target"], e["note"]),
+      ("unknown_16", {"kind": "channel", "name": "#asd"},
+       "Discord logs this action (number 16) without documenting it; by its number it "
+       "concerns a channel."))
+e = by["2026-10-30T23:34:00Z"]
+check("...on a role too", (e["what"], e["target"]["kind"], "note" in e),
+      ("unknown_33", "role", True))
 check("no person's id anywhere in an entry",
       any(str(x) in json.dumps(result["entries"]) for x in (ALICE, BOB, BOT, OWNER)),
       False)
@@ -961,7 +1008,8 @@ m = refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE
 check("THE TRAP: an allow that doesn't read back stops it - the deny is never sent",
       (m, [v for v, _ in http.calls]),
       ("Discord took the allow for Alice in #benham-beta, but the overwrite it reads back "
-       "doesn't allow view_channel, so the deny was NOT applied - check channel_info.",
+       "doesn't allow view_channel, so the deny was NOT applied - check #benham-beta's "
+       "permissions in Discord.",
        ["get_member", "edit_channel_permissions", "get_channel"]))
 cl, g, http = fresh()
 _n = []
