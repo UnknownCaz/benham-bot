@@ -1086,7 +1086,8 @@ with open(result["backup"], encoding="utf-8") as fh:
     rec = json.load(fh)
 http.writes.clear()
 result, _ = go(cl, "move_role", {"guild_id": GUILD, **rec["restore"]}, force=True)
-check("...fed the backup's restore, every role is back on the number it had",
+check("...fed the backup's restore, the same numbers are dealt back (here Discord keeps "
+      "them; the live one renumbers 0..n-1 on its own, and only the order is promised)",
       ({r["id"]: r["position"] for r in http.data["roles"]}, rsent(http)[1]),
       (_GAPPY, [(MEMBERS, 1), (REGULARS, 5)]))
 g = build(gappy())
