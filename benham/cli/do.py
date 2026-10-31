@@ -74,7 +74,9 @@ def _print_help(name):
 
 # What a JSON-decoded value must turn out to be for each declared type. Any
 # other decode is thrown away and the text kept: `753e36` declared str is text.
-_DECODES_TO = {"list": (list,), "int": (int,), "bool": (bool,)}
+# A `flags` value (a map of names to true/false) decodes from a JSON object;
+# `name=true,name=false` stays text and capabilities._coerce reads it.
+_DECODES_TO = {"list": (list,), "int": (int,), "bool": (bool,), "flags": (dict,)}
 
 
 def _parse_kv(pairs, act=None):

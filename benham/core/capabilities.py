@@ -23,6 +23,7 @@ nothing, and once for real after confirmation.
 import asyncio
 import base64
 import io
+import json
 import os
 import re
 import unicodedata
@@ -1541,6 +1542,75 @@ async def _deliver_unprompted(ctx, p):
             "message_id": sent.id, "silent": notify.is_silent("curious")}
 
 
+# --- a server's settings, as one block (INTENT 60, Stage 8 C) ---------------
+#
+# guild_info's `settings` and edit_server_settings's OLD -> NEW lines are built
+# from this one table, so the read Caz takes before an edit and the preview of
+# the edit can never spell a field two ways.
+#
+# The system-channel toggles: the name a person reads, then the attribute of
+# discord.py 2.7.1's SystemChannelFlags. Discord stores these as "suppress"
+# bits; discord.py inverts them, so True means the toggle is ON the way the
+# Server Settings screen shows it. test_settings.py pins this table against
+# SystemChannelFlags.VALID_FLAGS, so a toggle discord.py learns later fails the
+# suite instead of going missing from the read.
+_SYSTEM_FLAGS = (
+    ("join_notifications", "join_notifications"),
+    ("boost_notifications", "premium_subscriptions"),
+    ("setup_tips", "guild_reminder_notifications"),
+    ("join_sticker_replies", "join_notification_replies"),
+    ("role_subscription_notifications", "role_subscription_purchase_notifications"),
+    ("role_subscription_sticker_replies",
+     "role_subscription_purchase_notification_replies"),
+    ("emoji_added_notifications", "emoji_added"),
+)
+_SETTINGS_CHANNELS = ("afk_channel", "system_channel", "rules_channel",
+                      "public_updates_channel")
+
+
+def _guild_channel_ref(g, cid):
+    """{name, id} of one of g's channels, or None when the setting is empty.
+    A name of None means Discord holds an id this bot can't see as a channel."""
+    if not cid:
+        return None
+    ch = g.get_channel(int(cid))
+    return {"name": getattr(ch, "name", None), "id": int(cid)}
+
+
+def _settings_ids(src):
+    """The settings channels' ids as `src` holds them, {field: id or None}.
+
+    Read off the id fields, not the properties, on purpose: the Guild that
+    Guild.edit returns in discord.py 2.7.1 is built from Discord's PATCH answer
+    alone, carries no channel cache, and so answers None from every channel
+    property even when a channel is set. The ids are what Discord said."""
+    return {key: getattr(src, f"_{key}_id", None) for key in _SETTINGS_CHANNELS}
+
+
+def _settings_block(g, src=None):
+    """A server's settings as plain data. `src` is the guild object to read
+    (default `g`, the cached one); channel names always come from `g`."""
+    src = g if src is None else src
+    ids = _settings_ids(src)
+    flags = src.system_channel_flags
+    feats = sorted(getattr(src, "features", None) or ())
+    return {
+        "afk_channel": _guild_channel_ref(g, ids["afk_channel"]),
+        "afk_timeout": src.afk_timeout,
+        "system_channel": _guild_channel_ref(g, ids["system_channel"]),
+        "system_flags": {name: bool(getattr(flags, attr)) for name, attr in _SYSTEM_FLAGS},
+        "default_notifications": src.default_notifications.name,
+        "verification_level": src.verification_level.name,
+        "explicit_content_filter": src.explicit_content_filter.name,
+        "rules_channel": _guild_channel_ref(g, ids["rules_channel"]),
+        "public_updates_channel": _guild_channel_ref(g, ids["public_updates_channel"]),
+        "premium_tier": src.premium_tier,
+        "boost_count": src.premium_subscription_count,
+        "community": "COMMUNITY" in feats,
+        "features": feats,
+    }
+
+
 @action("guild_info", identity.READ, "Overview of one server.",
         {"guild_id": {"type": "int", "required": True}},
         taints=True)
@@ -1555,6 +1625,9 @@ async def _guild_info(ctx, p):
         "benham_top_role": g.me.top_role.name,
         "benham_can": sorted(n for n, v in perms if v),
         "destructive_allowed": identity.destructive_allowed(g.id),
+        # The read Caz takes before and after edit_server_settings: every
+        # field it can change, plus the boost and Community facts that gate them.
+        "settings": _settings_block(g),
     }
 
 
@@ -3626,6 +3699,849 @@ async def _start_event(ctx, p):
     return {"status": "event_started", "guild": g.name, "event": event_dict(g, after)}
 
 
+# --- server settings and ordering (INTENT 60, Stage 8 C) --------------------
+#
+# The settings on Server Settings > Overview and Moderation, and the order of
+# channels and roles. The posture is edit_server_look's, argued once here:
+#
+#   tier MANAGE - every change has an exact inverse, and the handler MAKES that
+#       true rather than assuming it: the confirmed call first writes what it is
+#       about to replace to state/look_backups/ (local-time stamped; a settings
+#       file holds the old values as the very parameters that put them back),
+#       then changes, then reads Discord back and reports what Discord holds -
+#       never what was sent. The backup is NOT best effort: the preview promised
+#       it, so a backup that can't be written stops the change.
+#   outward + always_confirm - everyone in the server sees a reorder, and a
+#       verification level or a notification default changes what every member
+#       can do or is pinged by.
+#   taints - the preview and the result repeat channel and role names, which
+#       are attacker-writable strings.
+#
+# Refusals come at the PREVIEW, whole, in one plain sentence: an unknown value, a
+# channel of the wrong kind or from another server, a Community-only setting on
+# a server that isn't Community, a request that changes nothing. Caz is never
+# asked to confirm what Discord would refuse, or what would do nothing.
+
+_AFK_TIMEOUTS = {60: "1m", 300: "5m", 900: "15m", 1800: "30m", 3600: "1h"}
+_TIME_UNITS = {"": 1, "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+               "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+               "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600}
+_NOTIFY_LEVELS = {lv.name: lv for lv in discord.NotificationLevel}
+_VERIFY_LEVELS = {lv.name: lv for lv in discord.VerificationLevel}
+_CONTENT_FILTERS = {lv.name: lv for lv in discord.ContentFilter}
+_CLEAR_WORDS = ("", "0", "none", "null", "off", "clear")
+# Either spelling of a toggle reaches the same flag: the name guild_info shows,
+# or discord.py's own attribute name.
+_FLAG_ATTRS = {**{name: attr for name, attr in _SYSTEM_FLAGS},
+               **{attr: attr for _, attr in _SYSTEM_FLAGS}}
+_FLAG_NAMES = {attr: name for name, attr in _SYSTEM_FLAGS}
+_TYPE_WORDS = {"text": "text", "voice": "voice", "category": "category",
+               "stage_voice": "stage", "news": "announcement", "forum": "forum",
+               "media": "media"}
+
+
+def _type_word(ch):
+    t = getattr(getattr(ch, "type", None), "name", "unknown")
+    return _TYPE_WORDS.get(t, t)
+
+
+def _ch_words(g, cid):
+    """How a settings channel reads in a preview: #name, or none."""
+    if not cid:
+        return "none"
+    ch = g.get_channel(int(cid))
+    return f"#{ch.name}" if ch is not None else f"channel {cid}"
+
+
+def _afk_timeout(raw):
+    m = re.fullmatch(r"(\d+)\s*([a-z]*)", str(raw).strip().lower())
+    unit = _TIME_UNITS.get(m.group(2)) if m else None
+    secs = int(m.group(1)) * unit if unit else None
+    if secs not in _AFK_TIMEOUTS:
+        raise ActionError(
+            f"afk_timeout can only be 1m, 5m, 15m, 30m or 1h (60, 300, 900, 1800 or "
+            f"3600 seconds) - Discord offers no other, and {raw!r} isn't one of those.")
+    return secs
+
+
+def _timeout_words(secs):
+    return f"{_AFK_TIMEOUTS.get(secs, f'{secs}s')} ({secs} s)"
+
+
+def _settings_word(raw, table, field):
+    word = re.sub(r"[\s-]+", "_", str(raw).strip().lower())
+    if word not in table:
+        raise ActionError(f"{field} is one of {', '.join(table)}, and {raw!r} isn't "
+                          "one of those.")
+    return table[word]
+
+
+def _settings_channel(ctx, g, raw, field, kind, what):
+    """The channel a settings parameter names, or None for "clear it".
+    `kind` is the one discord.ChannelType it must be; `what` names the slot."""
+    text = str(raw).strip().lower()
+    if text in _CLEAR_WORDS:
+        return None
+    try:
+        cid = int(text)
+    except ValueError:
+        raise ActionError(f"{field} takes a channel id, or none to clear it - {raw!r} "
+                          "is neither.")
+    ch = g.get_channel(cid)
+    if ch is None:
+        other = ctx.client.get_channel(cid)
+        if other is not None and getattr(other, "guild", None) is not None:
+            raise ActionError(f"{field}: channel {cid} belongs to another server, not "
+                              f"{g.name}.")
+        raise ActionError(f"{field}: there's no channel {cid} in {g.name} that this bot "
+                          "can see.")
+    if ch.type != kind:
+        raise ActionError(f"{field}: #{ch.name} is a {_type_word(ch)} channel, and {what} "
+                          f"has to be a {_TYPE_WORDS.get(kind.name, kind.name)} channel.")
+    return ch
+
+
+def _settings_keep(ctx, g, label, record, what):
+    """Write `record` as JSON to look_backups/<guild>-<label>-<local stamp>.json and
+    return the path. NOT best effort, like _event_keep_copy: the preview promised
+    the copy, so a copy that can't be made stops the change."""
+    try:
+        now = datetime.now()                      # local time, house rule
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        base = os.path.join(LOOK_BACKUP_DIR,
+                            f"{g.id}-{label}-{now.strftime('%Y%m%d-%H%M%S')}")
+        path, n = base + ".json", 1
+        while os.path.exists(path):
+            n += 1
+            path = f"{base}-{n}.json"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"saved_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                       "guild_id": g.id, "guild": g.name, **record}, fh,
+                      indent=2, ensure_ascii=False, default=str)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"settings: could not save {what} ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save {what} first ({type(e).__name__}), so I "
+                          "didn't change anything. Nothing was changed.")
+
+
+async def _settings_call(awaitable, what, check_with):
+    """One Discord settings or ordering change, with a ceiling and one plain
+    sentence for every refusal. Forbidden is NOT handled here - run() words it."""
+    try:
+        return await asyncio.wait_for(awaitable, LOOK_TIMEOUT)
+    except discord.Forbidden:
+        raise
+    except discord.HTTPException as e:
+        text = " ".join((getattr(e, "text", None) or str(e) or "").split()).rstrip(".")
+        low = text.lower()
+        if getattr(e, "status", None) == 429 or any(
+                w in low for w in ("too fast", "rate limit", "rate_limit", "ratelimit")):
+            raise ActionError(f"Discord is rate-limiting {what}s right now. Nothing was "
+                              "changed; try again in a while.")
+        raise ActionError(f"Discord turned the {what} down: "
+                          f"{text or 'it gave no reason'}. Nothing was changed.")
+    except (TypeError, ValueError) as e:
+        # discord.py's own guards on the arguments, before any request.
+        raise ActionError(f"the {what} couldn't go to Discord ({e}). Nothing was "
+                          "changed.")
+    except asyncio.TimeoutError:
+        raise ActionError(f"Discord didn't answer the {what} within {LOOK_TIMEOUT} "
+                          f"seconds. Nothing was confirmed changed; check {check_with} "
+                          "and try again later.")
+
+
+def _settings_plan(ctx, g, p):
+    """(changes, already): every requested field that differs from what the server
+    holds now, and the ones that already match. Raises ActionError, whole, on the
+    first thing Discord would refuse. Each change is a dict:
+      label, old, new   - the preview line, in words
+      kw, value         - the Guild.edit keyword and what goes to it
+      restore           - (param, value) that would put the old value back
+      key, want         - where the read-back holds it, and what it should say"""
+    ids = _settings_ids(g)
+    feats = set(getattr(g, "features", None) or ())
+    changes, already = [], []
+
+    def channel_field(param, slot, kind, what, label, community=False):
+        if p.get(param) is None:
+            return
+        if community and "COMMUNITY" not in feats:
+            raise ActionError(f"{param}: {what} needs a Community server, and {g.name} "
+                              "isn't one - Discord only has that setting on Community "
+                              "servers.")
+        ch = _settings_channel(ctx, g, p[param], param, kind, what)
+        if community and ch is None:
+            raise ActionError(f"{param}: a Community server has to keep {what} - name "
+                              "another text channel instead of none.")
+        old, new = ids[slot], (ch.id if ch is not None else None)
+        if old == new:
+            already.append(f"{param} ({_ch_words(g, old)})")
+            return
+        changes.append({"label": label, "old": _ch_words(g, old),
+                        "new": _ch_words(g, new), "kw": slot, "value": ch,
+                        "restore": (param, str(old) if old else "none"),
+                        "key": slot, "want": new})
+
+    def word_field(param, table, current, label):
+        if p.get(param) is None:
+            return
+        level = _settings_word(p[param], table, param)
+        if level == current:
+            already.append(f"{param} ({current.name})")
+            return
+        changes.append({"label": label, "old": current.name, "new": level.name,
+                        "kw": param, "value": level,
+                        "restore": (param, current.name), "key": param,
+                        "want": level.name})
+
+    channel_field("afk_channel_id", "afk_channel", discord.ChannelType.voice,
+                  "the AFK channel", "AFK channel")
+    if p.get("afk_timeout") is not None:
+        secs = _afk_timeout(p["afk_timeout"])
+        if secs == g.afk_timeout:
+            already.append(f"afk_timeout ({_timeout_words(secs)})")
+        else:
+            changes.append({"label": "AFK timeout", "old": _timeout_words(g.afk_timeout),
+                            "new": _timeout_words(secs), "kw": "afk_timeout",
+                            "value": secs, "restore": ("afk_timeout", str(g.afk_timeout)),
+                            "key": "afk_timeout", "want": secs})
+    channel_field("system_channel_id", "system_channel", discord.ChannelType.text,
+                  "the system channel", "System channel")
+
+    if p.get("system_flags"):
+        flags = g.system_channel_flags          # a fresh object from the current bits
+        asked = {}
+        for raw, want in p["system_flags"].items():
+            attr = _FLAG_ATTRS.get(str(raw).strip().lower())
+            if attr is None:
+                raise ActionError(
+                    f"system_flags: {raw!r} isn't a system-channel toggle - the toggles "
+                    f"are {', '.join(n for n, _ in _SYSTEM_FLAGS)}.")
+            if asked.get(attr, want) != want:
+                raise ActionError(f"system_flags names {_FLAG_NAMES[attr]} twice, once "
+                                  "on and once off - pick one.")
+            asked[attr] = want
+        flipped = {}
+        for attr, want in asked.items():
+            name = _FLAG_NAMES[attr]
+            if bool(getattr(flags, attr)) == want:
+                already.append(f"{name} ({'on' if want else 'off'})")
+                continue
+            setattr(flags, attr, want)
+            flipped[name] = want
+            changes.append({"label": f"System toggle {name}",
+                            "old": "off" if want else "on", "new": "on" if want else "off",
+                            "kw": None, "value": None, "restore": None,
+                            "key": ("system_flags", name), "want": want})
+        if flipped:
+            # One keyword carries every toggle: the current bits with only the
+            # named ones flipped (a SystemChannelFlags built from keywords starts
+            # from all-suppressed and would switch every other toggle off).
+            changes.append({"label": None, "kw": "system_channel_flags", "value": flags,
+                            "restore": ("system_flags",
+                                        {n: not v for n, v in flipped.items()}),
+                            "key": None})
+
+    word_field("default_notifications", _NOTIFY_LEVELS, g.default_notifications,
+               "Default notifications")
+    word_field("verification_level", _VERIFY_LEVELS, g.verification_level,
+               "Verification level")
+    word_field("explicit_content_filter", _CONTENT_FILTERS, g.explicit_content_filter,
+               "Explicit-content filter")
+    channel_field("rules_channel_id", "rules_channel", discord.ChannelType.text,
+                  "a rules channel", "Rules channel", community=True)
+    channel_field("public_updates_channel_id", "public_updates_channel",
+                  discord.ChannelType.text, "a public-updates channel",
+                  "Public-updates channel", community=True)
+    return changes, already
+
+
+_SETTINGS_PARAMS = ("afk_channel_id", "afk_timeout", "system_channel_id", "system_flags",
+                    "default_notifications", "verification_level",
+                    "explicit_content_filter", "rules_channel_id",
+                    "public_updates_channel_id")
+
+
+@action("edit_server_settings", identity.MANAGE,
+        "Change a server's settings (Server Settings > Overview and Moderation): the "
+        "AFK channel and timeout, the system channel and its toggles, the default "
+        "notifications, the verification level, the explicit-content filter, and "
+        "(Community servers only) the rules and public-updates channels. Only the "
+        "fields named change; guild_info's `settings` block shows what they are now. "
+        "The preview shows every change old -> new; the old values are saved first "
+        "so it can be put back, and the result is what Discord reads afterwards. "
+        "Refused before anything changes if a value is unknown, a channel is the "
+        "wrong kind or from another server, or nothing would change. Always "
+        "previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "afk_channel_id": {"type": "str", "desc": "A voice channel, or none to clear "
+                                                   "it"},
+         "afk_timeout": {"type": "str", "desc": "1m | 5m | 15m | 30m | 1h (or 60, 300, "
+                                                "900, 1800, 3600 seconds) - Discord "
+                                                "offers no other"},
+         "system_channel_id": {"type": "str", "desc": "The text channel for system "
+                                                      "messages, or none to turn them "
+                                                      "off"},
+         "system_flags": {"type": "flags",
+                          "desc": "System-channel toggles to change, name -> true/false; "
+                                  "only the named ones change: join_notifications, "
+                                  "boost_notifications, setup_tips, join_sticker_replies, "
+                                  "role_subscription_notifications, "
+                                  "role_subscription_sticker_replies, "
+                                  "emoji_added_notifications"},
+         "default_notifications": {"type": "str", "desc": "all_messages | only_mentions"},
+         "verification_level": {"type": "str", "desc": "none | low | medium | high | "
+                                                       "highest"},
+         "explicit_content_filter": {"type": "str", "desc": "disabled | no_role | "
+                                                            "all_members"},
+         "rules_channel_id": {"type": "str", "desc": "Community servers only: the rules "
+                                                     "text channel"},
+         "public_updates_channel_id": {"type": "str", "desc": "Community servers only: "
+                                                              "the text channel Discord "
+                                                              "sends moderator notices to"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_server_settings(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.manage_guild:
+        raise ActionError(
+            f"this bot lacks Manage Server in {g.name}, so it can't change the server's "
+            "settings - give its role Manage Server (or Administrator) first.")
+    if not any(p.get(k) is not None and p.get(k) != {} for k in _SETTINGS_PARAMS):
+        raise ActionError("nothing to change - pass afk_channel_id, afk_timeout, "
+                          "system_channel_id, system_flags, default_notifications, "
+                          "verification_level, explicit_content_filter, "
+                          "rules_channel_id or public_updates_channel_id.")
+    changes, already = _settings_plan(ctx, g, p)
+    shown = [c for c in changes if c.get("label")]
+    if not shown:
+        raise ActionError(f"nothing would change - {g.name} already has "
+                          f"{', '.join(already)}.")
+    params_changed = sorted({c["restore"][0] for c in changes if c.get("restore")})
+
+    if ctx.dry_run:
+        lines = [f"{c['label']}: {c['old']} -> {c['new']}" for c in shown]
+        if already:
+            lines.append("Already that way, left alone: " + ", ".join(already) + ".")
+        lines.append("Nothing else changes.")
+        new_system = next((c["want"] for c in changes if c.get("key") == "system_channel"),
+                          _settings_ids(g)["system_channel"])
+        if any(isinstance(c.get("key"), tuple) for c in changes) and not new_system:
+            lines.append("There's no system channel, so the toggles have nowhere to post "
+                         "until one is set.")
+        rank = {name: i for i, name in enumerate(_VERIFY_LEVELS)}
+        for c in changes:
+            if c.get("key") == "verification_level" and \
+                    rank[c["want"]] > rank.get(g.verification_level.name, -1):
+                lines.append("Members who don't meet the new verification level can't "
+                             "send messages until they do.")
+            if c.get("key") == "default_notifications" and c["want"] == "all_messages":
+                lines.append("Members who never chose their own setting will be notified "
+                             "of every message.")
+        lines.append("The current values are saved first, so this can be put back.")
+        return {"summary": f"Change **{g.name}**'s settings: "
+                           + ", ".join(c["label"] for c in shown),
+                "detail": "\n".join(lines)}
+
+    restore = {}
+    for c in changes:
+        if c.get("restore"):
+            restore[c["restore"][0]] = c["restore"][1]
+    saved = _settings_keep(
+        ctx, g, "settings",
+        {"changed": params_changed,
+         "before": {c["label"]: c["old"] for c in shown},
+         # Feed this back to edit_server_settings (with guild_id) to undo.
+         "restore": restore,
+         "settings_before": _settings_block(g)},
+        "the current settings")
+    kw = {c["kw"]: c["value"] for c in changes if c.get("kw")}
+    after = await _settings_call(g.edit(reason=p.get("reason") or VIA, **kw),
+                                 "settings change", "guild_info")
+    # What Discord holds now - its answer to the edit - not what was asked for.
+    read = _settings_block(g, after)
+
+    def value_at(key):
+        v = read[key[0]][key[1]] if isinstance(key, tuple) else read[key]
+        return v["id"] if isinstance(v, dict) and "id" in v else v
+
+    now, off = {}, []
+    for c in shown:
+        got = value_at(c["key"])
+        label = c["key"][1] if isinstance(c["key"], tuple) else c["key"]
+        now[label] = got
+        if got != c["want"]:
+            off.append(f"{label} (it reads {got!r})")
+    out = {"status": "settings_changed", "guild": g.name, "changed": params_changed,
+           "now": now, "settings": read, "backup": saved}
+    if off:
+        out["warning"] = ("Discord accepted the change but doesn't read back what was "
+                          "asked for: " + "; ".join(off) + " - check guild_info.")
+    return out
+
+
+# --- channel order ------------------------------------------------------------
+#
+# Why neither GuildChannel.move nor edit(position=) - both read in discord.py
+# 2.7.1 (abc.py) before choosing:
+#   edit(position=N) hands N to _move, which renumbers EVERY channel of that kind
+#       across the server by raw position, categories ignored - "position 2 in
+#       Games" means nothing to it.
+#   move(category=None, ...) - out of a category to the top level - counts the
+#       place among the channel's OLD category, not the top level, so it lands at
+#       a number that means nothing where it ends up.
+# So the plan is made here, the way move() makes it in the cases it gets right:
+# one group (same kind - text-like, voice-like or category - and same category,
+# sorted by position then id), the channel taken out and put back in, the group
+# renumbered 0..n-1, a new parent and the permission sync on the moved channel
+# only. It goes through the HTTP route move() itself uses, the preview's
+# neighbours are read off the very list that is sent, and the result is read
+# back with Guild.fetch_channels.
+
+_GROUP_WORDS = {"text": "text channels", "voice": "voice channels",
+                "category": "categories"}
+
+
+def _ch_group(c):
+    t = getattr(c, "type", None)
+    if t == discord.ChannelType.category:
+        return "category"
+    if t in (discord.ChannelType.voice, discord.ChannelType.stage_voice):
+        return "voice"
+    return "text"
+
+
+def _ch_siblings(chans, group, cat_id, skip=None):
+    """The channels of one group in one category (None = the top level), in the
+    order Discord shows them."""
+    return sorted((c for c in chans if _ch_group(c) == group
+                   and getattr(c, "category_id", None) == cat_id and c.id != skip),
+                  key=lambda c: (c.position, c.id))
+
+
+def _cn(c):
+    return c.name if _ch_group(c) == "category" else f"#{c.name}"
+
+
+def _cat_words(chans, cat_id):
+    if cat_id is None:
+        return "the top level (no category)"
+    cat = next((c for c in chans if c.id == cat_id), None)
+    return f"the category {cat.name}" if cat is not None else f"category {cat_id}"
+
+
+def _ch_between(order, i):
+    above = order[i - 1] if i > 0 else None
+    below = order[i + 1] if i + 1 < len(order) else None
+    if above is not None and below is not None:
+        return f"between {_cn(above)} and {_cn(below)}"
+    if below is not None:
+        return f"at the top, above {_cn(below)}"
+    if above is not None:
+        return f"at the bottom, below {_cn(above)}"
+    return "the only one there"
+
+
+def _ch_place(chans, order, i, cat_id):
+    """Where order[i] sits, as plain data."""
+    above = order[i - 1] if i > 0 else None
+    below = order[i + 1] if i + 1 < len(order) else None
+    cat = next((c for c in chans if c.id == cat_id), None) if cat_id else None
+    return {"category": cat.name if cat is not None else None, "category_id": cat_id,
+            "position": i, "of": len(order), "between": _ch_between(order, i),
+            "above": above.name if above is not None else None,
+            "below": below.name if below is not None else None}
+
+
+def _ch_in_guild(ctx, g, raw, field):
+    try:
+        cid = int(raw)
+    except (TypeError, ValueError):
+        raise ActionError(f"{field} takes a channel id - {raw!r} isn't one.")
+    ch = g.get_channel(cid)
+    if ch is None:
+        other = ctx.client.get_channel(cid)
+        if other is not None and getattr(other, "guild", None) is not None:
+            raise ActionError(f"{field}: channel {cid} belongs to another server, not "
+                              f"{g.name}.")
+        raise ActionError(f"{field}: there's no channel {cid} in {g.name} that this bot "
+                          "can see.")
+    return ch
+
+
+_PLACE_WORDS = "position, before_id, after_id, to_top or to_bottom"
+
+
+@action("move_channel", identity.MANAGE,
+        "Move a channel - or a category - in a server's channel list: to a position "
+        "(0 = the top) among the channels of its kind in its category or at the top "
+        "level, directly before_id / after_id another channel, or to_top / to_bottom; "
+        "and optionally into another category (category_id, or none for the top "
+        "level; with only category_id it goes to the bottom there). Inside a category "
+        "voice channels always sit below text channels, so a place is counted among "
+        "channels of the same kind. sync_permissions=true makes a channel moving into "
+        "a category take that category's permissions. The preview names the "
+        "neighbours it lands between; its current place is saved first, and the "
+        "result is the order Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "channel_id": {"type": "int", "required": True,
+                        "desc": "The channel or category to move (list_channels)"},
+         "position": {"type": "int", "desc": "0-based place among channels of its kind "
+                                             "in the category (or top level) it ends up "
+                                             "in; 0 is the top"},
+         "before_id": {"type": "int", "desc": "Put it directly above this channel"},
+         "after_id": {"type": "int", "desc": "Put it directly below this channel"},
+         "to_top": {"type": "bool", "desc": "Put it first"},
+         "to_bottom": {"type": "bool", "desc": "Put it last"},
+         "category_id": {"type": "str", "desc": "Move it into this category, or none for "
+                                                "the top level"},
+         "sync_permissions": {"type": "bool", "desc": "Moving into a category: take that "
+                                                      "category's permissions (default "
+                                                      "false)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _move_channel(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    if not g.me.guild_permissions.manage_channels:
+        raise ActionError(f"this bot lacks Manage Channels in {g.name}, so it can't move "
+                          "channels there - give its role Manage Channels (or "
+                          "Administrator) first.")
+    ch = _ch_in_guild(ctx, g, p["channel_id"], "channel_id")
+    group = _ch_group(ch)
+    places = [k for k in ("position", "before_id", "after_id") if p.get(k) is not None] \
+        + [k for k in ("to_top", "to_bottom") if p.get(k)]
+    if len(places) > 1:
+        raise ActionError(f"give one place - {_PLACE_WORDS} - not "
+                          f"{' and '.join(places)}.")
+    cat_given = p.get("category_id") is not None
+    if not places and not cat_given:
+        raise ActionError(f"nothing to change - say where: {_PLACE_WORDS} (and "
+                          "category_id to move it into a category).")
+
+    chans = list(g.channels)
+    cur_cat = getattr(ch, "category_id", None)
+    tgt_cat = cur_cat
+    if cat_given:
+        text = str(p["category_id"]).strip().lower()
+        if text in _CLEAR_WORDS:
+            tgt_cat = None
+        elif group == "category":
+            raise ActionError(f"{_cn(ch)} is a category, and a category can't go inside "
+                              "another one - leave category_id out.")
+        else:
+            cat = _ch_in_guild(ctx, g, p["category_id"], "category_id")
+            if _ch_group(cat) != "category":
+                raise ActionError(f"category_id: {_cn(cat)} is a {_type_word(cat)} "
+                                  "channel, not a category.")
+            tgt_cat = cat.id
+    anchor = None
+    for key in ("before_id", "after_id"):
+        if p.get(key) is None:
+            continue
+        anchor = _ch_in_guild(ctx, g, p[key], key)
+        if anchor.id == ch.id:
+            raise ActionError(f"{key}: a channel can't go before or after itself.")
+        if _ch_group(anchor) != group:
+            raise ActionError(
+                f"{key}: {_cn(anchor)} is a {_type_word(anchor)} channel and {_cn(ch)} is "
+                f"a {_type_word(ch)} channel - Discord keeps voice channels below text "
+                "channels and categories apart, so one can't go directly next to the "
+                "other.")
+        anchor_cat = getattr(anchor, "category_id", None)
+        if cat_given and anchor_cat != tgt_cat:
+            raise ActionError(f"{key}: {_cn(anchor)} is in {_cat_words(chans, anchor_cat)}, "
+                              f"not {_cat_words(chans, tgt_cat)} - drop category_id to "
+                              "move next to it, or pick a channel in that category.")
+        tgt_cat = anchor_cat
+    moved_cat = tgt_cat != cur_cat
+    sync = bool(p.get("sync_permissions"))
+    if sync and tgt_cat is None:
+        raise ActionError(f"sync_permissions needs a category to sync with, and "
+                          f"{_cn(ch)} would sit at the top level.")
+    if sync and not moved_cat:
+        raise ActionError(f"sync_permissions only applies when {_cn(ch)} moves into a "
+                          f"different category, and it stays in "
+                          f"{_cat_words(chans, cur_cat)}.")
+
+    others = _ch_siblings(chans, group, tgt_cat, skip=ch.id)
+    n = len(others)
+    if p.get("position") is not None:
+        idx = int(p["position"])
+        if not 0 <= idx <= n:
+            raise ActionError(f"position has to be 0 to {n} for {_cn(ch)} in "
+                              f"{_cat_words(chans, tgt_cat)} (0 is the top, {n} the "
+                              f"bottom), and {idx} is outside that.")
+    elif p.get("to_top"):
+        idx = 0
+    elif p.get("before_id") is not None:
+        idx = others.index(anchor)
+    elif p.get("after_id") is not None:
+        idx = others.index(anchor) + 1
+    else:
+        idx = n                                  # to_bottom, or a category alone
+    new_order = others[:idx] + [ch] + others[idx:]
+    cur_order = _ch_siblings(chans, group, cur_cat)
+    cur_idx = cur_order.index(ch)
+    before = _ch_place(chans, cur_order, cur_idx, cur_cat)
+    planned = _ch_place(chans, new_order, idx, tgt_cat)
+    if not moved_cat and idx == cur_idx:
+        raise ActionError(f"{_cn(ch)} is already there ({_cat_words(chans, cur_cat)}, "
+                          f"position {cur_idx}, {before['between']}) - nothing to change.")
+    payload = []
+    for i, c in enumerate(new_order):
+        item = {"id": c.id, "position": i}
+        if c.id == ch.id and moved_cat:
+            item.update(parent_id=tgt_cat, lock_permissions=sync)
+        payload.append(item)
+
+    if ctx.dry_run:
+        words = _GROUP_WORDS[group]
+        lines = [f"Now: {_cat_words(chans, cur_cat)}, position {cur_idx} of "
+                 f"0-{len(cur_order) - 1} among its {words}, {before['between']}.",
+                 f"After: {_cat_words(chans, tgt_cat)}, position {idx} of "
+                 f"0-{len(new_order) - 1}, {planned['between']}."]
+        if not places:
+            lines.append("No place was named, so it goes to the bottom there.")
+        if group != "category":
+            other = "voice" if group == "text" else "text"
+            if _ch_siblings(chans, other, tgt_cat):
+                lines.append(f"Voice channels always sit below text channels there, so "
+                             f"this counts only the {words}.")
+        if moved_cat:
+            cat_name = planned["category"] or f"category {tgt_cat}"
+            lines.append(f"sync_permissions is on: it takes {cat_name}'s permissions, "
+                         "replacing its own." if sync else
+                         "Its own permissions stay as they are (sync_permissions is off).")
+        lines += [f"The other {words} there shift to make room; nothing else changes.",
+                  "Its current place is saved first, so it can be put back."]
+        what = f"the category {ch.name}" if group == "category" else _cn(ch)
+        return {"summary": f"Move {what} in **{g.name}**", "detail": "\n".join(lines)}
+
+    saved = _settings_keep(
+        ctx, g, f"channel-{ch.id}",
+        {"channel_id": ch.id, "name": ch.name, "kind": group,
+         "before": {**before, "raw_position": ch.position}, "planned": planned,
+         "payload": payload,
+         # Feed this back to move_channel (with guild_id) to undo.
+         "restore": {"channel_id": ch.id, "position": cur_idx,
+                     "category_id": str(cur_cat) if cur_cat else "none"}},
+        f"{_cn(ch)}'s current place")
+    # Straight to discord.py's own route for a reorder (see the note above).
+    await _settings_call(
+        g._state.http.bulk_channel_update(g.id, payload, reason=p.get("reason") or VIA),
+        "channel move", "list_channels")
+    out = {"status": "channel_moved", "guild": g.name, "channel": ch.name,
+           "before": before, "backup": saved}
+    try:
+        fresh = list(await asyncio.wait_for(g.fetch_channels(), LOOK_TIMEOUT))
+    except Exception as e:  # noqa: BLE001 - the move itself went through
+        out["warning"] = (f"Discord took the move, but reading the channel list back "
+                          f"failed ({type(e).__name__}) - check list_channels.")
+        return out
+    me_now = next((c for c in fresh if c.id == ch.id), None)
+    if me_now is None:
+        out["warning"] = (f"Discord took the move, but {_cn(ch)} isn't in the channel list "
+                          "it reads back - check list_channels.")
+        return out
+    now_cat = getattr(me_now, "category_id", None)
+    read = _ch_siblings(fresh, group, now_cat)
+    ridx = [c.id for c in read].index(ch.id)
+    out["after"] = _ch_place(fresh, read, ridx, now_cat)
+    if (now_cat, [c.id for c in read]) != (tgt_cat, [c.id for c in new_order]):
+        out["warning"] = (f"Discord's order afterwards isn't the planned one: {_cn(ch)} "
+                          f"reads {_cat_words(fresh, now_cat)}, position {ridx}, "
+                          f"{out['after']['between']} - check list_channels.")
+    return out
+
+
+# --- role order ---------------------------------------------------------------
+#
+# The hierarchy rule, said before anything changes: a bot can only move roles
+# BELOW its own top role, never to or above it, and never its own top role
+# (Discord's rule); @everyone never moves (Discord's too); and a managed role -
+# a bot's or an integration's - is not this bot's to move (Stage 8's rule; one
+# CAN be shifted a place when another role is moved past it, as in the
+# Server Settings drag). Each case is its own sentence, so the refusal says
+# which one. Positions count from
+# @everyone at 0, in discord.py's hierarchy order (Guild.roles, lowest first;
+# ties broken by id) - the same numbers list_roles shows when Discord's are
+# contiguous. Only the roles between the old place and the new one are sent,
+# each with its new place (discord.py's own Role._move does the same span), so
+# nothing at or above this bot's top role is ever in the request.
+
+
+def _role_between(order, i):
+    """Words for where order[i] sits; order is lowest first, the list shows it
+    highest first."""
+    under = order[i - 1] if i > 0 else None
+    over = order[i + 1] if i + 1 < len(order) else None
+    if over is None:
+        return f"at the top, above '{under.name}'"
+    if under is not None and under.is_default():
+        return f"just above @everyone, below '{over.name}'"
+    return f"below '{over.name}' and above '{under.name}'"
+
+
+def _role_place(order, i):
+    under = order[i - 1] if i > 0 else None
+    over = order[i + 1] if i + 1 < len(order) else None
+    return {"position": i, "between": _role_between(order, i),
+            "above": under.name if under is not None else None,
+            "below": over.name if over is not None else None}
+
+
+@action("move_role", identity.MANAGE,
+        "Move a role up or down a server's role list (a higher role shows its color "
+        "first and can manage the roles under it): to a position (1 = just above "
+        "@everyone; list_roles shows each role's), directly above_id / below_id "
+        "another role, or to_top (as high as this bot can place it: right below its "
+        "own top role) / to_bottom (just above @everyone). This bot can't move a role "
+        "to or above its own top role, nor its own top role, a managed (bot or "
+        "integration) role, a role above its own, or @everyone - each refused before "
+        "anything changes, saying which. The current order is saved first and the "
+        "result is the order Discord reads afterwards. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "role_id": {"type": "int", "required": True, "desc": "The role to move "
+                                                              "(list_roles)"},
+         "position": {"type": "int", "desc": "New place, counted from @everyone at 0 "
+                                             "(1 = the lowest a role can go)"},
+         "above_id": {"type": "int", "desc": "Put it directly above this role"},
+         "below_id": {"type": "int", "desc": "Put it directly below this role"},
+         "to_top": {"type": "bool", "desc": "As high as this bot can: right below its own "
+                                            "top role"},
+         "to_bottom": {"type": "bool", "desc": "Just above @everyone"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _move_role(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    role = g.get_role(int(p["role_id"]))
+    if role is None:
+        raise ActionError(f"there's no role {p['role_id']} in {g.name} - list_roles has "
+                          "the ids.")
+    if not g.me.guild_permissions.manage_roles:
+        raise ActionError(f"this bot lacks Manage Roles in {g.name}, so it can't move "
+                          "roles there - give its role Manage Roles (or Administrator) "
+                          "first.")
+    places = [k for k in ("position", "above_id", "below_id") if p.get(k) is not None] \
+        + [k for k in ("to_top", "to_bottom") if p.get(k)]
+    if len(places) > 1:
+        raise ActionError("give one place - position, above_id, below_id, to_top or "
+                          f"to_bottom - not {' and '.join(places)}.")
+    if not places:
+        raise ActionError("nothing to change - say where: position, above_id, below_id, "
+                          "to_top or to_bottom.")
+
+    order = list(g.roles)                    # lowest first, @everyone at 0
+    top = g.me.top_role
+    if role.is_default():
+        raise ActionError("@everyone always sits at the bottom of the role list; Discord "
+                          "doesn't let it move.")
+    if role.id == top.id:
+        raise ActionError(f"'{role.name}' is this bot's own top role, and this bot can't "
+                          "move its own top role - it can only move roles below it.")
+    if role.managed:
+        raise ActionError(f"'{role.name}' is a managed role - it belongs to a bot or an "
+                          "integration, so this bot leaves its place alone; move it by "
+                          "hand in Server Settings > Roles if it has to go.")
+    cur_idx = order.index(role)
+    if cur_idx > order.index(top):
+        raise ActionError(f"'{role.name}' sits above this bot's top role '{top.name}', so "
+                          "this bot can't move it.")
+    others = [r for r in order if r.id != role.id]
+    highest = others.index(top)              # landing here puts it right below `top`
+
+    def too_high():
+        return ActionError(
+            f"this bot can't move a role to or above its own top role '{top.name}' - the "
+            f"highest it can put '{role.name}' is position {highest}, right below "
+            f"'{top.name}'.")
+
+    def other_role(key):
+        r = g.get_role(int(p[key]))
+        if r is None:
+            raise ActionError(f"{key}: there's no role {p[key]} in {g.name} - list_roles "
+                              "has the ids.")
+        if r.id == role.id:
+            raise ActionError(f"{key}: a role can't go above or below itself.")
+        return r
+
+    if p.get("position") is not None:
+        idx = int(p["position"])
+        if idx < 1:
+            raise ActionError("position 0 is @everyone's; the lowest a role can go is 1.")
+        if idx > highest:
+            raise too_high()
+    elif p.get("above_id") is not None:
+        idx = others.index(other_role("above_id")) + 1
+        if idx > highest:
+            raise too_high()
+    elif p.get("below_id") is not None:
+        anchor = other_role("below_id")
+        if anchor.is_default():
+            raise ActionError("below_id: nothing can go below @everyone - it's always the "
+                              "bottom role.")
+        idx = others.index(anchor)
+        if idx > highest:
+            raise too_high()
+    elif p.get("to_top"):
+        idx = highest
+    else:
+        idx = 1
+    before = _role_place(order, cur_idx)
+    if idx == cur_idx:
+        raise ActionError(f"'{role.name}' is already there (position {cur_idx}, "
+                          f"{before['between']}) - nothing to change.")
+    new_order = others[:idx] + [role] + others[idx:]
+    lo, hi = min(cur_idx, idx), max(cur_idx, idx)
+    span = [(r, i) for i, r in enumerate(new_order) if lo <= i <= hi]
+    planned = _role_place(new_order, idx)
+
+    if ctx.dry_run:
+        shifted = [r.name for r, _ in span if r.id != role.id]
+        lines = [f"Now: position {cur_idx}, {before['between']}.",
+                 f"After: position {idx}, {planned['between']}.",
+                 f"{len(shifted)} other role(s) move one place "
+                 f"{'down' if idx > cur_idx else 'up'} to make room: "
+                 f"{', '.join(repr(n) for n in shifted)}. Nothing else changes.",
+                 f"This bot's top role is '{top.name}' (position {order.index(top)}); "
+                 "nothing goes to or above it.",
+                 "The current order is saved first, so it can be put back."]
+        return {"summary": f"Move the role **{role.name}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    payload = [{"id": r.id, "position": i} for r, i in span]
+    saved = _settings_keep(
+        ctx, g, f"role-{role.id}",
+        {"role_id": role.id, "name": role.name,
+         "before": {**before, "raw_position": role.position},
+         "order_before": [[r.id, r.name, r.position] for r in order],
+         "planned": planned, "payload": payload,
+         # Feed this back to move_role (with guild_id) to undo.
+         "restore": {"role_id": role.id, "position": cur_idx}},
+        f"the role order around '{role.name}'")
+    roles = await _settings_call(
+        g.edit_role_positions(positions={r: i for r, i in span},
+                              reason=p.get("reason") or VIA),
+        "role move", "list_roles")
+    # Discord answers with every role; that answer, in hierarchy order, is the read.
+    read = sorted(roles)
+    ids = [r.id for r in read]
+    out = {"status": "role_moved", "guild": g.name, "role": role.name, "before": before,
+           "backup": saved}
+    if role.id not in ids:
+        out["warning"] = (f"Discord took the move, but '{role.name}' isn't in the role "
+                          "list it answered with - check list_roles.")
+        return out
+    ridx = ids.index(role.id)
+    out["after"] = _role_place(read, ridx)
+    if ids != [r.id for r in new_order]:
+        out["warning"] = (f"Discord's order afterwards isn't the planned one: "
+                          f"'{role.name}' reads position {ridx}, "
+                          f"{out['after']['between']} - check list_roles.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
@@ -4233,12 +5149,65 @@ async def _cancel_event(ctx, p):
 # Dispatch
 # ==========================================================================
 
+# A `flags` parameter: a map of names to true/false, nothing else (INTENT 60,
+# Stage 8 C - edit_server_settings's system_flags). Its values are booleans by
+# construction, so no free text can ride in one past the privacy screen
+# (policy.screen_params screens string values only); the handler still checks
+# every NAME against its own table. Three spellings reach it: a JSON object from
+# the model's tool call, the same object as text from the CLI, and the
+# shell-friendly `name=true,name=false` (a comma, semicolon or space between).
+_FLAG_TRUE = ("1", "true", "yes", "y", "on")
+_FLAG_FALSE = ("0", "false", "no", "n", "off")
+
+
+def _flags_example(name):
+    return (f"{name} must be a map of names to true/false, like "
+            f'{{"setup_tips": false}} or setup_tips=false,join_notifications=true')
+
+
+def _flag_bool(name, key, value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in _FLAG_TRUE + _FLAG_FALSE:
+        return value.strip().lower() in _FLAG_TRUE
+    raise ActionError(f"{name}: {key} has to be true or false, got {value!r}")
+
+
+def _coerce_flags(name, value):
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{"):
+            try:
+                value = json.loads(text)
+            except ValueError:
+                raise ActionError(_flags_example(name))
+        else:
+            pairs = {}
+            for part in re.split(r"[,;\s]+", text):
+                if not part:
+                    continue
+                key, sep, val = part.partition("=")
+                if not sep:
+                    key, sep, val = part.partition(":")
+                if not sep or not key.strip():
+                    raise ActionError(_flags_example(name))
+                pairs[key.strip()] = val.strip()
+            value = pairs
+    if not isinstance(value, dict):
+        raise ActionError(_flags_example(name))
+    return {str(k).strip(): _flag_bool(name, k, v) for k, v in value.items()}
+
+
 def _coerce(name, spec, value):
     """Coerce one parameter, with an error that names the parameter."""
     t = spec.get("type", "str")
     try:
         if t == "int":
             return int(value)
+        if t == "flags":
+            return _coerce_flags(name, value)
         if t == "bool":
             if isinstance(value, str):
                 return value.strip().lower() in ("1", "true", "yes", "y", "on")
