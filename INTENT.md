@@ -1058,7 +1058,10 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   public-updates channels), `move_channel` (position and category), `move_role` (position). *Why:*
   today he edits name, icon, banner, splash, description and topic only. All tier 2 `outward` +
   `always_confirm`; a settings change records what it replaces and reports it (decision 52's "exact
-  inverse is made true"). `move_role` never moves a role above the bot's own top role, and says so.
+  inverse is made true"). `move_role` never moves a role above the bot's own top role, and says so. It also refuses to
+  move a MANAGED role (a bot's or an integration's) - Stage 8's own rule, not Discord's, which lets an admin
+  drag one. The Stage C hand flagged it as his call; kept on his word 2026-10-31 08:23 local, Caz: *"Keep the
+  refusal"* (the session's reason, his pick: a managed role is another bot's reach; the UI is still there).
 - **D. Moderation set** - `read_audit_log`, `list_bans`, `list_invites`, `revoke_invite`,
   `prune_members`, per-member channel overwrites (`set_channel_permissions` gains `user_id`; `role_id`
   stays), AutoMod: `list_automod_rules`, `create_automod_rule`, `edit_automod_rule`,
