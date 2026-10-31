@@ -533,6 +533,178 @@ check("an empty server is an empty list", go(cl, "list_events", {"guild_id": GUI
       ["events"], [])
 
 
+# ================================================================ create_event
+section("create_event - registered like edit_server_look")
+registered("create_event", 2, True, True, True)
+
+
+def naive(dt):
+    """`dt` as a person in Detroit would type it: no zone."""
+    return dt.astimezone(eventtime.DETROIT).strftime("%Y-%m-%d %H:%M")
+
+
+# 20:00 Detroit time two days out: never in a DST gap or repeated hour, so the
+# naive text and the instant it stands for are one and the same.
+_d = (NOW + timedelta(days=2)).astimezone(eventtime.DETROIT)
+START = _d.replace(hour=20, minute=0, second=0, microsecond=0, fold=0).astimezone(timezone.utc)
+VEV = {"guild_id": GUILD, "name": "stage-b-test", "channel_id": VOICE,
+       "start": naive(START)}
+XEV = {"guild_id": GUILD, "name": "Movie night", "location": "Doom's place",
+       "start": naive(START), "end": naive(START + timedelta(hours=3))}
+
+section("create_event - previewed first, nothing touched")
+cl, g = fresh()
+result, preview = go(cl, "create_event", {**VEV, "description": "Among Us, 8 pm"})
+check("the first call is a preview, Discord asked nothing but the open count",
+      (result, g._state.http.writes, g._state.http.reads), (None, [], [("list", False)]))
+check("...the summary names the event and the server",
+      "stage-b-test" in preview["summary"] and "Testing Server" in preview["summary"], True)
+d = preview["detail"]
+check("...kind and channel", "Voice event in #Game Night" in d, True)
+check("...the start in Detroit time AND in UTC, the pair agreeing",
+      f"Starts: {eventtime.line(START)}" in d and " UTC" in d
+      and eventtime.local(START) in d, True)
+check("...a naive start says it was read as Detroit time",
+      "read as Detroit time (America/Detroit)" in d, True)
+check("...no end, the description, no cover, the open slots",
+      all(w in d for w in ("Ends: not set", "'Among Us, 8 pm'", "No cover picture",
+                           "Open events: 0 of 100; 99 left")), True)
+check("a stage channel makes a stage event", "Stage event in #Town Hall" in go(
+    fresh()[0], "create_event", {**VEV, "channel_id": STAGE})[1]["detail"], True)
+cl, g = fresh(atts=[_Att(1, "cover.png", COVER)])
+_, preview = go(cl, "create_event", {**XEV, "image": "attachment", "message_id": MSG})
+check("an external event: its location, end, and the cover's facts",
+      all(w in preview["detail"] for w in ("External event at \"Doom's place\"",
+                                           f"Ends: {eventtime.line(START + timedelta(hours=3))}",
+                                           "Cover picture: PNG, 800x320", "cover.png", "#")),
+      True)
+check("...the attachment came from the channel this request came from",
+      g._state.http.writes, [])
+
+section("create_event - confirmed: discord.py's own create, the right payload")
+cl, g = fresh()
+result, _ = go(cl, "create_event", {**VEV, "description": "bring snacks"}, force=True)
+verb, _, payload, reason = g._state.http.writes[0]
+check("one create, guild-only, a voice event in the voice channel",
+      (len(g._state.http.writes), verb, payload["privacy_level"], payload["entity_type"],
+       payload["channel_id"]), (1, "create", 2, 2, VOICE))
+check("...the start sent tz-aware, the same instant the preview showed",
+      datetime.fromisoformat(payload["scheduled_start_time"]), START)
+check("...no end, no location, the description and the audit reason",
+      ("scheduled_end_time" in payload, "entity_metadata" in payload,
+       payload["description"], reason), (False, False, "bring snacks", capabilities.VIA))
+check("the result is the event Discord made, in both clocks",
+      (result["status"], result["event"]["name"], result["event"]["status"],
+       result["event"]["start"], result["open_left"]),
+      ("event_created", "stage-b-test", "scheduled", eventtime.both(START), 99))
+cl, g = fresh()
+go(cl, "create_event", {**XEV, "image": "asset:benham-discord-avatar.png",
+                        "reason": "game night"}, force=True)
+_, _, payload, reason = g._state.http.writes[0]
+check("external: location in the metadata, the end, no channel",
+      (payload["entity_type"], payload["entity_metadata"], "channel_id" in payload,
+       datetime.fromisoformat(payload["scheduled_end_time"])),
+      (3, {"location": "Doom's place"}, False, START + timedelta(hours=3)))
+check("...the cover as a data URI of the asset's own bytes, the typed reason",
+      (payload["image"].startswith("data:image/png;base64,"), reason), (True, "game night"))
+cl, g = fresh()
+go(cl, "create_event", {**VEV, "start": START.astimezone(timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%MZ")}, force=True)
+check("a Z start reaches Discord as that instant",
+      datetime.fromisoformat(g._state.http.writes[0][2]["scheduled_start_time"]), START)
+
+section("create_event - refused BEFORE anything changes, at the preview too")
+
+
+def create_refused(params, force=True, base=VEV, **gkw):
+    cl, g = fresh(**gkw)
+    msg = refusal(cl, "create_event", {**base, **params}, force=force)
+    return msg, g._state.http.writes
+
+
+past = naive(NOW - timedelta(hours=1))
+for force in (False, True):
+    msg, writes = create_refused({"start": past}, force=force)
+    check(f"a start in the past ({'confirm' if force else 'preview'})",
+          "already in the past" in (msg or "") and writes == [], True)
+msg, writes = create_refused({"end": naive(START - timedelta(minutes=30))})
+check("an end before the start", "isn't after the start" in (msg or "") and writes == [],
+      True)
+msg, writes = create_refused({"end": naive(START)})
+check("an end equal to the start", "isn't after the start" in (msg or ""), True)
+msg, writes = create_refused({"end": None}, base=XEV, force=False)
+check("an external event without an end", "needs an end time" in (msg or "")
+      and writes == [], True)
+msg, writes = create_refused({"location": None, "kind": "external"}, base=XEV)
+check("an external event without a location", "needs a location" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": None})
+check("no channel and no location", "needs a place" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": None, "kind": "voice"})
+check("kind=voice without a channel", "needs channel_id" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": CHAN})
+check("a text channel", "#asd is a text channel" in (msg or "") and writes == [], True)
+msg, writes = create_refused({"kind": "stage"})
+check("kind=stage in a voice channel", "say kind=voice" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": LOCKED})
+check("a channel the bot can't see or join",
+      "lacks View Channel, Connect in #Secret" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": 4242})
+check("a channel that isn't in the server", "no channel 4242" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": VOICE}, base=XEV)
+check("a channel and a location both", "not both" in (msg or "") and writes == [], True)
+msg, writes = create_refused({"location": None, "kind": "external", "channel_id": VOICE},
+                             base=XEV)
+check("kind=external with a channel", "drop channel_id" in (msg or ""), True)
+msg, writes = create_refused({"channel_id": None, "kind": "voice", "location": "the park"})
+check("kind=voice with a location", "only for an external event" in (msg or ""), True)
+msg, writes = create_refused({"kind": "party"})
+check("an unknown kind", "voice, stage or external" in (msg or ""), True)
+for field, value, words in (("name", "", "1 to 100"), ("name", "n" * 101, "1 to 100"),
+                            ("description", "d" * 1001, "at most 1000"),
+                            ("start", "2026-10-31", "can't read"),
+                            ("start", "2027-03-14 02:30", "never happens")):
+    msg, writes = create_refused({field: value})
+    check(f"{field} {value[:12]!r}...", words in (msg or "") and writes == [], True)
+msg, writes = create_refused({"location": "x" * 101}, base=XEV)
+check("a location over 100 characters", "1 to 100" in (msg or ""), True)
+msg, writes = create_refused({}, manage=False, create=False)
+check("no Manage or Create Events", "lacks Manage Events" in (msg or "")
+      and writes == [], True)
+check("...Create Events alone is enough to make one", create_refused({}, manage=False)[0],
+      None)
+msg, writes = create_refused({"image": "https://127.0.0.1/c.png"})
+check("a cover link to a private address", "private or local" in (msg or ""), True)
+msg, writes = create_refused({"image": "attachment"})
+check("an attachment cover with no message named asks for message_id",
+      "message_id" in (msg or ""), True)
+cl, g = fresh()
+g.add(*[ev_data(f"e{i}", status=1 + i % 2) for i in range(100)])
+m = refusal(cl, "create_event", VEV, force=False)
+check("Discord's cap: 100 open events refuses the 101st",
+      "already has 100 open events" in (m or "") and g._state.http.writes == [], True)
+cl, g = fresh()
+g.add(*[ev_data(f"e{i}", status=3 + i % 2) for i in range(100)] + [ev_data("one")])
+check("...closed events don't count", refusal(cl, "create_event", VEV, force=False), None)
+
+section("create_event - Discord's own refusal is one sentence")
+cl, g = fresh()
+g._state.http.raise_on_write = discord.HTTPException(
+    _Resp(400), {"code": 50035, "message": "Invalid Form Body",
+                 "errors": {"name": {"_errors": [{"code": "BASE_TYPE_BAD_LENGTH",
+                                                  "message": "Must be between 1 and 100 "
+                                                             "in length."}]}}})
+m = refusal(cl, "create_event", VEV)
+check("one line, Discord's words, ends 'Nothing was changed.'",
+      "\n" not in (m or "") and "Must be between 1 and 100" in (m or "")
+      and (m or "").endswith("Nothing was changed.") and ".." not in (m or ""), True)
+g._state.http.raise_on_write = discord.HTTPException(_Resp(429), "You are being rate limited.")
+check("a rate limit is the rate-limit sentence", "rate-limiting" in (refusal(
+    cl, "create_event", VEV) or ""), True)
+g._state.http.raise_on_write = discord.Forbidden(_Resp(403), "Missing Permissions")
+check("Forbidden is run()'s permission sentence",
+      "lacks the permission" in (refusal(cl, "create_event", VEV) or ""), True)
+
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")
