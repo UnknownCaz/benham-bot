@@ -2955,8 +2955,8 @@ async def _overwrite_read(g, ch, target, what):
         fresh = await asyncio.wait_for(g.fetch_channel(ch.id), LOOK_TIMEOUT)
     except Exception as e:  # noqa: BLE001 - every failure is the same answer
         raise ActionError(f"{what} went to Discord, but I couldn't read #{ch.name}'s "
-                          f"overwrite back ({type(e).__name__}) - check channel_info "
-                          "before changing anything else.")
+                          f"overwrite back ({type(e).__name__}) - check #{ch.name}'s "
+                          "permissions in Discord before changing anything else.")
     return _overwrite_state(fresh.overwrites_for(target))
 
 
@@ -3000,7 +3000,8 @@ async def _member_overwrite(ctx, ch, g, p):
                            f"({g.name}) - nothing to clear.")}
         if now["allow"] or now["deny"]:
             out["warning"] = (f"Discord still reads an overwrite for {who} in "
-                              f"#{ch.name}: {_ow_words(now)} - check channel_info.")
+                              f"#{ch.name}: {_ow_words(now)} - check its "
+                              "permissions in Discord.")
         return out
 
     allow, allow_keys = _perm_list(p.get("allow"), "allow")
@@ -3041,7 +3042,7 @@ async def _member_overwrite(ctx, ch, g, p):
             raise ActionError(f"Discord took the allow for {who} in #{ch.name}, but the "
                               f"overwrite it reads back doesn't allow "
                               f"{', '.join(missing)}, so the deny was NOT applied - "
-                              "check channel_info.")
+                              f"check #{ch.name}'s permissions in Discord.")
     if deny:
         ow = discord.PermissionOverwrite(**{k: True for k in state["allow"]},
                                          **{k: False for k in state["deny"]})
@@ -3076,7 +3077,8 @@ async def _member_overwrite(ctx, ch, g, p):
            + [n for n in deny if _perm_key(n) not in state["deny"]])
     if off:
         out["warning"] = (f"Discord's overwrite afterwards doesn't match the request for "
-                          f"{', '.join(off)} - check channel_info.")
+                          f"{', '.join(off)} - check #{ch.name}'s permissions in "
+                          "Discord.")
     return out
 
 

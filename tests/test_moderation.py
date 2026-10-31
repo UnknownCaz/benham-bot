@@ -1008,7 +1008,8 @@ m = refusal(cl, "set_channel_permissions", {"channel_id": BETA, "user_id": ALICE
 check("THE TRAP: an allow that doesn't read back stops it - the deny is never sent",
       (m, [v for v, _ in http.calls]),
       ("Discord took the allow for Alice in #benham-beta, but the overwrite it reads back "
-       "doesn't allow view_channel, so the deny was NOT applied - check channel_info.",
+       "doesn't allow view_channel, so the deny was NOT applied - check #benham-beta's "
+       "permissions in Discord.",
        ["get_member", "edit_channel_permissions", "get_channel"]))
 cl, g, http = fresh()
 _n = []
