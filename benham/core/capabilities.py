@@ -5749,6 +5749,151 @@ async def _create_automod_rule(ctx, p):
     return out
 
 
+def _am_find(g, rules, raw):
+    """The rule `raw` names: its id, or a name no other rule shares."""
+    text = " ".join(str(raw).split())
+    if text.isdigit():
+        hit = next((r for r in rules if r.id == int(text)), None)
+        if hit is not None:
+            return hit
+    named = [r for r in rules if r.name.strip().lower() == text.lower()]
+    if len(named) == 1:
+        return named[0]
+    if len(named) > 1:
+        raise ActionError(f"{len(named)} AutoMod rules in {g.name} are named {text!r} - "
+                          "give the rule's id instead (list_automod_rules has them).")
+    raise ActionError(f"there's no AutoMod rule {text!r} in {g.name} - "
+                      "list_automod_rules has the ids and names.")
+
+
+_AM_TRIGGER_KEYS = ("keywords", "regex_patterns", "allow_list", "presets", "mention_limit")
+_AM_ACTION_KEYS = ("block", "custom_message", "alert", "timeout")
+# plan key -> the parameter that puts it back
+_AM_RESTORE = {key: param for param, key in _AM_PARAM_KEYS.items()}
+
+
+def _am_restore_value(key, value):
+    if key == "alert":
+        return str(value) if value else "none"
+    return value
+
+
+@action("edit_automod_rule", identity.MANAGE,
+        "Change one of a server's AutoMod rules: its name, what it matches (keywords, "
+        "regex patterns, allow list, word-list presets or mention limit - a list given "
+        "REPLACES the rule's list), its actions (block_message, custom_message, an "
+        "alert channel, a timeout), its exempt roles and channels, or whether it's on. "
+        "Its trigger can't change - make a new rule for that. Only the fields named "
+        "change; the preview shows each old -> new, the rule is saved first so it can "
+        "be put back, and the result is the rule Discord reads afterwards. Refused "
+        "before anything is sent if the change doesn't fit the rule or changes nothing. "
+        "Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "rule_id": {"type": "str", "required": True,
+                     "desc": "The rule's id (list_automod_rules), or its name if no other "
+                             "rule shares it"},
+         "name": {"type": "str", "desc": "A new name"},
+         **{k: dict(v) for k, v in _AM_PARAMS.items()},
+         "keywords": {"type": "list",
+                      "desc": "REPLACES the rule's keywords (keyword and member_profile "
+                              "rules; up to 1000, 60 characters each)"},
+         "regex_patterns": {"type": "list",
+                            "desc": "REPLACES the rule's regex patterns (up to 10, 260 "
+                                    "characters each)"},
+         "allow_list": {"type": "list",
+                        "desc": "REPLACES the rule's allow list (up to 100; 1000 on a "
+                                "keyword_preset rule)"},
+         "presets": {"type": "list",
+                     "desc": "REPLACES the word lists of a keyword_preset rule: "
+                             "profanity, sexual_content, slurs"},
+         "custom_message": {"type": "str",
+                            "desc": "The note shown to a blocked sender; empty or none "
+                                    "drops it"},
+         "alert_channel_id": {"type": "str",
+                              "desc": "A text channel for alerts; 0 or none drops the "
+                                      "alert"},
+         "timeout_seconds": {"type": "int",
+                             "desc": "keyword and mention_spam rules: 1-2419200 (28 "
+                                     "days); 0 drops the timeout"},
+         "exempt_role_ids": {"type": "list", "desc": "REPLACES the exempt roles (up to "
+                                                     "20; [] for none)"},
+         "exempt_channel_ids": {"type": "list", "desc": "REPLACES the exempt channels (up "
+                                                        "to 50; [] for none)"},
+         "enabled": {"type": "bool", "desc": "Turn the rule on or off"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_automod_rule(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _am_can(g, "change AutoMod rules")
+    if not any(p.get(param) is not None for param in _AM_PARAM_KEYS):
+        raise ActionError("nothing to change - pass name, keywords, regex_patterns, "
+                          "allow_list, presets, mention_limit, block_message, "
+                          "custom_message, alert_channel_id, timeout_seconds, "
+                          "exempt_role_ids, exempt_channel_ids or enabled.")
+    rules = await _am_rules(g)
+    rule = _am_find(g, rules, p["rule_id"])
+    kind = _am_kind(rule)
+    if kind not in _AM_TRIGGERS:
+        raise ActionError(f"'{rule.name}' is a {kind} rule, which this bot doesn't edit - "
+                          "change it in Server Settings > AutoMod.")
+    old = _am_vals(rule)
+    v, given = _am_apply(old, p)
+    changed = [k for k in _AM_ORDER if v[k] != old[k]]
+    if not changed:
+        raise ActionError(f"nothing would change - the AutoMod rule '{rule.name}' already "
+                          "reads that way.")
+    _am_check(ctx, g, v, rules, rule=rule)
+    _am_screen(v, given)
+    if ctx.dry_run:
+        lines = []
+        for k in changed:
+            line = f"{_AM_LABELS[k]}: {_am_words(g, old, k)} -> {_am_words(g, v, k)}"
+            if k in _AM_LISTS + ("presets", "exempt_roles", "exempt_channels"):
+                line += " (the list is replaced)"
+            lines.append(line)
+        lines.append("Nothing else changes.")
+        if "enabled" in changed and not v["enabled"]:
+            lines.append("Turned off, it stops acting at once.")
+        lines.append("The rule as it is now is saved first, so this can be put back.")
+        return {"summary": f"Change the AutoMod rule **{rule.name}** in **{g.name}**: "
+                           + ", ".join(_AM_LABELS[k] for k in changed),
+                "detail": "\n".join(lines)}
+    saved = _settings_keep(
+        ctx, g, f"automod-{rule.id}",
+        {"rule_id": rule.id, "rule": rule.to_dict(), "view": automod_dict(g, rule),
+         "changed": [_AM_RESTORE[k] for k in changed],
+         # Feed this back to edit_automod_rule (with guild_id) to undo.
+         "restore": {"rule_id": str(rule.id),
+                     **{_AM_RESTORE[k]: _am_restore_value(k, old[k]) for k in changed}}},
+        f"the AutoMod rule '{rule.name}'")
+    kw = {}
+    if "name" in changed:
+        kw["name"] = v["name"]
+    if "enabled" in changed:
+        kw["enabled"] = v["enabled"]
+    trig, actions, _ = _am_build(v)
+    if any(k in changed for k in _AM_TRIGGER_KEYS):
+        kw["trigger"] = trig
+    if any(k in changed for k in _AM_ACTION_KEYS):
+        kw["actions"] = actions
+    ex = _am_exempts(v)
+    for k in ("exempt_roles", "exempt_channels"):
+        if k in changed:
+            kw[k] = ex[k]
+    after = await _settings_call(rule.edit(reason=p.get("reason") or VIA, **kw),
+                                 "AutoMod rule edit", "list_automod_rules")
+    read, warn = await _am_read_back(g, rule.id, after)
+    out = {"status": "automod_rule_edited", "guild": g.name,
+           "changed": [_AM_LABELS[k] for k in changed], "rule": automod_dict(g, read),
+           "backup": saved}
+    off = _am_off(_am_vals(read), v, changed)
+    if warn:
+        out["warning"] = warn
+    elif off:
+        out["warning"] = ("Discord took the edit, but the rule doesn't read back as asked: "
+                          + ", ".join(off) + " - check list_automod_rules.")
+    return out
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},

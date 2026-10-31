@@ -1343,6 +1343,178 @@ check("a read-back that fails after the create: Discord's answer shown, and said
       ("stage-d-test", True))
 
 
+# =========================================================== edit_automod_rule
+section("edit_automod_rule - tier 2, outward, always confirmed; old -> new, backed up")
+registered("edit_automod_rule", 2, True, True, True)
+STAGE_RULE = am_rule(7200, "stage-d-test", 1, {"keyword_filter": ["stage-d-blocked-xyz"],
+                                               "regex_patterns": [], "allow_list": []},
+                     [{"type": 1, "metadata": {"custom_message": "stage D test"}}])
+
+
+def staged():
+    cl, g, http = ruled()
+    http.rules.append(copy.deepcopy(STAGE_RULE))
+    return cl, g, http
+
+
+EDIT = {"guild_id": GUILD, "rule_id": "stage-d-test",
+        "keywords": ["stage-d-blocked-xyz", "stage-d-second"], "enabled": False}
+cl, g, http = staged()
+before = backups()
+result, preview = go(cl, "edit_automod_rule", EDIT)
+check("the first call is a preview: Discord only read, nothing saved",
+      (result, http.verbs(), backups() == before),
+      (None, ["get_auto_moderation_rules"], True))
+check("...the summary names the rule and what changes",
+      preview["summary"],
+      "Change the AutoMod rule **stage-d-test** in **Testing Server**: Enabled, Keywords")
+check("...each changed field old -> new, a list said to be replaced, nothing else",
+      preview["detail"].splitlines(),
+      ["Enabled: on -> off",
+       'Keywords: (1) "stage-d-blocked-xyz" -> (2) "stage-d-blocked-xyz", '
+       '"stage-d-second" (the list is replaced)',
+       "Nothing else changes.", "Turned off, it stops acting at once.",
+       "The rule as it is now is saved first, so this can be put back."])
+cl, g, http = staged()
+_, preview = go(cl, "edit_automod_rule", {"guild_id": GUILD, "rule_id": "7200",
+                                          "custom_message": "none",
+                                          "alert_channel_id": str(WELCOME),
+                                          "timeout_seconds": 300,
+                                          "exempt_role_ids": [MODS]})
+check("by id; actions and exempts in words",
+      preview["detail"].splitlines()[:4],
+      ['Note to the sender: "stage D test" -> none', "Alert channel: none -> #welcome",
+       "Timeout: none -> 5m", "Exempt roles: none -> Mods (the list is replaced)"])
+
+cl, g, http = staged()
+before = backups()
+result, _ = go(cl, "edit_automod_rule", {**EDIT, "reason": "stage d"}, force=True)
+check("confirmed: rules read, the edit, the rule fetched back",
+      http.verbs(), ["get_auto_moderation_rules", "edit_auto_moderation_rule",
+                     "get_auto_moderation_rule"])
+check("...only the changed parts went to Discord, the whole new keyword list among them",
+      http.calls[1][1], {"trigger_metadata": {"keyword_filter": ["stage-d-blocked-xyz",
+                                                                 "stage-d-second"],
+                                              "regex_patterns": [], "allow_list": []},
+                         "enabled": False, "reason": "stage d"})
+check("...the result is the rule Discord reads, and what changed",
+      (result["status"], result["changed"], result["rule"]["enabled"],
+       result["rule"]["keywords"], "warning" in result),
+      ("automod_rule_edited", ["Enabled", "Keywords"], False,
+       ["stage-d-blocked-xyz", "stage-d-second"], False))
+new = sorted(set(backups()) - set(before))
+check("one backup, named <guild>-automod-<rule id>-<local stamp>.json",
+      (len(new), new[0].startswith(f"{GUILD}-automod-7200-"),
+       os.path.basename(result["backup"]) == new[0]), (1, True, True))
+saved = json.load(open(result["backup"], encoding="utf-8"))
+check("...the full rule as Discord had it, and the call that puts it back",
+      (saved["rule"]["trigger_metadata"]["keyword_filter"], saved["rule"]["enabled"],
+       saved["restore"]),
+      (["stage-d-blocked-xyz"], True,
+       {"rule_id": "7200", "enabled": True, "keywords": ["stage-d-blocked-xyz"]}))
+cl, g, http = staged()
+go(cl, "edit_automod_rule", EDIT, force=True)
+_, back = go(cl, "edit_automod_rule", {"guild_id": GUILD, **saved["restore"]})
+check("...and after the edit, the restore previews every field back",
+      back["detail"].splitlines()[:2],
+      ["Enabled: off -> on",
+       'Keywords: (2) "stage-d-blocked-xyz", "stage-d-second" -> (1) '
+       '"stage-d-blocked-xyz" (the list is replaced)'])
+cl, g, http = staged()
+go(cl, "edit_automod_rule", {"guild_id": GUILD, "rule_id": "stage-d-test",
+                             "alert_channel_id": str(WELCOME), "timeout_seconds": 60},
+   force=True)
+check("an action change sends the whole new action list",
+      http.calls[1][1]["actions"],
+      [{"type": 1, "metadata": {"custom_message": "stage D test"}},
+       {"type": 2, "metadata": {"channel_id": str(WELCOME)}},
+       {"type": 3, "metadata": {"duration_seconds": 60}}])
+cl, g, http = staged()
+
+
+def _stays_on(rule):
+    rule["enabled"] = True                      # Discord ignores the switch
+
+
+http.answer_override["edit_auto_moderation_rule"] = _stays_on
+result, _ = go(cl, "edit_automod_rule", EDIT, force=True)
+check("Discord's rule disagreeing with the edit: the result says so",
+      result["warning"], "Discord took the edit, but the rule doesn't read back as asked: "
+                         "Enabled - check list_automod_rules.")
+
+section("edit_automod_rule - refused at the preview (and at the confirm), nothing sent")
+
+
+def edit_refused(params, client=None):
+    out = []
+    for force in (False, True):
+        c, gg, h = (client or staged())
+        m = refusal(c, "edit_automod_rule", {"guild_id": GUILD, **params}, force=force)
+        out.append((m, "edit_auto_moderation_rule" in h.verbs()))
+    (m1, s1), (m2, s2) = out
+    return m1 if (m1 == m2 and not s1 and not s2) else ("MISMATCH", out)
+
+
+for params, want in (
+        ({"rule_id": "stage-d-test"},
+         "nothing to change - pass name, keywords, regex_patterns, allow_list, presets, "
+         "mention_limit, block_message, custom_message, alert_channel_id, "
+         "timeout_seconds, exempt_role_ids, exempt_channel_ids or enabled."),
+        ({"rule_id": "stage-d-test", "keywords": ["stage-d-blocked-xyz"], "enabled": True},
+         "nothing would change - the AutoMod rule 'stage-d-test' already reads that way."),
+        ({"rule_id": "nope", "enabled": False},
+         "there's no AutoMod rule 'nope' in Testing Server - list_automod_rules has the "
+         "ids and names."),
+        ({"rule_id": "Ping storms", "keywords": ["x"]},
+         "keywords doesn't fit a mention_spam rule - keywords fits keyword and "
+         "member_profile rules."),
+        ({"rule_id": "7002", "timeout_seconds": 60},
+         "a timeout only goes on keyword and mention_spam rules - Discord doesn't allow "
+         "one on a keyword_preset rule."),
+        ({"rule_id": "stage-d-test", "keywords": [], "regex_patterns": []},
+         "a keyword rule needs at least one keyword or regex pattern to match."),
+        ({"rule_id": "stage-d-test", "block_message": False},
+         "custom_message needs block_message on - it's what the sender sees when their "
+         "message is blocked."),
+        ({"rule_id": "stage-d-test", "block_message": False, "custom_message": ""},
+         "a rule with no action does nothing - turn block_message on, or give "
+         "alert_channel_id or timeout_seconds."),
+        ({"rule_id": "stage-d-test", "name": "Names"},
+         'Testing Server already has an AutoMod rule named "Names" - pick another name.'),
+        ({"rule_id": "stage-d-test", "allow_list": ["Zebulon Quartermaine"]},
+         "allow_list carries a personal term the privacy screen keeps on this machine, "
+         "and rewriting it would change what the rule matches - so it isn't sent. "
+         "Nothing was changed."),
+        ({"rule_id": "Discord lists", "presets": ["everything"]},
+         "presets: 'everything' isn't one of Discord's word lists - they are profanity, "
+         "sexual_content and slurs.")):
+    m = edit_refused(params)
+    check(f"{want[:60]}...", m, want)
+cl, g, http = staged()
+http.rules.append(am_rule(7300, "stage-d-test", 1, {"keyword_filter": ["y"],
+                                                    "regex_patterns": [],
+                                                    "allow_list": []},
+                          [{"type": 1, "metadata": {}}]))
+check("a name two rules share: asks for the id",
+      edit_refused({"rule_id": "stage-d-test", "enabled": False}, (cl, g, http)),
+      "2 AutoMod rules in Testing Server are named 'stage-d-test' - give the rule's id "
+      "instead (list_automod_rules has them).")
+cl, g, http = staged()
+result, _ = go(cl, "edit_automod_rule", {"guild_id": GUILD, "rule_id": "7200",
+                                         "name": "STAGE-D-TEST"}, force=True)
+check("renaming a rule to its own name in other letters is not a clash",
+      result["rule"]["name"], "STAGE-D-TEST")
+cl, g, http = staged()
+_real_dir = capabilities.LOOK_BACKUP_DIR
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")
+m = refusal(cl, "edit_automod_rule", EDIT, force=True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+check("no backup, no edit: one sentence, Discord never asked to change it",
+      (m.startswith("I couldn't save the AutoMod rule 'stage-d-test' first ("),
+       m.endswith("Nothing was changed."), "edit_auto_moderation_rule" in http.verbs()),
+      (True, True, False))
+
+
 # ===================================================================== the end
 print()
 if _fails:
