@@ -30,6 +30,7 @@ from datetime import datetime, timezone, timedelta
 
 import discord
 
+from benham.core import eventtime
 from benham.core import identity
 from benham.core import lookimage
 from benham.core import looksound
@@ -996,6 +997,82 @@ async def _list_sounds(ctx, p):
     sounds = await g.fetch_soundboard_sounds()
     return {"guild": g.name, "count": len(sounds), "limit": _sound_slots(g),
             "sounds": [sound_dict(s) for s in sounds]}
+
+
+# --- scheduled events (INTENT 60, Stage 8 B) ------------------------------
+#
+# Discord's Events screen: game nights. Every time a person reads comes in both
+# halves, Caz's clock (America/Detroit, eventtime.py) and UTC, because the bot
+# runs on a Mac whose own zone is never assumed. The status and kind words are
+# this file's, not discord.py's: its enum calls a cancelled event "canceled"
+# and a stage event "stage_instance".
+
+_EVENT_STATUS = {1: "scheduled", 2: "active", 3: "completed", 4: "cancelled"}
+_EVENT_KIND = {1: "stage", 2: "voice", 3: "external"}
+_EVENT_OPEN = ("scheduled", "active")
+# Discord's cap, JSON error 30038: "Maximum number of uncompleted guild
+# scheduled events reached (100)" - scheduled and active ones both count.
+EVENT_CAP = 100
+
+
+def _event_status(ev):
+    v = getattr(ev.status, "value", ev.status)
+    return _EVENT_STATUS.get(v, str(v))
+
+
+def _event_kind(ev):
+    v = getattr(ev.entity_type, "value", ev.entity_type)
+    return _EVENT_KIND.get(v, str(v))
+
+
+def _event_where(g, ev):
+    """Where an event happens, as data: its channel, or its location."""
+    if _event_kind(ev) == "external":
+        return {"location": ev.location}
+    ch = g.get_channel(ev.channel_id) if ev.channel_id else None
+    return {"channel": getattr(ch, "name", None), "channel_id": ev.channel_id}
+
+
+def _event_where_words(g, ev):
+    """Where an event happens, as a person says it: 'Voice event in #General'."""
+    kind = _event_kind(ev)
+    if kind == "external":
+        return f"External event at {ev.location!r}"
+    ch = g.get_channel(ev.channel_id) if ev.channel_id else None
+    label = f"#{ch.name}" if ch is not None else f"channel {ev.channel_id}"
+    return f"{kind.capitalize()} event in {label}"
+
+
+def event_dict(g, ev):
+    """One scheduled event as the Events screen shows it - no ids of people."""
+    cover = ev.cover_image
+    return {"id": ev.id, "name": ev.name, "status": _event_status(ev),
+            "kind": _event_kind(ev), "where": _event_where(g, ev),
+            "start": eventtime.both(ev.start_time), "end": eventtime.both(ev.end_time),
+            "creator": str(ev.creator) if ev.creator else None,
+            "user_count": getattr(ev, "user_count", None),
+            "description": ev.description or "",
+            "cover": cover.url if cover is not None else None, "url": ev.url}
+
+
+@action("list_events", identity.READ,
+        "A server's scheduled events (its Events list): id, name, status (scheduled, "
+        "active, completed or cancelled), kind (voice, stage or external), where (a "
+        "channel or a location), start and end in Caz's local time (America/Detroit) "
+        "and UTC, creator, how many people are interested, description and cover "
+        "picture link - plus how many of Discord's 100 open-event slots are used.",
+        {"guild_id": {"type": "int", "required": True}},
+        needs_guild=True, taints=True)
+async def _list_events(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    # Fetched, not read from guild.scheduled_events: that cache is only as good
+    # as the gateway events that fed it, and the open count decides whether a
+    # new event is refused.
+    events = sorted(await g.fetch_scheduled_events(with_counts=True),
+                    key=lambda e: (e.start_time, e.id))
+    return {"guild": g.name, "count": len(events),
+            "open": sum(1 for e in events if _event_status(e) in _EVENT_OPEN),
+            "limit": EVENT_CAP, "events": [event_dict(g, e) for e in events]}
 
 
 @action("what_i_did", identity.READ,
@@ -3051,6 +3128,504 @@ async def _create_sound(ctx, p):
             "slots_left": limit - used - 1}
 
 
+# --- scheduled events: create, edit, start (INTENT 60, Stage 8 B) -----------
+#
+# Game nights. The posture is edit_server_look's, argued once here:
+#
+#   create / edit / start - tier MANAGE (an event can be changed back, and a
+#       cancel is the tier-3 one), outward + always_confirm: a scheduled event
+#       shows in the whole server's Events list, and starting one tells everyone
+#       who marked it Interested. taints: the preview and result repeat channel
+#       names, event names and descriptions - attacker-writable strings.
+#   cancel - tier DESTRUCTIVE, below: Discord never reopens a closed event.
+#
+# Times go through eventtime.py: a naive time is Caz's clock (America/Detroit),
+# never the Mac's zone, and every time the preview prints carries both halves,
+# Detroit and UTC, so a wrong read is caught before his tap. What Discord would
+# refuse is refused at the PREVIEW, whole, in one plain sentence: a start in
+# the past, an end before the start, an external event without an end or a
+# location, a voice or stage event without the right kind of channel, and the
+# cap of 100 open events. A refusal from Discord itself at the confirmed call
+# is one sentence too, ending "Nothing was changed".
+#
+# The attachment that carries a cover picture is named by message_id (and
+# message_channel_id when it isn't in the channel the request came from),
+# not by channel_id as in the other picture verbs: here channel_id is the
+# event's own voice or stage channel, and one name cannot mean both.
+
+_EVENT_KINDS = {"voice": discord.EntityType.voice,
+                "stage": discord.EntityType.stage_instance,
+                "external": discord.EntityType.external}
+_EVENT_KIND_WORDS = {"voice": "voice", "stage": "stage", "stage_instance": "stage",
+                     "external": "external"}
+_EVENT_CLEARABLE = ("description", "image", "end")
+
+
+def _events_can(g, what, ev=None):
+    """Refuse at the preview when this bot can't `what` in `g`. Discord's rule:
+    Manage Events for any event, Create Events for one this bot made itself."""
+    perms = g.me.guild_permissions
+    own = ev is None or getattr(ev, "creator_id", None) == g.me.id
+    if perms.manage_events or (perms.create_events and own):
+        return
+    raise ActionError(
+        f"this bot lacks Manage Events in {g.name}, so it can't {what} there - give "
+        "its role Manage Events (or Administrator) first.")
+
+
+def _event_name(raw):
+    name = str(raw).strip()
+    if not 1 <= len(name) <= 100:
+        raise ActionError(f"an event name has to be 1 to 100 characters; that's {len(name)}.")
+    return name
+
+
+def _event_desc(raw):
+    """The description, or "" for none; Discord takes up to 1000 characters."""
+    desc = str(raw if raw is not None else "").strip()
+    if len(desc) > 1000:
+        raise ActionError(f"an event description can be at most 1000 characters; "
+                          f"that's {len(desc)}.")
+    return desc
+
+
+def _event_location(raw):
+    loc = str(raw).strip()
+    if not 1 <= len(loc) <= 100:
+        raise ActionError(f"an event location has to be 1 to 100 characters; that's "
+                          f"{len(loc)}.")
+    return loc
+
+
+def _event_kind_word(raw):
+    if raw is None or not str(raw).strip():
+        return None
+    kind = _EVENT_KIND_WORDS.get(str(raw).strip().lower())
+    if kind is None:
+        raise ActionError(f"an event's kind is voice, stage or external, and {raw!r} "
+                          "isn't one of those.")
+    return kind
+
+
+def _event_time(raw, field):
+    try:
+        return eventtime.parse(raw, field)
+    except eventtime.EventTimeError as e:
+        raise ActionError(str(e))
+
+
+def _event_future(when, field):
+    now = eventtime.now()
+    if when.dt <= now:
+        raise ActionError(
+            f"that {field} ({eventtime.line(when.dt)}) is already in the past - it's "
+            f"{eventtime.local(now)} now. Pick a later time.")
+
+
+def _event_channel(g, cid, kind=None):
+    """(channel, kind) for a voice or stage event's channel, checked."""
+    try:
+        ch = g.get_channel(int(cid))
+    except (TypeError, ValueError):
+        ch = None
+    if ch is None:
+        raise ActionError(f"there's no channel {cid} in {g.name} that this bot can see.")
+    ctype = getattr(ch, "type", None)
+    found = ("voice" if ctype == discord.ChannelType.voice else
+             "stage" if ctype == discord.ChannelType.stage_voice else None)
+    if found is None:
+        raise ActionError(
+            f"#{ch.name} is a {getattr(ctype, 'name', 'non-voice')} channel; a voice or "
+            "stage event needs a voice or stage channel (or make it external, with a "
+            "location).")
+    if kind not in (None, found):
+        raise ActionError(f"#{ch.name} is a {found} channel, so it can't hold a {kind} "
+                          f"event - say kind={found}, or pick a {kind} channel.")
+    perms = ch.permissions_for(g.me)
+    missing = [label for label, ok in (
+        ("View Channel", perms.view_channel), ("Connect", perms.connect),
+        ("Manage Events", perms.manage_events or perms.create_events)) if not ok]
+    if missing:
+        raise ActionError(f"this bot lacks {', '.join(missing)} in #{ch.name}, and Discord "
+                          "needs that to put an event there - give its role "
+                          f"{' and '.join(missing)} in that channel first.")
+    return ch, found
+
+
+async def _event_cover(ctx, p):
+    """The checked lookimage.Picture named by p["image"], or None."""
+    if not p.get("image"):
+        return None
+
+    async def message():
+        cid = p.get("message_channel_id") or ctx.source_channel_id
+        mid = p.get("message_id") or ctx.source_message_id
+        if not (cid and mid):
+            raise lookimage.LookImageError(
+                "to use an attachment as the cover I need message_id of the message "
+                "that carries it (and message_channel_id if it's in another channel).")
+        return await ctx.message(cid, mid)
+    try:
+        return await lookimage.load(p["image"], message, "image")
+    except lookimage.LookImageError as e:
+        raise ActionError(str(e))
+
+
+async def _event_fetch(g, eid):
+    try:
+        return await g.fetch_scheduled_event(int(eid))
+    except discord.NotFound:
+        raise ActionError(f"there's no scheduled event {eid} in {g.name}.")
+
+
+def _event_closed(ev):
+    """Refuse any change to an event Discord has already closed."""
+    status = _event_status(ev)
+    if status not in _EVENT_OPEN:
+        raise ActionError(f"the event {ev.name!r} is already {status}, and Discord "
+                          "doesn't let a finished or cancelled event change.")
+    return status
+
+
+async def _event_call(awaitable, what):
+    """One Discord event change, with a ceiling and one plain sentence for every
+    refusal. Forbidden is NOT handled here - run() words that one."""
+    try:
+        return await asyncio.wait_for(awaitable, LOOK_TIMEOUT)
+    except discord.Forbidden:
+        raise
+    except discord.HTTPException as e:
+        text = " ".join((getattr(e, "text", None) or str(e) or "").split()).rstrip(".")
+        low = text.lower()
+        if getattr(e, "status", None) == 429 or any(
+                w in low for w in ("too fast", "rate limit", "rate_limit", "ratelimit")):
+            raise ActionError(f"Discord is rate-limiting event changes right now. "
+                              "Nothing was changed; try again in a while.")
+        raise ActionError(f"Discord turned the {what} down: "
+                          f"{text or 'it gave no reason'}. Nothing was changed.")
+    except ValueError as e:
+        # discord.py's own guard (an event that already started, a naive time).
+        raise ActionError(f"the {what} couldn't go to Discord ({e}). Nothing was changed.")
+    except asyncio.TimeoutError:
+        raise ActionError(f"Discord didn't answer the {what} within {LOOK_TIMEOUT} "
+                          "seconds. Nothing was confirmed changed; check list_events "
+                          "and try again later.")
+
+
+@action("create_event", identity.MANAGE,
+        "Schedule an event in a server's Events list (a game night). kind is voice "
+        "or stage (give channel_id of that channel) or external (give location and "
+        "end). start and end are ISO 8601 like 2026-10-31 20:00 - a time with no "
+        "Z or offset is read as Caz's local time (America/Detroit), and the preview "
+        "shows it in Detroit time and UTC so a wrong read can be caught. The cover "
+        "picture is optional: an attachment (image='attachment' with message_id of "
+        "the message that carries it), the assets folder ('asset:x.png') or a "
+        "public https link. Refused before anything changes if the start is past, "
+        "the end is before the start, the channel is wrong or the server already "
+        "has 100 open events. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "Event name, 1-100 characters"},
+         "start": {"type": "str", "required": True,
+                   "desc": "Start, ISO 8601. No Z or offset = Caz's local time "
+                           "(America/Detroit)"},
+         "end": {"type": "str", "desc": "End, same format. Required for an external "
+                                        "event, optional otherwise"},
+         "kind": {"type": "str", "desc": "voice | stage | external (default: from the "
+                                         "channel, or external when only a location "
+                                         "is given)"},
+         "channel_id": {"type": "int", "desc": "The voice or stage channel it happens in"},
+         "location": {"type": "str", "desc": "Where an external event happens, 1-100 "
+                                             "characters"},
+         "description": {"type": "str", "desc": "Optional, up to 1000 characters"},
+         "image": {"type": "str", "desc": "Cover picture: attachment | attachment:N | "
+                                          "asset:<file> | https://link"},
+         "message_id": {"type": "int", "desc": "Message carrying the cover attachment, "
+                                               "if you use one"},
+         "message_channel_id": {"type": "int", "desc": "That message's channel, if it "
+                                                       "isn't the one this request came "
+                                                       "from"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _events_can(g, "create events")
+    name = _event_name(p["name"])
+    kind = _event_kind_word(p.get("kind"))
+    desc = _event_desc(p.get("description"))
+    has_loc = p.get("location") is not None and str(p["location"]).strip() != ""
+    if has_loc and p.get("channel_id"):
+        raise ActionError("an event happens in a channel or at a location, not both - "
+                          "give channel_id for a voice or stage event, or location (and "
+                          "an end) for an external one.")
+    if kind is None:
+        if p.get("channel_id"):
+            kind = None                     # read off the channel below
+        elif has_loc:
+            kind = "external"
+        else:
+            raise ActionError("an event needs a place: channel_id of a voice or stage "
+                              "channel, or a location (with an end time) for an "
+                              "external event.")
+    ch = location = None
+    if kind == "external":
+        if p.get("channel_id"):
+            raise ActionError("an external event has a location, not a channel - drop "
+                              "channel_id, or say kind=voice for an event in a channel.")
+        if not has_loc:
+            raise ActionError("an external event needs a location - where it happens, "
+                              "1 to 100 characters.")
+        location = _event_location(p["location"])
+    else:
+        if has_loc:
+            raise ActionError("a location is only for an external event; a voice or "
+                              "stage event happens in its channel.")
+        if not p.get("channel_id"):
+            raise ActionError(f"a {kind} event needs channel_id of the {kind} channel it "
+                              "happens in.")
+        ch, kind = _event_channel(g, p["channel_id"], kind)
+
+    start = _event_time(p["start"], "start")
+    _event_future(start, "start")
+    end = _event_time(p["end"], "end") if p.get("end") else None
+    if end is not None and end.dt <= start.dt:
+        raise ActionError(f"the end ({eventtime.line(end.dt)}) isn't after the start "
+                          f"({eventtime.line(start.dt)}).")
+    if kind == "external" and end is None:
+        raise ActionError("an external event needs an end time - Discord requires one "
+                          "for an event that isn't in a channel.")
+
+    pic = await _event_cover(ctx, p)
+    events = await g.fetch_scheduled_events(with_counts=False)
+    open_now = sum(1 for e in events if _event_status(e) in _EVENT_OPEN)
+    if open_now >= EVENT_CAP:
+        raise ActionError(
+            f"{g.name} already has {open_now} open events, and Discord allows "
+            f"{EVENT_CAP} - cancel or end one first.")
+
+    if ctx.dry_run:
+        where = (f"External event at {location!r}" if kind == "external"
+                 else f"{kind.capitalize()} event in #{ch.name}")
+        lines = [where,
+                 f"Starts: {eventtime.line(start.dt)}",
+                 f"Ends: {eventtime.line(end.dt)}" if end else
+                 "Ends: not set - it runs until it's ended.",
+                 f"Description: {desc!r}" if desc else "No description.",
+                 f"Cover picture: {pic.describe()}" if pic else "No cover picture."]
+        lines += eventtime.notes(start, end)
+        lines += [f"Open events: {open_now} of {EVENT_CAP}; {EVENT_CAP - open_now - 1} "
+                  "left after this.",
+                  "Everyone in the server can see it in the Events list."]
+        return {"summary": f"Create event **{name}** in **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    kw = {"name": name, "start_time": start.dt, "entity_type": _EVENT_KINDS[kind],
+          "privacy_level": discord.PrivacyLevel.guild_only,
+          "reason": p.get("reason") or VIA}
+    if ch is not None:
+        kw["channel"] = ch
+    else:
+        kw["location"] = location
+    if end is not None:
+        kw["end_time"] = end.dt
+    if desc:
+        kw["description"] = desc
+    if pic is not None:
+        kw["image"] = pic.raw
+    ev = await _event_call(g.create_scheduled_event(**kw), "new event")
+    return {"status": "event_created", "guild": g.name, "event": event_dict(g, ev),
+            "open_left": EVENT_CAP - open_now - 1}
+
+
+def _quoted(text):
+    return repr(text) if text else "none"
+
+
+@action("edit_event", identity.MANAGE,
+        "Change a server's scheduled event: name, start, end, description, location "
+        "(external events), channel (voice or stage events, same kind), cover "
+        "picture, or clear (description, image, end). Times as in create_event: no "
+        "Z or offset = Caz's local time (America/Detroit), and the preview shows "
+        "every change old -> new in Detroit time and UTC. Only an event that hasn't "
+        "started can move its start; a finished or cancelled one can't change at "
+        "all. Always previewed and confirmed; the old cover is saved first.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "name": {"type": "str", "desc": "New name, 1-100 characters"},
+         "start": {"type": "str", "desc": "New start, ISO 8601 (no zone = America/"
+                                          "Detroit)"},
+         "end": {"type": "str", "desc": "New end, same format"},
+         "description": {"type": "str", "desc": "New description, up to 1000 characters "
+                                                "(empty = remove it)"},
+         "location": {"type": "str", "desc": "New location of an external event"},
+         "channel_id": {"type": "int", "desc": "New voice or stage channel (same kind "
+                                               "as the event's)"},
+         "image": {"type": "str", "desc": "New cover: attachment | attachment:N | "
+                                          "asset:<file> | https://link"},
+         "clear": {"type": "list", "desc": "Things to REMOVE: any of description, "
+                                           "image, end"},
+         "message_id": {"type": "int", "desc": "Message carrying the cover attachment, "
+                                               "if you use one"},
+         "message_channel_id": {"type": "int", "desc": "That message's channel, if it "
+                                                       "isn't the one this request came "
+                                                       "from"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _edit_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "edit that event", ev)
+    status = _event_closed(ev)
+    kind = _event_kind(ev)
+    clear = _look_clear(p.get("clear"), _EVENT_CLEARABLE)
+
+    name = _event_name(p["name"]) if p.get("name") is not None else None
+    desc = None
+    if p.get("description") is not None:
+        desc = _event_desc(p["description"])
+        if desc == "":
+            # An empty description is how a person says "none": same as clearing it.
+            desc = None
+            if "description" not in clear:
+                clear.append("description")
+    start = _event_time(p["start"], "start") if p.get("start") else None
+    end = _event_time(p["end"], "end") if p.get("end") else None
+    location = _event_location(p["location"]) if p.get("location") is not None else None
+    for field, given in (("description", desc is not None), ("end", end is not None),
+                         ("image", bool(p.get("image")))):
+        if given and field in clear:
+            raise ActionError(f"{field}: you asked to set and remove it in the same "
+                              "request - pick one.")
+    if not (name is not None or desc is not None or start or end or location
+            or p.get("channel_id") or p.get("image") or clear):
+        raise ActionError("nothing to change - pass name, start, end, description, "
+                          "location, channel_id, image, or clear.")
+
+    if start is not None and status != "scheduled":
+        raise ActionError(f"the event {ev.name!r} has already started, so its start "
+                          "can't move - Discord only moves the start of an event that "
+                          "hasn't begun.")
+    if location is not None and kind != "external":
+        raise ActionError(f"only an external event has a location; {ev.name!r} is a "
+                          f"{kind} event - give channel_id to move it to another channel.")
+    ch = None
+    if p.get("channel_id"):
+        if kind == "external":
+            raise ActionError(f"{ev.name!r} is an external event, which has a location, "
+                              "not a channel - give location to move it.")
+        ch, _ = _event_channel(g, p["channel_id"], kind)
+    if "end" in clear and kind == "external":
+        raise ActionError("an external event has to keep an end time - Discord requires "
+                          "one; give a new end instead.")
+    if start is not None:
+        _event_future(start, "start")
+    if end is not None:
+        _event_future(end, "end")
+    new_start = start.dt if start is not None else ev.start_time
+    new_end = None if "end" in clear else (end.dt if end is not None else ev.end_time)
+    if new_end is not None and new_end <= new_start:
+        raise ActionError(f"the end ({eventtime.line(new_end)}) wouldn't be after the "
+                          f"start ({eventtime.line(new_start)}).")
+    pic = await _event_cover(ctx, p)
+
+    changed = ([f for f, on in (("name", name is not None), ("start", start is not None),
+                                ("end", end is not None or "end" in clear),
+                                ("location", location is not None), ("channel", ch is not None),
+                                ("description", desc is not None or "description" in clear),
+                                ("cover", pic is not None or "image" in clear)) if on])
+    old_cover = ev.cover_image
+    if ctx.dry_run:
+        lines = []
+        if name is not None:
+            lines.append(f"Name: {ev.name!r} -> {name!r}")
+        if start is not None:
+            lines.append(f"Start: {eventtime.line(ev.start_time)} -> "
+                         f"{eventtime.line(start.dt)}")
+        if "end" in changed:
+            lines.append(f"End: {eventtime.line(ev.end_time)} -> "
+                         + (eventtime.line(end.dt) if end is not None else "removed"))
+        if location is not None:
+            lines.append(f"Location: {_quoted(ev.location)} -> {location!r}")
+        if ch is not None:
+            was = _event_where(g, ev).get("channel")
+            lines.append(f"Channel: {'#' + was if was else f'channel {ev.channel_id}'} "
+                         f"-> #{ch.name}")
+        if "description" in changed:
+            lines.append(f"Description: {_quoted(ev.description)} -> "
+                         + (repr(desc) if desc is not None else "removed"))
+        if "cover" in changed:
+            lines.append(f"Cover picture: {'a cover picture' if old_cover else 'none'} -> "
+                         + (pic.describe() if pic is not None else "removed"))
+            if old_cover is not None:
+                lines.append("The current cover picture is saved first, so it can be put "
+                             "back.")
+        lines += eventtime.notes(start, end)
+        if status == "active":
+            lines.append("It's running now, so the change shows to everyone in it.")
+        return {"summary": f"Edit event **{ev.name}** in **{g.name}**: "
+                           + ", ".join(changed),
+                "detail": "\n".join(lines)}
+
+    saved = []
+    if "cover" in changed and old_cover is not None:
+        saved = await _look_save_old(ctx, f"{g.id}-event-{ev.id}", [("cover", old_cover)])
+    kw = {"reason": p.get("reason") or VIA}
+    if name is not None:
+        kw["name"] = name
+    if start is not None:
+        kw["start_time"] = start.dt
+    if end is not None:
+        kw["end_time"] = end.dt
+    elif "end" in clear:
+        kw["end_time"] = None
+    if location is not None:
+        kw["location"] = location
+    if ch is not None:
+        kw["channel"] = ch
+    if desc is not None:
+        kw["description"] = desc
+    elif "description" in clear:
+        kw["description"] = None
+    if pic is not None:
+        kw["image"] = pic.raw
+    elif "image" in clear:
+        kw["image"] = None
+    after = await _event_call(ev.edit(**kw), "event change")
+    return {"status": "event_edited", "guild": g.name, "changed": changed,
+            "event": event_dict(g, after), "old_cover_saved": saved}
+
+
+@action("start_event", identity.MANAGE,
+        "Start a server's scheduled event now (scheduled -> active), early or on time. "
+        "Discord tells everyone who marked it Interested. To finish a running event "
+        "or call one off, use cancel_event. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _start_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "start that event", ev)
+    status = _event_closed(ev)
+    if status != "scheduled":
+        raise ActionError(f"the event {ev.name!r} is already running - nothing to start. "
+                          "To finish it, use cancel_event.")
+    if ctx.dry_run:
+        lines = [_event_where_words(g, ev),
+                 f"Scheduled start: {eventtime.line(ev.start_time)}"]
+        early = ev.start_time - eventtime.now()
+        if early > timedelta(minutes=1):
+            hours, mins = divmod(int(early.total_seconds() // 60), 60)
+            lines.append(f"That's {f'{hours} h ' if hours else ''}{mins} min early; it "
+                         "starts now instead.")
+        lines.append("Discord tells everyone who marked it Interested that it has "
+                     "started.")
+        return {"summary": f"Start event **{ev.name}** in **{g.name}** now",
+                "detail": "\n".join(lines)}
+    after = await _event_call(ev.start(reason=p.get("reason") or VIA), "event start")
+    return {"status": "event_started", "guild": g.name, "event": event_dict(g, after)}
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
@@ -3580,6 +4155,78 @@ async def _delete_sound(ctx, p):
     name = snd.name
     await snd.delete(reason=VIA)
     return {"status": "deleted", "sound": name, "copy_saved": saved}
+
+
+async def _event_keep_copy(ctx, g, ev):
+    """Save an event's details (JSON) and its cover's bytes before it closes;
+    the paths, JSON first.
+
+    Discord never reopens a cancelled or completed event, so this is what makes
+    the cancel reversible by hand (create_event again from the saved record).
+    NOT best effort, like _expr_keep_copy: the preview promised the copy, so a
+    copy that can't be made stops the cancel - one sentence, nothing changed."""
+    try:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")     # local time, house rule
+        base = os.path.join(LOOK_BACKUP_DIR, f"{g.id}-event-{ev.id}-{stamp}")
+        record = event_dict(g, ev)
+        cover_raw = None
+        if ev.cover_image is not None:
+            cover_raw = await asyncio.wait_for(ev.cover_image.read(), LOOK_TIMEOUT)
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        paths = [base + ".json"]
+        if cover_raw is not None:
+            paths.append(base + "-cover" + lookimage.ext_for(cover_raw))
+            with open(paths[1], "wb") as fh:
+                fh.write(cover_raw)
+            record["cover_saved"] = os.path.basename(paths[1])
+        import json
+        with open(paths[0], "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, ensure_ascii=False)
+        return paths
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"events: could not save the event ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save a copy of the event first "
+                          f"({type(e).__name__}), so I didn't close it. Nothing was "
+                          "changed.")
+
+
+@action("cancel_event", identity.DESTRUCTIVE,
+        "Close a server's scheduled event: one that hasn't started is CANCELLED, one "
+        "that is running now is ENDED (completed). Discord never reopens either. Its "
+        "details and cover picture are saved first, so it can be made again with "
+        "create_event.",
+        {"guild_id": {"type": "int", "required": True},
+         "event_id": {"type": "int", "required": True, "desc": "The event (list_events)"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True)
+async def _cancel_event(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    ev = await _event_fetch(g, p["event_id"])
+    _events_can(g, "close that event", ev)
+    status = _event_closed(ev)
+    running = status == "active"
+    if ctx.dry_run:
+        lines = [_event_where_words(g, ev),
+                 f"Start: {eventtime.line(ev.start_time)}",
+                 f"End: {eventtime.line(ev.end_time)}",
+                 ("It's running now, so this ENDS it (completed)." if running else
+                  "It hasn't started, so this CANCELS it."),
+                 "Discord never reopens a closed event.",
+                 "Its details" + (" and cover picture" if ev.cover_image else "")
+                 + " are saved to look_backups first, so it can be made again."]
+        verb = "End" if running else "Cancel"
+        return {"summary": f"{verb} event **{ev.name}** in **{g.name}**"
+                           + (" (it's running now)" if running else ""),
+                "detail": "\n".join(lines)}
+    saved = await _event_keep_copy(ctx, g, ev)
+    reason = p.get("reason") or VIA
+    if running:
+        after = await _event_call(ev.end(reason=reason), "event end")
+    else:
+        after = await _event_call(ev.cancel(reason=reason), "event cancel")
+    return {"status": "event_ended" if running else "event_cancelled",
+            "guild": g.name, "event": ev.name, "now": _event_status(after),
+            "copy_saved": saved}
 
 
 # ==========================================================================
