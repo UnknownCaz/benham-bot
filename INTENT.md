@@ -1065,11 +1065,18 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   `delete_automod_rule`. *Why:* his pick. Reads are READ and taint. `revoke_invite` is tier 2 (an
   invite is re-creatable); `prune_members` and `delete_automod_rule` are tier 3. Per-member overwrites
   keep Stage 7's trap rule: apply allows first, verify the returned overwrite, only then any deny.
+  *Follow-up, his yes 2026-10-31 07:48 local ("Yes, add it" on the session's next-step card):*
+  `list_channel_permissions`, a READ of a channel's overwrites (Edit Channel > Permissions) - the one
+  parity gap the Stage D hand found (no read showed them; only the set verb's read-back did). Same
+  rules as the stage: tier 0, taints, fingerprint row, Testing-only live test, merge `1499b4e` naming
+  decision 60; live 2026-10-31 08:12 local, 93 verbs.
 
 Rules every stage keeps, all already law:
 
 - One behaviour per commit on a branch, merged to master with a "Merge:" line naming decision 60.
-  A green fix deploys itself (decision 26): suite green on the PC and the Mac, `git pull` on the Mac,
+  A green fix deploys itself (decision 26): suite green on the PC and the Mac, `git fetch origin master` and
+  `git checkout --detach <merge sha>` on the Mac (`~/benham-bot` is a detached pin, not a branch -
+  `git pull` fails there; corrected by the Stage A hand 2026-10-30, done that way by all four),
   `restart`, boot banner read (`Capabilities registered: N`, zero tracebacks). A deploy is not done
   until the banner is.
 - Every new verb lands in `tests/registry_fingerprint.json` by a reviewed `--update` (the diff is the
