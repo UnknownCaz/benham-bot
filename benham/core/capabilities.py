@@ -4375,10 +4375,13 @@ async def _move_channel(ctx, p):
 # Only the roles between the old place and the new one are sent (discord.py's
 # own Role._move sends the same span), so nothing at or above this bot's top
 # role is ever in the request. They keep THEIR OWN numbers between them, dealt
-# out again in the new order: moving a role past one numbered 5 swaps the two
-# numbers rather than renumbering 1, 2. That is what makes the inverse exact -
-# moving it back deals the same numbers back, so every role ends on the number
-# it had, not merely in the order it had.
+# out again in the new order (a move past a role numbered 5 swaps the two
+# numbers), so the request never invents a number that could tie with a role
+# outside the span. What comes back is Discord's, and it is not always what was
+# sent: on that same server Discord renumbered EVERY role 0..n-1 on the first
+# move (measured 2026-10-31, the live Stage C test). So the inverse made true is
+# the ORDER - moving back restores it exactly, and the backup keeps the old
+# numbers too - while the numbers after any move are Discord's own.
 
 
 def _role_number_words(place, number):
