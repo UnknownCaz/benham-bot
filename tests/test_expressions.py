@@ -623,6 +623,54 @@ check("a multi-line form error is flattened to one line ending 'Nothing was chan
       "\n" not in (m or "") and "File too large" in (m or "")
       and (m or "").endswith("Nothing was changed."), True)
 
+# ============================================================== delete_sticker
+section("delete_sticker - tier 3 like delete_emoji")
+registered("delete_sticker", 3, False, False, False)
+check("delete_sticker: needs the confirm round trip",
+      capabilities.REGISTRY["delete_sticker"].needs_confirm, True)
+
+section("delete_sticker - the dry run names it and touches nothing")
+cl, g = fresh(stickers=[_Sticker(21, "hello", png(320, 320), description="says hi",
+                                 emoji="\U0001F44B")])
+result, preview = go(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 21})
+check("the first call is a dry run", (result, preview is not None), (None, True))
+check("...nothing deleted, nothing saved", (g.stickers[0].deleted, backups()), ([], []))
+check("...it names the sticker, the server, its link and the copy",
+      "hello" in preview["summary"] and "Testing Server" in preview["summary"]
+      and "stickers/21.png" in preview["detail"] and "saved" in preview["detail"], True)
+
+section("delete_sticker - confirmed: a copy first, byte for byte, then the delete")
+result, _ = go(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 21}, force=True)
+check("deleted once, with the audit reason", g.stickers[0].deleted, [capabilities.VIA])
+saved = result["copy_saved"]
+check("the copy exists and is the sticker's own bytes",
+      bool(saved) and open(saved, "rb").read() == png(320, 320), True)
+check("...named for the guild, the sticker id and a stamp, as a .png",
+      os.path.basename(saved).startswith(f"{GUILD}-sticker-21-") and saved.endswith(".png"),
+      True)
+
+section("delete_sticker - no copy, no delete")
+cl, g = fresh(stickers=[_Sticker(22, "flaky", png(), fail_read=True)])
+m = refusal(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 22})
+check("a copy that can't be made stops the delete, in one sentence",
+      "couldn't save a copy" in (m or "") and "Nothing was changed" in (m or "")
+      and g.stickers[0].deleted == [], True)
+cl, g = fresh(stickers=[_Sticker(23, "dance", fmt="lottie")])
+_, preview = go(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 23})
+check("a Lottie sticker's preview says no copy can be kept",
+      "not recoverable" in preview["detail"], True)
+result, _ = go(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 23}, force=True)
+check("...and it deletes with copy_saved None", (g.stickers[0].deleted != [],
+                                                 result["copy_saved"]), (True, None))
+
+section("delete_sticker - the gates")
+m = refusal(cl, "delete_sticker", {"guild_id": GUILD, "sticker_id": 99}, force=False)
+check("an unknown sticker is a sentence", "no sticker 99" in (m or ""), True)
+cl, g = fresh()
+m = refusal(cl, "delete_sticker", {"guild_id": WALLED, "sticker_id": 21}, force=False)
+check("a guild off the destructive allowlist is refused outright",
+      "destructive_guilds" in (m or ""), True)
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

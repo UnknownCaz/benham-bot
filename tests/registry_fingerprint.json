@@ -229,6 +229,19 @@
     "taints": false,
     "tier": 3
   },
+  "delete_sticker": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
   "deliver_unprompted": {
     "always_confirm": false,
     "blocked_when_tainted": false,

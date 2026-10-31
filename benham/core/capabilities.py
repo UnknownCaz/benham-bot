@@ -3337,6 +3337,68 @@ async def _delete_emoji(ctx, p):
     return {"status": "deleted", "emoji": name}
 
 
+async def _expr_keep_copy(ctx, g, kind, item, ext_of):
+    """Save a sticker's picture or a sound's bytes before it is deleted; the path.
+
+    Discord keeps no copy once one is gone, so this is what makes the delete
+    reversible by hand (upload the saved file again). Unlike _look_save_old it is
+    NOT best effort: the preview promised the copy, so a copy that cannot be made
+    stops the delete - one sentence, nothing changed."""
+    try:
+        raw = await asyncio.wait_for(item.read(), LOOK_TIMEOUT)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")     # local time, house rule
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        path = os.path.join(LOOK_BACKUP_DIR,
+                            f"{g.id}-{kind}-{item.id}-{stamp}{ext_of(raw)}")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"expressions: could not save the {kind} ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save a copy of the {kind} first "
+                          f"({type(e).__name__}), so I didn't delete it. Nothing was "
+                          "changed.")
+
+
+async def _expr_sticker(g, sid):
+    s = discord.utils.get(g.stickers, id=int(sid))
+    if s is None:
+        try:
+            s = await g.fetch_sticker(int(sid))
+        except discord.NotFound:
+            s = None
+    if s is None:
+        raise ActionError(f"no sticker {sid} in {g.name}")
+    return s
+
+
+@action("delete_sticker", identity.DESTRUCTIVE,
+        "Delete one of a server's stickers. A copy of its picture is saved first "
+        "(except a Lottie animation, which Discord won't hand out).",
+        {"guild_id": {"type": "int", "required": True},
+         "sticker_id": {"type": "int", "required": True}}, needs_guild=True)
+async def _delete_sticker(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    s = await _expr_sticker(g, p["sticker_id"])
+    fmt = getattr(s.format, "name", str(s.format))
+    readable = fmt != "lottie"
+    if ctx.dry_run:
+        lines = [f"{fmt.upper()}, related emoji {s.emoji or '(none)'}"
+                 + (f', described as "{s.description[:100]}"' if s.description else ""),
+                 s.url,
+                 "A copy of its picture is saved to look_backups first, so it can be "
+                 "uploaded again." if readable else
+                 "It's a Lottie animation, which Discord won't hand out, so no copy "
+                 "can be kept - it is not recoverable afterwards."]
+        return {"summary": f"Delete sticker **{s.name}** from **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = await _expr_keep_copy(ctx, g, "sticker", s, lookimage.ext_for) \
+        if readable else None
+    name = s.name
+    await s.delete(reason=VIA)
+    return {"status": "deleted", "sticker": name, "copy_saved": saved}
+
+
 # ==========================================================================
 # Dispatch
 # ==========================================================================
