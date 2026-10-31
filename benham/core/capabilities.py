@@ -2613,6 +2613,142 @@ async def _edit_bot_profile(ctx, p):
             "old_pictures_saved": saved}
 
 
+# --- expressions: emoji, stickers, soundboard sounds (INTENT 60, Stage 8 A) -
+#
+# Caz's goal for the friends server, his words: "Anything and everyhting an
+# admin can do through the UI, I should be able to do through asking Benham and
+# prompts." Discord's Emoji, Stickers and Soundboard screens are three of those.
+# The posture is edit_server_look's, argued once here:
+#
+#   create_* - tier MANAGE (it can be deleted again, so not tier 3), outward +
+#       always_confirm: everyone in the server sees a new emoji, sticker or sound,
+#       and a picture or a sound is the one thing a preview cannot show in full.
+#       So the preview names the type, size, dimensions or length, a short hash
+#       of the bytes and the source, and the upload waits for his tap every time.
+#       taints, like edit_server_look: the preview and result carry the guild's
+#       own name (and role names), which are attacker-writable strings.
+#   delete_* - tier DESTRUCTIVE like delete_emoji, so the three gates apply.
+#   list_*   - READ, taints: names and descriptions are other people's text.
+#
+# Discord's limits are checked at the PREVIEW - size, type, dimensions, length,
+# name, free slots - from the bytes and the guild's own counts, so a request that
+# cannot succeed is refused whole, in one plain sentence, before he is ever asked
+# to confirm it. A refusal from Discord itself at the confirmed call (a slot taken
+# in between, a length the bytes could not show) is one sentence too, ending
+# "Nothing was changed".
+
+EMOJI_MAX_BYTES = 256 * 1024
+_EMOJI_FORMATS = ("image/png", "image/jpeg", "image/gif")
+_EMOJI_NAME = re.compile(r"[A-Za-z0-9_]{2,32}")
+
+
+def _expr_can(g, what):
+    """Refuse at the preview when this bot cannot add expressions in `g`."""
+    perms = g.me.guild_permissions
+    if not (perms.create_expressions or perms.manage_expressions):
+        raise ActionError(
+            f"this bot lacks Create Expressions in {g.name}, so it can't add {what} "
+            "there - give its role Create Expressions (or Administrator) first.")
+
+
+def _expr_kind(pic):
+    """A picture's type as a person says it: PNG, JPEG, GIF, WEBP."""
+    return pic.media.split("/")[1].upper()
+
+
+async def _expr_call(awaitable, what, who_limits):
+    """_look_edit for an upload: the same ceiling and the same three sentence
+    families, with Discord's words flattened to one line - a form error arrives
+    as several lines, and the answer is one plain sentence."""
+    try:
+        return await _look_edit(awaitable, what, who_limits)
+    except ActionError as e:
+        raise ActionError(" ".join(str(e).split()).replace(".. Nothing", ". Nothing"))
+
+
+@action("create_emoji", identity.MANAGE,
+        "Add a custom emoji to a server, from a picture: an attachment "
+        "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:logo.png') or a public "
+        "https link. PNG, JPEG or GIF (a GIF becomes an animated emoji), at most "
+        "256 KB; the name is 2-32 letters, digits or underscores. Refused before "
+        "anything changes if the picture breaks a limit or the server has no free "
+        "emoji slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True,
+                  "desc": "Emoji name: 2-32 letters, digits or underscores, no colons"},
+         "image": {"type": "str", "required": True,
+                   "desc": "Picture source: attachment | attachment:N | asset:<file> | "
+                           "https://link"},
+         "roles": {"type": "list", "desc": "Role ids that may use it (default: everyone)"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_emoji(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "emoji")
+    name = str(p["name"]).strip().strip(":")
+    if not _EMOJI_NAME.fullmatch(name):
+        raise ActionError(f"an emoji name has to be 2 to 32 letters, digits or "
+                          f"underscores, and {name!r} isn't.")
+    roles = []
+    for rid in p.get("roles") or []:
+        try:
+            role = g.get_role(int(rid))
+        except (TypeError, ValueError):
+            role = None
+        if role is None:
+            raise ActionError(f"there's no role {rid} in {g.name}.")
+        if role not in roles:
+            roles.append(role)
+
+    pic = (await _look_pictures(ctx, p, ("image",)))["image"]
+    if pic.media not in _EMOJI_FORMATS:
+        raise ActionError(f"Discord takes a PNG, JPEG or GIF for an emoji, and that "
+                          f"picture is a {_expr_kind(pic)}.")
+    if len(pic.raw) > EMOJI_MAX_BYTES:
+        raise ActionError(
+            f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
+            f"at most {lookimage._limit_words(EMOJI_MAX_BYTES)} for an emoji - shrink "
+            "it and ask again.")
+    # Discord counts static and animated emoji in separate pools of emoji_limit
+    # each, so the free slot that matters is the one in this picture's pool.
+    animated = pic.media == "image/gif"
+    pool = "animated" if animated else "static"
+    used = sum(1 for e in g.emojis if bool(e.animated) == animated)
+    limit = g.emoji_limit
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free {pool} emoji slot ({used} of {limit} in use) - "
+            "delete one first, or boost the server for more.")
+
+    if ctx.dry_run:
+        lines = [f"Picture: {pic.describe()}",
+                 f"Slots: {used} of {limit} {pool} emoji in use; "
+                 f"{limit - used - 1} left after this."]
+        if animated:
+            lines.append("It's a GIF, so it becomes an animated emoji.")
+        lines.append("Only these roles can use it: " + ", ".join(r.name for r in roles)
+                     + "." if roles else "Everyone in the server can use it.")
+        if any(e.name == name for e in g.emojis):
+            lines.append(f"There's already an emoji called :{name}: here; Discord "
+                         "keeps both.")
+        return {"summary": f"Add emoji **:{name}:** to **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    e = await _expr_call(
+        g.create_custom_emoji(name=name, image=pic.raw, roles=roles,
+                              reason=p.get("reason") or VIA),
+        "emoji", "it limits how fast a server's emoji can change.")
+    return {"status": "emoji_created", "guild": g.name,
+            "emoji": {"id": e.id, "name": e.name, "animated": e.animated,
+                      "usage": str(e)},
+            "roles": [r.name for r in roles],
+            "slots_left": limit - used - 1}
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
