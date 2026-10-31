@@ -86,6 +86,19 @@
     "taints": false,
     "tier": 2
   },
+  "create_emoji": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "create_invite": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -123,6 +136,32 @@
     "outward": false,
     "posts": false,
     "taints": false,
+    "tier": 2
+  },
+  "create_sound": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
+  "create_sticker": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
     "tier": 2
   },
   "create_thread": {
@@ -191,6 +230,32 @@
     "tier": 3
   },
   "delete_role": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
+  "delete_sound": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": true,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": false,
+    "tier": 3
+  },
+  "delete_sticker": {
     "always_confirm": false,
     "blocked_when_tainted": false,
     "destructive": true,
@@ -506,6 +571,32 @@
     "outward": false,
     "posts": false,
     "taints": false,
+    "tier": 0
+  },
+  "list_sounds": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
+  "list_stickers": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
     "tier": 0
   },
   "list_threads": {

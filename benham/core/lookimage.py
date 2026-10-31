@@ -228,12 +228,24 @@ def _public_ip(text):
         return False
 
 
-async def _vet_host(url):
-    """Refuse anything but https to a host that resolves to public addresses only."""
+def _size_words(n):
+    """A byte count as a person says it: "1.2 MB" from a megabyte up, else "300 KB"."""
+    return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{max(1, n // 1024)} KB"
+
+
+def _limit_words(n):
+    """A cap as a person says it: "8 MB" for whole megabytes, else "512 KB"."""
+    return f"{n // 1048576} MB" if n >= 1048576 and n % 1048576 == 0         else f"{n // 1024} KB"
+
+
+async def _vet_host(url, noun="picture", error=LookImageError):
+    """Refuse anything but https to a host that resolves to public addresses only.
+
+    `noun` and `error` let the sound fetcher (looksound.py) use this same fence
+    in its own words - one fence, so the two routes can never drift apart."""
     u = urlparse(url)
     if u.scheme != "https" or not u.hostname:
-        raise LookImageError("I only take pictures from https:// links - this one "
-                             "isn't.")
+        raise error(f"I only take {noun}s from https:// links - this one isn't.")
     host = u.hostname
     try:
         ipaddress.ip_address(host)
@@ -243,49 +255,55 @@ async def _vet_host(url):
             infos = await asyncio.get_running_loop().getaddrinfo(
                 host, u.port or 443, type=socket.SOCK_STREAM)
         except OSError:
-            raise LookImageError(f"I couldn't find {host} on the internet.")
+            raise error(f"I couldn't find {host} on the internet.")
         addrs = [i[4][0] for i in infos]
     if not addrs or not all(_public_ip(a) for a in addrs):
-        raise LookImageError(
+        raise error(
             f"{host} points at a private or local address, and I won't fetch from "
-            "those. Use a link to a public picture.")
+            f"those. Use a link to a public {noun}.")
 
 
-async def fetch_url(url, max_bytes=MAX_BYTES):
-    """Download `url` (public https only) and return the raw bytes."""
+async def fetch_public(url, max_bytes, noun="picture", error=LookImageError):
+    """Download `url` (public https only) and return the raw bytes.
+
+    The one fetch both routes share: every hop vetted, redirects followed by
+    hand, the body streamed and abandoned the moment it passes `max_bytes`."""
     import aiohttp
     timeout = aiohttp.ClientTimeout(total=FETCH_TIMEOUT)
+    limit = _limit_words(max_bytes)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for _hop in range(MAX_REDIRECTS + 1):
-                await _vet_host(url)
+                await _vet_host(url, noun, error)
                 async with session.get(url, allow_redirects=False) as r:
                     if r.status in (301, 302, 303, 307, 308):
                         loc = r.headers.get("Location")
                         if not loc:
-                            raise LookImageError("that link redirects nowhere.")
+                            raise error("that link redirects nowhere.")
                         url = urljoin(url, loc)
                         continue
                     if r.status != 200:
-                        raise LookImageError(
-                            f"that link answered {r.status}, not a picture.")
+                        raise error(f"that link answered {r.status}, not a {noun}.")
                     if r.content_length and r.content_length > max_bytes:
-                        raise LookImageError(
-                            f"that picture is {r.content_length / 1048576:.1f} MB; "
-                            f"my limit is {max_bytes // 1048576} MB.")
+                        raise error(
+                            f"that {noun} is {_size_words(r.content_length)}; "
+                            f"my limit is {limit}.")
                     buf = bytearray()
                     async for chunk in r.content.iter_chunked(65536):
                         buf += chunk
                         if len(buf) > max_bytes:
-                            raise LookImageError(
-                                f"that picture is bigger than my "
-                                f"{max_bytes // 1048576} MB limit.")
+                            raise error(f"that {noun} is bigger than my {limit} limit.")
                     return bytes(buf)
-            raise LookImageError("that link redirects too many times.")
-    except LookImageError:
+            raise error("that link redirects too many times.")
+    except error:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-        raise LookImageError(f"I couldn't download that link ({type(e).__name__}).")
+        raise error(f"I couldn't download that link ({type(e).__name__}).")
+
+
+async def fetch_url(url, max_bytes=MAX_BYTES):
+    """Download a PICTURE from `url` (public https only) and return the raw bytes."""
+    return await fetch_public(url, max_bytes, "picture", LookImageError)
 
 
 async def from_url(url):

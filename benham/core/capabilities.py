@@ -21,15 +21,18 @@ nothing, and once for real after confirmation.
 """
 
 import asyncio
+import base64
 import io
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone, timedelta
 
 import discord
 
 from benham.core import identity
 from benham.core import lookimage
+from benham.core import looksound
 from benham.core import pathsafe
 from benham.core import policy
 from benham.core import rooms
@@ -936,6 +939,63 @@ async def _list_emojis(ctx, p):
     return {"guild": g.name, "count": len(g.emojis), "emojis": [
         {"id": e.id, "name": e.name, "animated": e.animated, "usage": str(e)}
         for e in g.emojis]}
+
+
+def guild_sticker_dict(s):
+    """One of a server's own stickers: sticker_dict plus what the Stickers screen
+    shows - its description and related emoji (both other people's text) and
+    whether Discord still has it available (a lost boost level can lock some)."""
+    d = sticker_dict(s)
+    d.update({"description": getattr(s, "description", "") or "",
+              "emoji": getattr(s, "emoji", "") or "",
+              "available": bool(getattr(s, "available", True))})
+    return d
+
+
+@action("list_stickers", identity.READ,
+        "A server's own stickers: id, name, description, related emoji, format "
+        "(png, apng, gif or lottie) and link, plus how many sticker slots it has.",
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
+async def _list_stickers(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    stickers = list(g.stickers)
+    return {"guild": g.name, "count": len(stickers), "limit": g.sticker_limit,
+            "stickers": [guild_sticker_dict(s) for s in stickers]}
+
+
+# Discord's soundboard slots by Boost Level. discord.py 2.7.1 has emoji_limit and
+# sticker_limit but no soundboard limit, so these are Discord's published numbers.
+# Level 2 is 36 although one Discord help page says 35: a number too HIGH costs one
+# Discord refusal at the confirmed call, a number too LOW would refuse a sound that
+# fits - so the higher one wins.
+_SOUND_SLOTS = {0: 8, 1: 24, 2: 36, 3: 48}
+
+
+def _sound_slots(g):
+    return _SOUND_SLOTS.get(getattr(g, "premium_tier", 0) or 0, 8)
+
+
+def sound_dict(s):
+    """One soundboard sound as metadata - not its bytes, and not who uploaded it."""
+    return {"id": s.id, "name": s.name, "volume": s.volume,
+            "emoji": str(s.emoji) if s.emoji else None,
+            "available": bool(getattr(s, "available", True)), "url": s.url}
+
+
+@action("list_sounds", identity.READ,
+        "A server's own soundboard sounds: id, name, volume (0-1), emoji and link, "
+        "plus how many sound slots it has.",
+        {"guild_id": {"type": "int", "required": True}},
+        taints=True)
+async def _list_sounds(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    # Fetched, not read from guild.soundboard_sounds: that cache is only as good
+    # as the gateway events that fed it, and the slot count decides whether an
+    # upload is refused - one API call buys the number as it is right now.
+    sounds = await g.fetch_soundboard_sounds()
+    return {"guild": g.name, "count": len(sounds), "limit": _sound_slots(g),
+            "sounds": [sound_dict(s) for s in sounds]}
 
 
 @action("what_i_did", identity.READ,
@@ -2613,6 +2673,384 @@ async def _edit_bot_profile(ctx, p):
             "old_pictures_saved": saved}
 
 
+# --- expressions: emoji, stickers, soundboard sounds (INTENT 60, Stage 8 A) -
+#
+# Caz's goal for the friends server, his words: "Anything and everyhting an
+# admin can do through the UI, I should be able to do through asking Benham and
+# prompts." Discord's Emoji, Stickers and Soundboard screens are three of those.
+# The posture is edit_server_look's, argued once here:
+#
+#   create_* - tier MANAGE (it can be deleted again, so not tier 3), outward +
+#       always_confirm: everyone in the server sees a new emoji, sticker or sound,
+#       and a picture or a sound is the one thing a preview cannot show in full.
+#       So the preview names the type, size, dimensions or length, a short hash
+#       of the bytes and the source, and the upload waits for his tap every time.
+#       taints, like edit_server_look: the preview and result carry the guild's
+#       own name (and role names), which are attacker-writable strings.
+#   delete_* - tier DESTRUCTIVE like delete_emoji, so the three gates apply.
+#   list_*   - READ, taints: names and descriptions are other people's text.
+#
+# Discord's limits are checked at the PREVIEW - size, type, dimensions, length,
+# name, free slots - from the bytes and the guild's own counts, so a request that
+# cannot succeed is refused whole, in one plain sentence, before he is ever asked
+# to confirm it. A refusal from Discord itself at the confirmed call (a slot taken
+# in between, a length the bytes could not show) is one sentence too, ending
+# "Nothing was changed".
+
+EMOJI_MAX_BYTES = 256 * 1024
+_EMOJI_FORMATS = ("image/png", "image/jpeg", "image/gif")
+_EMOJI_NAME = re.compile(r"[A-Za-z0-9_]{2,32}")
+
+
+def _expr_can(g, what):
+    """Refuse at the preview when this bot cannot add expressions in `g`."""
+    perms = g.me.guild_permissions
+    if not (perms.create_expressions or perms.manage_expressions):
+        raise ActionError(
+            f"this bot lacks Create Expressions in {g.name}, so it can't add {what} "
+            "there - give its role Create Expressions (or Administrator) first.")
+
+
+def _expr_kind(pic):
+    """A picture's type as a person says it: PNG, JPEG, GIF, WEBP."""
+    return pic.media.split("/")[1].upper()
+
+
+async def _expr_call(awaitable, what, who_limits):
+    """_look_edit for an upload: the same ceiling and the same three sentence
+    families, with Discord's words flattened to one line - a form error arrives
+    as several lines, and the answer is one plain sentence."""
+    try:
+        return await _look_edit(awaitable, what, who_limits)
+    except ActionError as e:
+        raise ActionError(" ".join(str(e).split()).replace(".. Nothing", ". Nothing"))
+
+
+@action("create_emoji", identity.MANAGE,
+        "Add a custom emoji to a server, from a picture: an attachment "
+        "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:logo.png') or a public "
+        "https link. PNG, JPEG or GIF (a GIF becomes an animated emoji), at most "
+        "256 KB; the name is 2-32 letters, digits or underscores. Refused before "
+        "anything changes if the picture breaks a limit or the server has no free "
+        "emoji slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True,
+                  "desc": "Emoji name: 2-32 letters, digits or underscores, no colons"},
+         "image": {"type": "str", "required": True,
+                   "desc": "Picture source: attachment | attachment:N | asset:<file> | "
+                           "https://link"},
+         "roles": {"type": "list", "desc": "Role ids that may use it (default: everyone)"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_emoji(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "emoji")
+    name = str(p["name"]).strip().strip(":")
+    if not _EMOJI_NAME.fullmatch(name):
+        raise ActionError(f"an emoji name has to be 2 to 32 letters, digits or "
+                          f"underscores, and {name!r} isn't.")
+    roles = []
+    for rid in p.get("roles") or []:
+        try:
+            role = g.get_role(int(rid))
+        except (TypeError, ValueError):
+            role = None
+        if role is None:
+            raise ActionError(f"there's no role {rid} in {g.name}.")
+        if role not in roles:
+            roles.append(role)
+
+    pic = (await _look_pictures(ctx, p, ("image",)))["image"]
+    if pic.media not in _EMOJI_FORMATS:
+        raise ActionError(f"Discord takes a PNG, JPEG or GIF for an emoji, and that "
+                          f"picture is a {_expr_kind(pic)}.")
+    if len(pic.raw) > EMOJI_MAX_BYTES:
+        raise ActionError(
+            f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
+            f"at most {lookimage._limit_words(EMOJI_MAX_BYTES)} for an emoji - shrink "
+            "it and ask again.")
+    # Discord counts static and animated emoji in separate pools of emoji_limit
+    # each, so the free slot that matters is the one in this picture's pool.
+    animated = pic.media == "image/gif"
+    pool = "animated" if animated else "static"
+    used = sum(1 for e in g.emojis if bool(e.animated) == animated)
+    limit = g.emoji_limit
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free {pool} emoji slot ({used} of {limit} in use) - "
+            "delete one first, or boost the server for more.")
+
+    if ctx.dry_run:
+        lines = [f"Picture: {pic.describe()}",
+                 f"Slots: {used} of {limit} {pool} emoji in use; "
+                 f"{limit - used - 1} left after this."]
+        if animated:
+            lines.append("It's a GIF, so it becomes an animated emoji.")
+        lines.append("Only these roles can use it: " + ", ".join(r.name for r in roles)
+                     + "." if roles else "Everyone in the server can use it.")
+        if any(e.name == name for e in g.emojis):
+            lines.append(f"There's already an emoji called :{name}: here; Discord "
+                         "keeps both.")
+        return {"summary": f"Add emoji **:{name}:** to **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    e = await _expr_call(
+        g.create_custom_emoji(name=name, image=pic.raw, roles=roles,
+                              reason=p.get("reason") or VIA),
+        "emoji", "it limits how fast a server's emoji can change.")
+    return {"status": "emoji_created", "guild": g.name,
+            "emoji": {"id": e.id, "name": e.name, "animated": e.animated,
+                      "usage": str(e)},
+            "roles": [r.name for r in roles],
+            "slots_left": limit - used - 1}
+
+
+STICKER_MAX_BYTES = 512 * 1024
+STICKER_SIDE = 320
+# What one Unicode emoji is made of: symbols (So), skin-tone modifiers (Sk),
+# variation selectors and combining marks (Mn, Me - the keycap ring), and the
+# zero-width joiner and tag characters (Cf); keycaps add a digit, # or *.
+_EMOJI_CATEGORIES = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
+
+
+def _unicode_emoji(text):
+    """`text` if it is one Unicode emoji, else None.
+
+    Stricter than Discord on purpose. A sticker's related emoji goes into
+    Discord's free-text `tags` field, and `emoji` is a parameter the privacy
+    screen leaves alone as not-free-text - so this check is what keeps words
+    out of it: nothing but emoji characters, at most 16 of them."""
+    s = str(text or "").strip()
+    if not s or len(s) > 16:
+        return None
+    if not all(unicodedata.category(c) in _EMOJI_CATEGORIES or c in "0123456789#*"
+               for c in s):
+        return None
+    if not any(unicodedata.category(c) == "So" or c == "⃣" for c in s):
+        return None
+    return s
+
+
+def _is_apng(raw):
+    """An animated PNG carries an acTL chunk before its first IDAT."""
+    i = 8
+    while i + 8 <= len(raw):
+        length = int.from_bytes(raw[i:i + 4], "big")
+        tag = raw[i + 4:i + 8]
+        if tag == b"acTL":
+            return True
+        if tag in (b"IDAT", b"IEND"):
+            return False
+        i += 12 + length
+    return False
+
+
+@action("create_sticker", identity.MANAGE,
+        "Add a sticker to a server, from a picture: an attachment "
+        "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:x.png') or a public https "
+        "link. Discord wants a PNG or APNG of exactly 320x320 pixels, at most 512 KB, "
+        "a name of 2-30 characters and one related Unicode emoji; the description is "
+        "optional (2-100 characters). Refused before anything changes if a limit is "
+        "broken or the server has no free sticker slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "Sticker name, 2-30 characters"},
+         "emoji": {"type": "str", "required": True,
+                   "desc": "The related emoji Discord requires: one Unicode emoji"},
+         "image": {"type": "str", "required": True,
+                   "desc": "Picture source: attachment | attachment:N | asset:<file> | "
+                           "https://link (a 320x320 PNG or APNG)"},
+         "description": {"type": "str", "desc": "Optional, 2-100 characters"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_sticker(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "stickers")
+    name = str(p["name"]).strip()
+    if not 2 <= len(name) <= 30:
+        raise ActionError(f"a sticker name has to be 2 to 30 characters; that's "
+                          f"{len(name)}.")
+    desc = str(p.get("description") or "").strip()
+    if desc and not 2 <= len(desc) <= 100:
+        raise ActionError(f"a sticker description has to be 2 to 100 characters "
+                          f"(or none); that's {len(desc)}.")
+    emoji = _unicode_emoji(p["emoji"])
+    if emoji is None:
+        raise ActionError(f"a sticker's related emoji has to be one Unicode emoji "
+                          f"(from the emoji keyboard), and {p['emoji']!r} isn't one.")
+
+    pic = (await _look_pictures(ctx, p, ("image",)))["image"]
+    if pic.media != "image/png":
+        raise ActionError(f"a sticker has to be a PNG or APNG, and that picture is a "
+                          f"{_expr_kind(pic)}.")
+    if len(pic.raw) > STICKER_MAX_BYTES:
+        raise ActionError(
+            f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
+            f"at most {lookimage._limit_words(STICKER_MAX_BYTES)} for a sticker - "
+            "shrink it and ask again.")
+    if not pic.width:
+        raise ActionError(f"I couldn't read that PNG's size, and a sticker has to be "
+                          f"exactly {STICKER_SIDE}x{STICKER_SIDE}.")
+    if (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
+        raise ActionError(f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
+                          f"pixels, and that picture is {pic.width}x{pic.height}.")
+    used = len(g.stickers)
+    limit = g.sticker_limit
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free sticker slot ({used} of {limit} in use) - delete "
+            "one first, or boost the server for more.")
+    animated = _is_apng(pic.raw)
+
+    if ctx.dry_run:
+        kind = "APNG (animated)" if animated else "PNG"
+        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}",
+                 f"Related emoji: {emoji}",
+                 f"Description: {desc!r}" if desc else "No description.",
+                 f"Slots: {used} of {limit} stickers in use; "
+                 f"{limit - used - 1} left after this."]
+        return {"summary": f"Add sticker **{name}** to **{g.name}**",
+                "detail": "\n".join(lines)}
+
+    s = await _expr_call(
+        g.create_sticker(name=name, description=desc, emoji=emoji,
+                         file=discord.File(io.BytesIO(pic.raw), filename="sticker.png"),
+                         reason=p.get("reason") or VIA),
+        "sticker", "it limits how fast a server's stickers can change.")
+    return {"status": "sticker_created", "guild": g.name,
+            "sticker": guild_sticker_dict(s), "slots_left": limit - used - 1}
+
+
+async def _expr_sound(ctx, p):
+    """The checked looksound.Sound named by p["sound"]."""
+    async def message():
+        cid = p.get("channel_id") or ctx.source_channel_id
+        mid = p.get("message_id") or ctx.source_message_id
+        if not (cid and mid):
+            raise looksound.LookSoundError(
+                "to use an attachment I need channel_id and message_id of the "
+                "message that carries it (they're in the note on the message).")
+        return await ctx.message(cid, mid)
+    try:
+        return await looksound.load(p["sound"], message, "sound")
+    except looksound.LookSoundError as e:
+        raise ActionError(str(e))
+
+
+def _sound_volume(raw):
+    """0.0-1.0 from what was typed ("0.5", "50%", nothing = 1)."""
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return 1.0
+    try:
+        v = float(text[:-1]) / 100 if text.endswith("%") else float(text)
+    except ValueError:
+        v = None
+    if v is None or not 0 <= v <= 1:
+        raise ActionError(f"a sound's volume goes from 0 to 1 (1 is full volume), "
+                          f"and {text!r} isn't in that range.")
+    return v
+
+
+def _sound_emoji(g, raw):
+    """(emoji_id, emoji_name) for the sound's button: one Unicode emoji, or one of
+    THIS server's custom emoji written <:name:id>. Nothing else - the name goes to
+    a field the privacy screen does not read, so it must not be able to carry words."""
+    text = str(raw or "").strip()
+    if not text:
+        return None, None
+    custom = discord.PartialEmoji.from_str(text)
+    if custom.id is not None:
+        if discord.utils.get(g.emojis, id=custom.id) is None:
+            raise ActionError(f"that custom emoji isn't one of {g.name}'s, so the "
+                              "sound can't use it - pick one of the server's own, or "
+                              "a Unicode emoji.")
+        return custom.id, None
+    uni = _unicode_emoji(text)
+    if uni is None:
+        raise ActionError(f"a sound's emoji has to be one Unicode emoji or one of the "
+                          f"server's custom emoji, and {text!r} isn't.")
+    return None, uni
+
+
+@action("create_sound", identity.MANAGE,
+        "Add a sound to a server's soundboard, from an attachment "
+        "(sound='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:beep.mp3') or a public "
+        "https link. Discord takes an MP3 or OGG of at most 512 KB and 5.2 seconds, "
+        "named in 2-32 characters; volume is 0-1 (default 1) and the emoji is "
+        "optional. Refused before anything changes if a limit is broken or the "
+        "server has no free sound slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "Sound name, 2-32 characters"},
+         "sound": {"type": "str", "required": True,
+                   "desc": "Sound source: attachment | attachment:N | asset:<file> | "
+                           "https://link (MP3 or OGG)"},
+         "volume": {"type": "str", "desc": "0 to 1, default 1 (full)"},
+         "emoji": {"type": "str", "desc": "One Unicode emoji, or one of this server's "
+                                          "custom emoji as <:name:id>"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_sound(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "soundboard sounds")
+    name = str(p["name"]).strip()
+    if not 2 <= len(name) <= 32:
+        raise ActionError(f"a sound name has to be 2 to 32 characters; that's "
+                          f"{len(name)}.")
+    volume = _sound_volume(p.get("volume"))
+    emoji_id, emoji_name = _sound_emoji(g, p.get("emoji"))
+    snd = await _expr_sound(ctx, p)
+    used = len(await g.fetch_soundboard_sounds())
+    limit = _sound_slots(g)
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free soundboard slot ({used} of {limit} in use) - "
+            "delete one first, or boost the server for more.")
+
+    if ctx.dry_run:
+        lines = [f"Sound: {snd.describe()}"]
+        if snd.seconds is None:
+            lines.append(f"I couldn't measure its length from the bytes. Discord takes "
+                         f"at most {looksound.MAX_SECONDS} seconds and refuses a "
+                         "longer one, changing nothing.")
+        shown = emoji_name
+        if emoji_id:
+            shown = f"<:{discord.utils.get(g.emojis, id=emoji_id).name}:{emoji_id}>"
+        lines += [f"Volume: {round(volume * 100)}%",
+                  f"Emoji: {shown}" if shown else "No emoji.",
+                  f"Slots: {used} of {limit} sounds in use; {limit - used - 1} left "
+                  "after this."]
+        return {"summary": f"Add sound **{name}** to **{g.name}**'s soundboard",
+                "detail": "\n".join(lines)}
+
+    # Straight to discord.py's HTTP route, with the data URI built here:
+    # Guild.create_soundboard_sound in 2.7.1 types the bytes itself and knows
+    # only an ID3 tag or a \xff\xfb frame, so it raises ValueError on every OGG
+    # (and on MPEG-2 MP3s) before Discord is asked. Discord takes both; the type
+    # here is looksound's, read from the bytes.
+    data_uri = (f"data:{snd.media};base64,"
+                + base64.b64encode(snd.raw).decode("ascii"))
+    data = await _expr_call(
+        g._state.http.create_soundboard_sound(
+            g.id, reason=p.get("reason") or VIA, name=name, sound=data_uri,
+            volume=volume, emoji_id=emoji_id, emoji_name=emoji_name),
+        "soundboard", "it limits how fast a server's soundboard can change.")
+    made = discord.SoundboardSound(guild=g, state=g._state, data=data)
+    return {"status": "sound_created", "guild": g.name, "sound": sound_dict(made),
+            "slots_left": limit - used - 1}
+
+
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
         {"channel_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True}},
@@ -3056,6 +3494,92 @@ async def _delete_emoji(ctx, p):
     name = e.name
     await e.delete(reason=VIA)
     return {"status": "deleted", "emoji": name}
+
+
+async def _expr_keep_copy(ctx, g, kind, item, ext_of):
+    """Save a sticker's picture or a sound's bytes before it is deleted; the path.
+
+    Discord keeps no copy once one is gone, so this is what makes the delete
+    reversible by hand (upload the saved file again). Unlike _look_save_old it is
+    NOT best effort: the preview promised the copy, so a copy that cannot be made
+    stops the delete - one sentence, nothing changed."""
+    try:
+        raw = await asyncio.wait_for(item.read(), LOOK_TIMEOUT)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")     # local time, house rule
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        path = os.path.join(LOOK_BACKUP_DIR,
+                            f"{g.id}-{kind}-{item.id}-{stamp}{ext_of(raw)}")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"expressions: could not save the {kind} ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save a copy of the {kind} first "
+                          f"({type(e).__name__}), so I didn't delete it. Nothing was "
+                          "changed.")
+
+
+async def _expr_sticker(g, sid):
+    s = discord.utils.get(g.stickers, id=int(sid))
+    if s is None:
+        try:
+            s = await g.fetch_sticker(int(sid))
+        except discord.NotFound:
+            s = None
+    if s is None:
+        raise ActionError(f"no sticker {sid} in {g.name}")
+    return s
+
+
+@action("delete_sticker", identity.DESTRUCTIVE,
+        "Delete one of a server's stickers. A copy of its picture is saved first "
+        "(except a Lottie animation, which Discord won't hand out).",
+        {"guild_id": {"type": "int", "required": True},
+         "sticker_id": {"type": "int", "required": True}}, needs_guild=True)
+async def _delete_sticker(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    s = await _expr_sticker(g, p["sticker_id"])
+    fmt = getattr(s.format, "name", str(s.format))
+    readable = fmt != "lottie"
+    if ctx.dry_run:
+        lines = [f"{fmt.upper()}, related emoji {s.emoji or '(none)'}"
+                 + (f', described as "{s.description[:100]}"' if s.description else ""),
+                 s.url,
+                 "A copy of its picture is saved to look_backups first, so it can be "
+                 "uploaded again." if readable else
+                 "It's a Lottie animation, which Discord won't hand out, so no copy "
+                 "can be kept - it is not recoverable afterwards."]
+        return {"summary": f"Delete sticker **{s.name}** from **{g.name}**",
+                "detail": "\n".join(lines)}
+    saved = await _expr_keep_copy(ctx, g, "sticker", s, lookimage.ext_for) \
+        if readable else None
+    name = s.name
+    await s.delete(reason=VIA)
+    return {"status": "deleted", "sticker": name, "copy_saved": saved}
+
+
+@action("delete_sound", identity.DESTRUCTIVE,
+        "Delete one of a server's soundboard sounds. A copy of the sound file is "
+        "saved first.",
+        {"guild_id": {"type": "int", "required": True},
+         "sound_id": {"type": "int", "required": True}}, needs_guild=True)
+async def _delete_sound(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    try:
+        snd = await g.fetch_soundboard_sound(int(p["sound_id"]))
+    except discord.NotFound:
+        raise ActionError(f"no soundboard sound {p['sound_id']} in {g.name}")
+    if ctx.dry_run:
+        bits = [f"volume {round(snd.volume * 100)}%"]
+        if snd.emoji:
+            bits.append(f"emoji {snd.emoji}")
+        return {"summary": f"Delete sound **{snd.name}** from **{g.name}**'s soundboard",
+                "detail": f"{', '.join(bits)}\n{snd.url}\nA copy of the sound file is "
+                          "saved to look_backups first, so it can be uploaded again."}
+    saved = await _expr_keep_copy(ctx, g, "sound", snd, looksound.ext_for)
+    name = snd.name
+    await snd.delete(reason=VIA)
+    return {"status": "deleted", "sound": name, "copy_saved": saved}
 
 
 # ==========================================================================
