@@ -860,6 +860,102 @@ check("no emoji is None", result["sounds"][1]["emoji"], None)
 check("the slot table: 8 / 24 / 36 / 48 by Boost Level",
       [capabilities._sound_slots(_Guild(tier=t)) for t in (0, 1, 2, 3)], [8, 24, 36, 48])
 
+# ================================================================ create_sound
+section("create_sound - registered like edit_server_look")
+registered("create_sound", 2, True, True, True)
+SND = {"guild_id": GUILD, "name": "boop", "sound": "attachment", **ATT}
+
+section("create_sound - previewed first, nothing touched")
+cl, g = fresh([_Att(1, "boop.mp3", mp3(1.0))], sounds=[_Sound(1, "old")])
+result, preview = go(cl, "create_sound", {**SND, "volume": "0.5", "emoji": "\U0001F514"})
+check("the first call is a preview, Discord never asked",
+      (result, g._state.http.calls), (None, []))
+check("...names the sound and the server",
+      "boop" in preview["summary"] and "Testing Server" in preview["summary"], True)
+check("...type, measured length, size, source and hash",
+      all(w in preview["detail"] for w in ("MP3, 1.02 s", "boop.mp3", "#")), True)
+check("...volume, emoji and the slots (1 of 8 used -> 6 left)",
+      "Volume: 50%" in preview["detail"] and "\U0001F514" in preview["detail"]
+      and "1 of 8 sounds in use; 6 left" in preview["detail"], True)
+cl, g = fresh([_Att(1, "odd.ogg", b"OggS\x00\x02" + b"\x00" * 20 + b"\x01\x10fLaC"
+                                  + b"\x00" * 12)])
+_, preview = go(cl, "create_sound", SND)
+check("a length the bytes can't show is said, with Discord's 5.2 s cap",
+      "couldn't measure its length" in preview["detail"] and "5.2" in preview["detail"],
+      True)
+
+section("create_sound - confirmed: an OGG goes too (discord.py 2.7.1 alone would refuse it)")
+for label, data, media in (("MP3", mp3(1.0), "audio/mpeg"),
+                           ("OGG", fixture("tone1-opus.ogg"), "audio/ogg")):
+    cl, g = fresh([_Att(1, "s", data)], emojis=[_Emoji(770000000000004242, "party")])
+    result, _ = go(cl, "create_sound", {**SND, "emoji": "<:party:770000000000004242>"}, force=True)
+    call = g._state.http.calls[0]
+    check(f"{label}: one call, the data URI typed from the bytes",
+          (len(g._state.http.calls), call["sound"].startswith(f"data:{media};base64,")),
+          (1, True))
+    check(f"{label}: name, full volume by default, the server's own emoji by id, reason",
+          (call["name"], call["volume"], call["emoji_id"], call["emoji_name"],
+           call["reason"]), ("boop", 1.0, 770000000000004242, None, capabilities.VIA))
+    check(f"{label}: the result is the sound Discord made",
+          (result["status"], result["sound"]["name"], result["slots_left"]),
+          ("sound_created", "boop", 7))
+import base64 as _b64  # noqa: E402
+check("the bytes inside the URI are the file's own",
+      _b64.b64decode(g._state.http.calls[0]["sound"].split(",", 1)[1])
+      == fixture("tone1-opus.ogg"), True)
+
+section("create_sound - refused BEFORE anything changes")
+def sound_refused(params, atts=None, force=True, **gkw):
+    cl, g = fresh(atts if atts is not None else [_Att(1, "s.mp3", mp3(1.0))], **gkw)
+    msg = refusal(cl, "create_sound", {**SND, **params}, force=force)
+    return msg, g._state.http.calls
+
+msg, calls = sound_refused({}, atts=[_Att(1, "long.mp3", mp3(6.0))])
+check("6 s is refused, saying how long", "6.01 seconds" in (msg or "") and calls == [],
+      True)
+msg, _ = sound_refused({}, atts=[_Att(1, "long.mp3", mp3(6.0))], force=False)
+check("...at the preview too", "6.01 seconds" in (msg or ""), True)
+msg, calls = sound_refused({}, atts=[_Att(1, "big.ogg", ogg_vorbis(1.0) + b"\x00" * 600000)])
+check("over 512 KB is refused", "512 KB" in (msg or "") and calls == [], True)
+msg, calls = sound_refused({}, atts=[_Att(1, "x.wav", b"RIFF\x00\x00\x00\x00WAVEfmt ")])
+check("a WAV is refused by its bytes", "isn't an MP3 or OGG" in (msg or "") and calls == [],
+      True)
+msg, calls = sound_refused({}, sounds=[_Sound(i, f"s{i}") for i in range(8)])
+check("no free sound slot -> says how many are used",
+      "no free soundboard slot (8 of 8 in use)" in (msg or "") and calls == [], True)
+check("...but Boost Level 1 has room for a ninth",
+      sound_refused({}, sounds=[_Sound(i, f"s{i}") for i in range(8)], tier=1)[0], None)
+for bad in ("x", "y" * 33):
+    msg, calls = sound_refused({"name": bad})
+    check(f"name of {len(bad)} characters refused", "2 to 32 characters" in (msg or "")
+          and calls == [], True)
+for bad in ("2", "-0.1", "loud", "150%"):
+    msg, calls = sound_refused({"volume": bad})
+    check(f"volume {bad!r} refused", "from 0 to 1" in (msg or "") and calls == [], True)
+check("volume 50% is 0.5", capabilities._sound_volume("50%"), 0.5)
+msg, calls = sound_refused({"emoji": "<:theirs:770000000000000777>"})
+check("another server's custom emoji is refused", "isn't one of" in (msg or "")
+      and calls == [], True)
+msg, calls = sound_refused({"emoji": "party time"})
+check("words are not an emoji", "one Unicode emoji" in (msg or "") and calls == [], True)
+msg, calls = sound_refused({}, create=False, manage=False)
+check("no Create Expressions permission -> says which",
+      "lacks Create Expressions" in (msg or "") and calls == [], True)
+msg, calls = sound_refused({"sound": "https://10.0.0.5/a.mp3"})
+check("a link to a LAN address is refused", "private or local" in (msg or "")
+      and calls == [], True)
+
+section("create_sound - Discord's own refusal is one sentence")
+cl, g = fresh([_Att(1, "s.mp3", mp3(1.0))])
+g._state.http.raise_on_create = discord.HTTPException(
+    _Resp(400), {"code": 50045, "message": "Invalid Form Body",
+                 "errors": {"sound": {"_errors": [{"code": "SOUND_TOO_LONG",
+                                                   "message": "Sound is too long."}]}}})
+m = refusal(cl, "create_sound", SND)
+check("Discord's too-long refusal: one line, its words, ends 'Nothing was changed.'",
+      "\n" not in (m or "") and "Sound is too long" in (m or "")
+      and (m or "").endswith("Nothing was changed.") and ".." not in (m or ""), True)
+
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

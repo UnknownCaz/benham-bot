@@ -21,6 +21,7 @@ nothing, and once for real after confirmation.
 """
 
 import asyncio
+import base64
 import io
 import os
 import re
@@ -31,6 +32,7 @@ import discord
 
 from benham.core import identity
 from benham.core import lookimage
+from benham.core import looksound
 from benham.core import pathsafe
 from benham.core import policy
 from benham.core import rooms
@@ -2924,6 +2926,129 @@ async def _create_sticker(ctx, p):
         "sticker", "it limits how fast a server's stickers can change.")
     return {"status": "sticker_created", "guild": g.name,
             "sticker": guild_sticker_dict(s), "slots_left": limit - used - 1}
+
+
+async def _expr_sound(ctx, p):
+    """The checked looksound.Sound named by p["sound"]."""
+    async def message():
+        cid = p.get("channel_id") or ctx.source_channel_id
+        mid = p.get("message_id") or ctx.source_message_id
+        if not (cid and mid):
+            raise looksound.LookSoundError(
+                "to use an attachment I need channel_id and message_id of the "
+                "message that carries it (they're in the note on the message).")
+        return await ctx.message(cid, mid)
+    try:
+        return await looksound.load(p["sound"], message, "sound")
+    except looksound.LookSoundError as e:
+        raise ActionError(str(e))
+
+
+def _sound_volume(raw):
+    """0.0-1.0 from what was typed ("0.5", "50%", nothing = 1)."""
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return 1.0
+    try:
+        v = float(text[:-1]) / 100 if text.endswith("%") else float(text)
+    except ValueError:
+        v = None
+    if v is None or not 0 <= v <= 1:
+        raise ActionError(f"a sound's volume goes from 0 to 1 (1 is full volume), "
+                          f"and {text!r} isn't in that range.")
+    return v
+
+
+def _sound_emoji(g, raw):
+    """(emoji_id, emoji_name) for the sound's button: one Unicode emoji, or one of
+    THIS server's custom emoji written <:name:id>. Nothing else - the name goes to
+    a field the privacy screen does not read, so it must not be able to carry words."""
+    text = str(raw or "").strip()
+    if not text:
+        return None, None
+    custom = discord.PartialEmoji.from_str(text)
+    if custom.id is not None:
+        if discord.utils.get(g.emojis, id=custom.id) is None:
+            raise ActionError(f"that custom emoji isn't one of {g.name}'s, so the "
+                              "sound can't use it - pick one of the server's own, or "
+                              "a Unicode emoji.")
+        return custom.id, None
+    uni = _unicode_emoji(text)
+    if uni is None:
+        raise ActionError(f"a sound's emoji has to be one Unicode emoji or one of the "
+                          f"server's custom emoji, and {text!r} isn't.")
+    return None, uni
+
+
+@action("create_sound", identity.MANAGE,
+        "Add a sound to a server's soundboard, from an attachment "
+        "(sound='attachment' or 'attachment:1', with channel_id and message_id of the "
+        "message that carries it), the assets folder ('asset:beep.mp3') or a public "
+        "https link. Discord takes an MP3 or OGG of at most 512 KB and 5.2 seconds, "
+        "named in 2-32 characters; volume is 0-1 (default 1) and the emoji is "
+        "optional. Refused before anything changes if a limit is broken or the "
+        "server has no free sound slot. Always previewed and confirmed.",
+        {"guild_id": {"type": "int", "required": True},
+         "name": {"type": "str", "required": True, "desc": "Sound name, 2-32 characters"},
+         "sound": {"type": "str", "required": True,
+                   "desc": "Sound source: attachment | attachment:N | asset:<file> | "
+                           "https://link (MP3 or OGG)"},
+         "volume": {"type": "str", "desc": "0 to 1, default 1 (full)"},
+         "emoji": {"type": "str", "desc": "One Unicode emoji, or one of this server's "
+                                          "custom emoji as <:name:id>"},
+         "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
+                                               "attachment, if you use one"},
+         "message_id": {"type": "int", "desc": "Message carrying the attachment"},
+         "reason": {"type": "str", "desc": "Audit-log reason"}},
+        needs_guild=True, outward=True, always_confirm=True, taints=True)
+async def _create_sound(ctx, p):
+    g = ctx.guild(p["guild_id"])
+    _expr_can(g, "soundboard sounds")
+    name = str(p["name"]).strip()
+    if not 2 <= len(name) <= 32:
+        raise ActionError(f"a sound name has to be 2 to 32 characters; that's "
+                          f"{len(name)}.")
+    volume = _sound_volume(p.get("volume"))
+    emoji_id, emoji_name = _sound_emoji(g, p.get("emoji"))
+    snd = await _expr_sound(ctx, p)
+    used = len(await g.fetch_soundboard_sounds())
+    limit = _sound_slots(g)
+    if used >= limit:
+        raise ActionError(
+            f"{g.name} has no free soundboard slot ({used} of {limit} in use) - "
+            "delete one first, or boost the server for more.")
+
+    if ctx.dry_run:
+        lines = [f"Sound: {snd.describe()}"]
+        if snd.seconds is None:
+            lines.append(f"I couldn't measure its length from the bytes. Discord takes "
+                         f"at most {looksound.MAX_SECONDS} seconds and refuses a "
+                         "longer one, changing nothing.")
+        shown = emoji_name
+        if emoji_id:
+            shown = f"<:{discord.utils.get(g.emojis, id=emoji_id).name}:{emoji_id}>"
+        lines += [f"Volume: {round(volume * 100)}%",
+                  f"Emoji: {shown}" if shown else "No emoji.",
+                  f"Slots: {used} of {limit} sounds in use; {limit - used - 1} left "
+                  "after this."]
+        return {"summary": f"Add sound **{name}** to **{g.name}**'s soundboard",
+                "detail": "\n".join(lines)}
+
+    # Straight to discord.py's HTTP route, with the data URI built here:
+    # Guild.create_soundboard_sound in 2.7.1 types the bytes itself and knows
+    # only an ID3 tag or a \xff\xfb frame, so it raises ValueError on every OGG
+    # (and on MPEG-2 MP3s) before Discord is asked. Discord takes both; the type
+    # here is looksound's, read from the bytes.
+    data_uri = (f"data:{snd.media};base64,"
+                + base64.b64encode(snd.raw).decode("ascii"))
+    data = await _expr_call(
+        g._state.http.create_soundboard_sound(
+            g.id, reason=p.get("reason") or VIA, name=name, sound=data_uri,
+            volume=volume, emoji_id=emoji_id, emoji_name=emoji_name),
+        "soundboard", "it limits how fast a server's soundboard can change.")
+    made = discord.SoundboardSound(guild=g, state=g._state, data=data)
+    return {"status": "sound_created", "guild": g.name, "sound": sound_dict(made),
+            "slots_left": limit - used - 1}
 
 
 @action("create_webhook", identity.MANAGE, "Create a webhook on a channel.",
