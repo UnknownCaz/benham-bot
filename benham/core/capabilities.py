@@ -3965,34 +3965,42 @@ def _unicode_emoji(text):
 
 def _is_apng(raw):
     """An animated PNG carries an acTL chunk before its first IDAT."""
-    i = 8
-    while i + 8 <= len(raw):
-        length = int.from_bytes(raw[i:i + 4], "big")
-        tag = raw[i + 4:i + 8]
-        if tag == b"acTL":
-            return True
-        if tag in (b"IDAT", b"IEND"):
-            return False
-        i += 12 + length
-    return False
+    return fitimage.is_apng(raw)
+
+
+# What Discord takes for a sticker as is: PNG (APNG is a PNG) and GIF. Its Create
+# Guild Sticker endpoint takes PNG, APNG, GIF or Lottie, at most 512 KB, and
+# discord.py 2.7.1 passes the file through untouched - guild.py create_sticker
+# (line 3085) hands it to http.py create_guild_sticker (line 1673), which sets the
+# part's content type from the first 16 bytes (utils._get_mime_type_for_image:
+# PNG, JPEG, GIF, WebP), so a GIF goes up as image/gif. A JPEG is converted to a
+# PNG by the fitter (Discord takes no JPEG sticker); a WebP is refused by type.
+_STICKER_FORMATS = ("image/png", "image/gif")
+_STICKER_FITTABLE = _STICKER_FORMATS + ("image/jpeg",)
 
 
 @action("create_sticker", identity.MANAGE,
         "Add a sticker to a server, from a picture: an attachment "
         "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
         "message that carries it), the assets folder ('asset:x.png') or a public https "
-        "link. Discord wants a PNG or APNG of exactly 320x320 pixels, at most 512 KB, "
-        "a name of 2-30 characters and one related Unicode emoji; the description is "
-        "optional (2-100 characters). Refused before anything changes if a limit is "
-        "broken or the server has no free sticker slot. Always previewed and confirmed.",
+        "link. Discord wants a PNG, APNG or GIF of exactly 320x320 pixels, at most "
+        "512 KB - any other size, a JPEG or a bigger file is fitted (padded, or "
+        "cropped with fit='crop') and the preview says how; a name of 2-30 characters "
+        "and one related Unicode emoji; the description is optional (2-100 "
+        "characters). Refused before anything changes if a limit is broken or the "
+        "server has no free sticker slot. Always previewed and confirmed.",
         {"guild_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True, "desc": "Sticker name, 2-30 characters"},
          "emoji": {"type": "str", "required": True,
                    "desc": "The related emoji Discord requires: one Unicode emoji"},
          "image": {"type": "str", "required": True,
                    "desc": "Picture source: attachment | attachment:N | asset:<file> | "
-                           "https://link (a 320x320 PNG or APNG)"},
+                           "https://link (PNG, APNG, GIF or JPEG)"},
          "description": {"type": "str", "desc": "Optional, 2-100 characters"},
+         "fit": {"type": "str", "desc": "pad (default): a picture that isn't 320x320 is "
+                                        "fitted inside it on a transparent canvas; "
+                                        "crop: its middle square is used; none: refuse "
+                                        "it instead"},
          "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
                                                "attachment, if you use one"},
          "message_id": {"type": "int", "desc": "Message carrying the attachment"},
@@ -4014,46 +4022,76 @@ async def _create_sticker(ctx, p):
         raise ActionError(f"a sticker's related emoji has to be one Unicode emoji "
                           f"(from the emoji keyboard), and {p['emoji']!r} isn't one.")
 
+    fit = _fit_choice(p.get("fit"), ("pad", "crop", "none"), "pad", "a sticker",
+                      aliases={"auto": "pad"})
+
     pic = (await _look_pictures(ctx, p, ("image",)))["image"]
-    if pic.media != "image/png":
-        raise ActionError(f"a sticker has to be a PNG or APNG, and that picture is a "
-                          f"{_expr_kind(pic)}.")
-    if len(pic.raw) > STICKER_MAX_BYTES:
-        raise ActionError(
+    # The first limit the picture breaks, in today's words - the refusal when
+    # fit=none, and the reason the fitter runs otherwise.
+    problem = None
+    if pic.media not in _STICKER_FORMATS:
+        problem = (f"a sticker has to be a PNG, APNG or GIF, and that picture is a "
+                   f"{_expr_kind(pic)}.")
+    elif len(pic.raw) > STICKER_MAX_BYTES:
+        problem = (
             f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
             f"at most {lookimage._limit_words(STICKER_MAX_BYTES)} for a sticker - "
             "shrink it and ask again.")
-    if not pic.width:
-        raise ActionError(f"I couldn't read that PNG's size, and a sticker has to be "
-                          f"exactly {STICKER_SIDE}x{STICKER_SIDE}.")
-    if (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
-        raise ActionError(f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
-                          f"pixels, and that picture is {pic.width}x{pic.height}.")
+    elif not pic.width:
+        problem = (f"I couldn't read that {_expr_kind(pic)}'s size, and a sticker has "
+                   f"to be exactly {STICKER_SIDE}x{STICKER_SIDE}.")
+    elif (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
+        problem = (f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
+                   f"pixels, and that picture is {pic.width}x{pic.height}.")
+    fitted = None
+    if problem:
+        if fit == "none" or pic.media not in _STICKER_FITTABLE:
+            raise ActionError(problem)
+        fitted = await _fit_or_refuse("sticker", pic, fit, problem)
+        if (fitted.media not in _STICKER_FORMATS
+                or len(fitted.raw) > STICKER_MAX_BYTES
+                or lookimage.dimensions(fitted.raw, fitted.media)
+                != (STICKER_SIDE, STICKER_SIDE)):
+            raise ActionError(_FIT_ODD)         # the fitter's promise, checked anyway
+    raw = fitted.raw if fitted else pic.raw
+    media = fitted.media if fitted else pic.media
     used = len(g.stickers)
     limit = g.sticker_limit
     if used >= limit:
         raise ActionError(
             f"{g.name} has no free sticker slot ({used} of {limit} in use) - delete "
             "one first, or boost the server for more.")
-    animated = _is_apng(pic.raw)
+    # The format Discord gives it, read from the bytes that go up (the fitted ones).
+    fmt = (discord.StickerFormatType.gif if media == "image/gif"
+           else discord.StickerFormatType.apng if _is_apng(raw)
+           else discord.StickerFormatType.png)
 
     if ctx.dry_run:
-        kind = "APNG (animated)" if animated else "PNG"
-        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}",
-                 f"Related emoji: {emoji}",
-                 f"Description: {desc!r}" if desc else "No description.",
-                 f"Slots: {used} of {limit} stickers in use; "
-                 f"{limit - used - 1} left after this."]
+        kind = "APNG (animated)" if _is_apng(pic.raw) else "PNG"
+        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}"]
+        if fitted:
+            lines += _fit_lines(pic, fitted, "sticker")
+        if fmt is discord.StickerFormatType.gif:
+            lines.append("It's a GIF, so it becomes a GIF sticker.")
+        lines += [f"Related emoji: {emoji}",
+                  f"Description: {desc!r}" if desc else "No description.",
+                  f"Slots: {used} of {limit} stickers in use; "
+                  f"{limit - used - 1} left after this."]
         return {"summary": f"Add sticker **{name}** to **{g.name}**",
                 "detail": "\n".join(lines)}
 
+    filename = "sticker.gif" if media == "image/gif" else "sticker.png"
     s = await _expr_call(
         g.create_sticker(name=name, description=desc, emoji=emoji,
-                         file=discord.File(io.BytesIO(pic.raw), filename="sticker.png"),
+                         file=discord.File(io.BytesIO(raw), filename=filename),
                          reason=p.get("reason") or VIA),
         "sticker", "it limits how fast a server's stickers can change.")
-    return {"status": "sticker_created", "guild": g.name,
-            "sticker": guild_sticker_dict(s), "slots_left": limit - used - 1}
+    out = {"status": "sticker_created", "guild": g.name,
+           "sticker": guild_sticker_dict(s), "format": fmt.name,
+           "slots_left": limit - used - 1}
+    if fitted:
+        out["fitted"] = _fit_facts(pic, fitted)
+    return out
 
 
 async def _expr_sound(ctx, p):

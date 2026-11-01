@@ -15,6 +15,13 @@ checked bytes, beside lookimage.py for pictures. What is pinned:
   breaks one is refused in one plain sentence and Discord is never called - not
   at the preview, not at the confirm.
 
+  A PICTURE OVER A LIMIT IS FITTED, NOT REFUSED (Caz's yes 2026-11-01). An emoji
+  over 256 KB, or a sticker that is not a 320x320 PNG/APNG/GIF under 512 KB, goes
+  through core/fitimage.py in a child process; the preview shows what came in ->
+  what goes up and each step, the confirmed call uploads the fitted bytes, and
+  fit=none keeps the old refusal word for word. A child that hangs is killed and
+  reaped. A picture that fits is never touched.
+
   THE PREVIEW TOUCHES NOTHING. The first call of a create parks a preview (type,
   size, dimensions or length, hash, source, name, slots left); the first call of
   a delete is a dry run naming what goes. Nothing is uploaded, deleted or saved.
@@ -317,7 +324,9 @@ class _Guild:
 
     async def create_sticker(self, **kw):
         kw = dict(kw)
-        kw["file_bytes"] = kw.pop("file").fp.read()
+        sent = kw.pop("file")
+        kw["file_bytes"] = sent.fp.read()
+        kw["filename"] = sent.filename
         self.calls.append(("sticker", kw))
         if self.raise_on_create is not None:
             raise self.raise_on_create
@@ -742,11 +751,22 @@ check("not 320x320 -> says the size it got",
       "exactly 320x320" in (msg or "") and "512x512" in (msg or "") and calls == [], True)
 msg, _ = sticker_refused({}, atts=[_Att(1, "p.png", png(512, 512))], force=False)
 check("...at the preview too", "512x512" in (msg or ""), True)
+msg, calls = sticker_refused({"fit": "none"}, atts=[_Att(1, "p.jpg", jpeg(320, 320))])
+check("a JPEG with fit=none is refused by type (GIF is a sticker type now)",
+      (msg, calls), ("a sticker has to be a PNG, APNG or GIF, and that picture is a "
+                     "JPEG.", []))
 msg, calls = sticker_refused({}, atts=[_Att(1, "p.jpg", jpeg(320, 320))])
-check("a JPEG is refused by type", "PNG or APNG" in (msg or "") and "JPEG" in (msg or "")
-      and calls == [], True)
-msg, calls = sticker_refused({}, atts=[_Att(1, "p.gif", gif(320, 320))])
-check("a GIF is refused by type", "PNG or APNG" in (msg or "") and calls == [], True)
+check("...and one the fitter can't open says so after the same sentence",
+      (msg, calls), ("a sticker has to be a PNG, APNG or GIF, and that picture is a "
+                     "JPEG. " + fitimage.DAMAGED, []))
+msg, calls = sticker_refused({}, atts=[_Att(1, "p.webp", webp_x(320, 320))])
+check("a WebP is refused by type, fit or no fit",
+      (msg, calls), ("a sticker has to be a PNG, APNG or GIF, and that picture is a "
+                     "WEBP.", []))
+msg, calls = sticker_refused({"fit": "none"}, atts=[_Att(1, "p.gif", gif(320, 320))])
+check("a 320x320 GIF under 512 KB is now taken as is, even with fit=none",
+      (msg, len(calls), calls[0][1]["file_bytes"] == gif(320, 320),
+       calls[0][1]["filename"]), (None, 1, True, "sticker.gif"))
 msg, calls = sticker_refused({}, atts=[_Att(1, "p.png", png(320, 320, pad=600 * 1024))])
 check("over 512 KB -> the size and the cap", "512 KB" in (msg or "") and calls == [], True)
 msg, calls = sticker_refused({}, atts=[_Att(1, "p.png", b"\x89PNG\r\n\x1a\n")])
@@ -784,6 +804,116 @@ m = refusal(cl, "create_sticker", STK)
 check("a multi-line form error is flattened to one line ending 'Nothing was changed.'",
       "\n" not in (m or "") and "File too large" in (m or "")
       and (m or "").endswith("Nothing was changed."), True)
+
+section("create_sticker - a picture that isn't 320x320 is fitted: pad (default) or crop")
+WIDE = Image.new("RGB", (1000, 600), (0, 200, 0))
+WIDE.paste((255, 0, 0), (0, 0, 200, 600))
+WIDE.paste((0, 0, 255), (800, 0, 1000, 600))
+WIDE_PNG = real(WIDE, "PNG")
+WIDE_WORDS = lookimage._size_words(len(WIDE_PNG))
+cl, g = fresh([_Att(1, "wide.png", WIDE_PNG)])
+result, preview = go(cl, "create_sticker", STK)
+d = preview["detail"]
+check("a preview, Discord never asked", (result, g.calls), (None, []))
+check("...what came in -> what goes up",
+      f"\nYour picture: PNG, 1000x600, {WIDE_WORDS} -> sticker: PNG, 320x320, " in d, True)
+check("...and the pad in plain words, naming the other choice",
+      "\n- scaled it down from 1000x600 to 320x192\n- padded to 320x320: transparent "
+      "bars top and bottom (say crop instead to crop the sides)\n" in d, True)
+check("...then today's lines", "Related emoji: " in d and "Slots: 0 of 5" in d, True)
+_, preview = go(cl, "create_sticker", {**STK, "fit": "crop"})
+check("fit=crop previews the crop instead",
+      "\n- cropped to the middle 600x600, then 320x320\n" in preview["detail"], True)
+check("fit=auto is read as pad",
+      "padded to 320x320" in go(cl, "create_sticker", {**STK, "fit": "auto"})[1]["detail"],
+      True)
+want = fitimage.fit_sticker(WIDE_PNG, "image/png", "pad")
+result, _ = go(cl, "create_sticker", STK, force=True)
+kw = g.calls[0][1]
+out = opened(kw["file_bytes"]).convert("RGBA")
+check("confirmed: the FITTED PNG goes up - 320x320, the bars clear",
+      (sha(kw["file_bytes"]) == sha(want.raw), out.size, out.getpixel((160, 0))[3],
+       out.getpixel((160, 160))[3], kw["filename"]),
+      (True, (320, 320), 0, 255, "sticker.png"))
+check("...the result names the format and the fit",
+      (result["format"], result["fitted"]["width"], result["fitted"]["height"],
+       result["fitted"]["steps"][-1].startswith("padded to 320x320")),
+      ("png", 320, 320, True))
+cl, g = fresh([_Att(1, "wide.png", WIDE_PNG)])
+check("fit=none keeps today's refusal, word for word",
+      (refusal(cl, "create_sticker", {**STK, "fit": "none"}, force=False), g.calls),
+      ("a sticker has to be exactly 320x320 pixels, and that picture is 1000x600.", []))
+check("an unknown fit is one sentence",
+      refusal(cl, "create_sticker", {**STK, "fit": "stretch"}, force=False),
+      "fit is pad, crop or none for a sticker, and 'stretch' isn't one of them.")
+cl, g = fresh([_Att(1, "wide.png", WIDE_PNG)], stickers=[_Sticker(i, f"s{i}")
+                                                       for i in range(5)])
+check("a full server is still refused, fit or no fit",
+      "no free sticker slot (5 of 5 in use)" in (refusal(cl, "create_sticker", STK) or ""),
+      True)
+
+section("create_sticker - a JPEG is made a PNG")
+cl, g = fresh([_Att(1, "photo.jpg", real(WIDE, "JPEG"))])
+_, preview = go(cl, "create_sticker", STK)
+check("the preview says why",
+      "\n- made it a PNG (Discord takes no JPEG stickers)" in preview["detail"]
+      and "Your picture: JPEG, 1000x600, " in preview["detail"], True)
+result, _ = go(cl, "create_sticker", STK, force=True)
+check("...and a PNG goes up", (g.calls[0][1]["file_bytes"][:4], result["format"]),
+      (b"\x89PNG", "png"))
+
+section("create_sticker - a GIF sticker (new): fitted, animated, sent as a GIF")
+GIFW = real(real_noise((480, 270), 30).quantize(64), "GIF", save_all=True,
+            append_images=[real_noise((480, 270), 31 + i).quantize(64) for i in range(11)],
+            duration=80, loop=0)
+cl, g = fresh([_Att(1, "dance.gif", GIFW)])
+_, preview = go(cl, "create_sticker", STK)
+d = preview["detail"]
+check("the preview: GIF in, a 320x320 GIF out, and what that becomes",
+      "Your picture: GIF, 480x270, " in d and "-> sticker: GIF, 320x320, " in d
+      and "It's a GIF, so it becomes a GIF sticker." in d, True)
+result, _ = go(cl, "create_sticker", STK, force=True)
+kw = g.calls[0][1]
+gif_out = opened(kw["file_bytes"])
+check("confirmed: an animated 320x320 GIF under 512 KB, named .gif",
+      (kw["file_bytes"][:3], gif_out.size, getattr(gif_out, "n_frames", 1) > 1,
+       len(kw["file_bytes"]) <= 512 * 1024, kw["filename"], result["format"]),
+      (b"GIF", (320, 320), True, True, "sticker.gif", "gif"))
+
+section("create_sticker - an APNG stays an APNG")
+AP = real(Image.new("RGBA", (200, 120), (255, 0, 0, 255)), "PNG", save_all=True,
+          append_images=[Image.new("RGBA", (200, 120), (0, 0, 255, 255))],
+          duration=200, loop=0)
+cl, g = fresh([_Att(1, "blink.png", AP)])
+_, preview = go(cl, "create_sticker", STK)
+check("the source is named an APNG, and so is what goes up",
+      "Picture: APNG (animated), 200x120" in preview["detail"]
+      and "-> sticker: APNG, 320x320, " in preview["detail"], True)
+result, _ = go(cl, "create_sticker", STK, force=True)
+check("confirmed: an APNG of 320x320, format apng",
+      (capabilities._is_apng(g.calls[0][1]["file_bytes"]),
+       opened(g.calls[0][1]["file_bytes"]).size, result["format"]),
+      (True, (320, 320), "apng"))
+
+section("create_sticker - a 320x320 PNG that fits is untouched")
+cl, g = fresh([_Att(1, "hi.png", png(320, 320))])
+result, _ = go(cl, "create_sticker", STK, force=True)
+check("its own bytes, no fitted record, format png",
+      (g.calls[0][1]["file_bytes"] == png(320, 320), "fitted" in result, result["format"]),
+      (True, False, "png"))
+
+section("create_sticker - fit in the words do help prints")
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    _do._print_help("create_sticker")
+_help = _buf.getvalue()
+check("a fit line: optional str, pad (default), crop or none",
+      any(l.split()[:3] == ["fit", "str", "optional"] and "pad (default)" in l
+          and "crop:" in l and "none: refuse it instead" in l
+          for l in _help.splitlines()), True)
+check("...and the summary names GIF and the fitting",
+      "PNG, APNG or GIF of exactly 320x320" in _help and "is fitted (padded" in _help,
+      True)
 
 # ============================================================== delete_sticker
 section("delete_sticker - tier 3 like delete_emoji")
