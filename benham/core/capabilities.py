@@ -24,14 +24,18 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 import re
+import subprocess
+import sys
 import unicodedata
 from datetime import datetime, timezone, timedelta
 
 import discord
 
 from benham.core import eventtime
+from benham.core import fitimage
 from benham.core import identity
 from benham.core import lookimage
 from benham.core import looksound
@@ -3712,14 +3716,137 @@ async def _expr_call(awaitable, what, who_limits):
         raise ActionError(" ".join(str(e).split()).replace(".. Nothing", ". Nothing"))
 
 
+# --- fitting a picture to the limits (INTENT 60, Stage 8 follow-up) ----------
+#
+# Discord's own upload screen shrinks a big picture; Caz said yes to Benham doing
+# the same on 2026-11-01 ("Lets do it!", 08:59 local). core/fitimage.py does the
+# work; this is the bot's side of its fence: the decode runs in a CHILD PROCESS
+# that is killed past FIT_TIMEOUT, so a Pillow crash or a hostile file costs one
+# refused request, never the bot. The child is given the bytes lookimage.check
+# already passed; the fit is deterministic, so the preview's numbers (first call)
+# are the upload's (the confirmed call re-runs it on the same bytes).
+
+FIT_TIMEOUT = 25            # seconds, the child's whole run, decode to encode
+_FIT_CHILD = ("-m", "benham.core.fitimage")     # a test swaps in a child that sleeps
+_FIT_SLOW = "that picture took too long to process - send a smaller one."
+_FIT_BROKE = ("the picture fitter stopped without an answer, so nothing was changed "
+              "- send a smaller or simpler picture.")
+_FIT_ODD = ("the picture fitter gave back something Discord wouldn't take, so nothing "
+            "was changed - send a smaller or simpler picture.")
+_fit_log = logging.getLogger("benham.fitimage")
+
+
+def _fit_answer(out, code, err=b""):
+    """The child's stdout -> fitimage.Fitted, or the FitError it reported."""
+    head, _, body = (out or b"").partition(b"\n")
+    try:
+        report = json.loads(head.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        report = None
+    if isinstance(report, dict) and report.get("ok") is True and code == 0 \
+            and len(body) == report.get("bytes"):
+        return fitimage.Fitted.from_report(report, body)
+    if isinstance(report, dict) and report.get("ok") is False and code == 2:
+        raise fitimage.FitError(str(report.get("refused") or _FIT_BROKE),
+                                str(report.get("kind") or "damaged"))
+    tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+    _fit_log.warning("fitimage child gave no answer (exit %s): %s", code, tail[0][:200])
+    raise fitimage.FitError(_FIT_BROKE, "crashed")
+
+
+def _fit_in_thread(cmd, raw):
+    """The same child through subprocess.run, for an event loop that cannot start
+    subprocesses (a selector loop on Windows); run() kills it on the timeout."""
+    try:
+        done = subprocess.run(cmd, input=raw, capture_output=True, timeout=FIT_TIMEOUT,
+                              cwd=_paths.ROOT)
+    except subprocess.TimeoutExpired:
+        raise fitimage.FitError(_FIT_SLOW, "timeout")
+    return _fit_answer(done.stdout, done.returncode, done.stderr)
+
+
+async def _fit_in_child(target, raw, mode):
+    """Run `python -m benham.core.fitimage <target> <mode>` on `raw` -> Fitted,
+    or raise fitimage.FitError. sys.executable is the interpreter the bot runs
+    under (the Mac's .venv/bin/python, which has Pillow), so the child sees the
+    same packages."""
+    cmd = [sys.executable, *_FIT_CHILD, target, mode]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, cwd=_paths.ROOT)
+    except NotImplementedError:
+        return await asyncio.to_thread(_fit_in_thread, cmd, raw)
+    except OSError as e:
+        _fit_log.warning("fitimage child did not start: %s", e)
+        raise fitimage.FitError(_FIT_BROKE, "crashed")
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(raw), FIT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise fitimage.FitError(_FIT_SLOW, "timeout")
+    finally:
+        if proc.returncode is None:         # timed out, or this request was cancelled
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+    return _fit_answer(out, proc.returncode, err)
+
+
+async def _fit_or_refuse(target, pic, mode, problem):
+    """Fit `pic` for `target` ("emoji" | "sticker") or raise ActionError.
+
+    `problem` is the sentence the picture would have been refused with before the
+    fitter existed; a picture the fitter cannot even open is refused with that
+    sentence and the reason the fit failed, so the old advice still reaches him."""
+    try:
+        return await _fit_in_child(target, pic.raw, mode)
+    except fitimage.FitError as e:
+        if e.kind == "damaged":
+            raise ActionError(f"{problem} {fitimage.DAMAGED}")
+        raise ActionError(str(e))
+
+
+def _fit_choice(raw, allowed, default, what, aliases=None):
+    """The `fit` parameter, checked: one of `allowed`, `default` when not given."""
+    text = str(raw if raw is not None else "").strip().lower() or default
+    text = (aliases or {}).get(text, text)
+    if text not in allowed:
+        raise ActionError(f"fit is {', '.join(allowed[:-1])} or {allowed[-1]} for "
+                          f"{what}, and {raw!r} isn't one of them.")
+    return text
+
+
+def _fit_lines(pic, fitted, what):
+    """The preview block for a fitted picture: what came in -> what goes up, then
+    one line per step."""
+    src = fitimage.kind_of(pic.media, pic.raw)
+    src += f", {pic.width}x{pic.height}" if pic.width else ", size unknown"
+    src += f", {lookimage._size_words(len(pic.raw))}"
+    if fitted.source_frames > 1:
+        src += f", {fitted.source_frames} frames"
+    return ([f"Your picture: {src} -> {what}: {fitted.describe()}"]
+            + [f"- {step}" for step in fitted.steps])
+
+
+def _fit_facts(pic, fitted):
+    """The result's record of a fit, beside the source it came from."""
+    return {"source": pic.describe(), "uploaded": fitted.describe(),
+            "media": fitted.media, "width": fitted.width, "height": fitted.height,
+            "bytes": len(fitted.raw), "frames": fitted.frames,
+            "steps": list(fitted.steps)}
+
+
 @action("create_emoji", identity.MANAGE,
         "Add a custom emoji to a server, from a picture: an attachment "
         "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
         "message that carries it), the assets folder ('asset:logo.png') or a public "
         "https link. PNG, JPEG or GIF (a GIF becomes an animated emoji), at most "
-        "256 KB; the name is 2-32 letters, digits or underscores. Refused before "
-        "anything changes if the picture breaks a limit or the server has no free "
-        "emoji slot. Always previewed and confirmed.",
+        "256 KB - a bigger picture is shrunk to fit (128 px, then fewer colours or "
+        "frames) and the preview says how; the name is 2-32 letters, digits or "
+        "underscores. Refused before anything changes if the picture breaks a limit "
+        "or the server has no free emoji slot. Always previewed and confirmed.",
         {"guild_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True,
                   "desc": "Emoji name: 2-32 letters, digits or underscores, no colons"},
@@ -3727,6 +3854,8 @@ async def _expr_call(awaitable, what, who_limits):
                    "desc": "Picture source: attachment | attachment:N | asset:<file> | "
                            "https://link"},
          "roles": {"type": "list", "desc": "Role ids that may use it (default: everyone)"},
+         "fit": {"type": "str", "desc": "auto (default): a picture over 256 KB is shrunk "
+                                        "to fit; none: refuse it instead"},
          "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
                                                "attachment, if you use one"},
          "message_id": {"type": "int", "desc": "Message carrying the attachment"},
@@ -3749,16 +3878,24 @@ async def _create_emoji(ctx, p):
             raise ActionError(f"there's no role {rid} in {g.name}.")
         if role not in roles:
             roles.append(role)
+    fit = _fit_choice(p.get("fit"), ("auto", "none"), "auto", "an emoji")
 
     pic = (await _look_pictures(ctx, p, ("image",)))["image"]
     if pic.media not in _EMOJI_FORMATS:
         raise ActionError(f"Discord takes a PNG, JPEG or GIF for an emoji, and that "
                           f"picture is a {_expr_kind(pic)}.")
+    fitted = None
     if len(pic.raw) > EMOJI_MAX_BYTES:
-        raise ActionError(
+        problem = (
             f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
             f"at most {lookimage._limit_words(EMOJI_MAX_BYTES)} for an emoji - shrink "
             "it and ask again.")
+        if fit == "none":
+            raise ActionError(problem)
+        fitted = await _fit_or_refuse("emoji", pic, "auto", problem)
+        if len(fitted.raw) > EMOJI_MAX_BYTES or fitted.media != pic.media:
+            raise ActionError(_FIT_ODD)         # the fitter's promise, checked anyway
+    image = fitted.raw if fitted else pic.raw
     # Discord counts static and animated emoji in separate pools of emoji_limit
     # each, so the free slot that matters is the one in this picture's pool.
     animated = pic.media == "image/gif"
@@ -3771,9 +3908,11 @@ async def _create_emoji(ctx, p):
             "delete one first, or boost the server for more.")
 
     if ctx.dry_run:
-        lines = [f"Picture: {pic.describe()}",
-                 f"Slots: {used} of {limit} {pool} emoji in use; "
-                 f"{limit - used - 1} left after this."]
+        lines = [f"Picture: {pic.describe()}"]
+        if fitted:
+            lines += _fit_lines(pic, fitted, "emoji")
+        lines.append(f"Slots: {used} of {limit} {pool} emoji in use; "
+                     f"{limit - used - 1} left after this.")
         if animated:
             lines.append("It's a GIF, so it becomes an animated emoji.")
         lines.append("Only these roles can use it: " + ", ".join(r.name for r in roles)
@@ -3785,14 +3924,17 @@ async def _create_emoji(ctx, p):
                 "detail": "\n".join(lines)}
 
     e = await _expr_call(
-        g.create_custom_emoji(name=name, image=pic.raw, roles=roles,
+        g.create_custom_emoji(name=name, image=image, roles=roles,
                               reason=p.get("reason") or VIA),
         "emoji", "it limits how fast a server's emoji can change.")
-    return {"status": "emoji_created", "guild": g.name,
-            "emoji": {"id": e.id, "name": e.name, "animated": e.animated,
-                      "usage": str(e)},
-            "roles": [r.name for r in roles],
-            "slots_left": limit - used - 1}
+    out = {"status": "emoji_created", "guild": g.name,
+           "emoji": {"id": e.id, "name": e.name, "animated": e.animated,
+                     "usage": str(e)},
+           "roles": [r.name for r in roles],
+           "slots_left": limit - used - 1}
+    if fitted:
+        out["fitted"] = _fit_facts(pic, fitted)
+    return out
 
 
 STICKER_MAX_BYTES = 512 * 1024
@@ -3823,34 +3965,42 @@ def _unicode_emoji(text):
 
 def _is_apng(raw):
     """An animated PNG carries an acTL chunk before its first IDAT."""
-    i = 8
-    while i + 8 <= len(raw):
-        length = int.from_bytes(raw[i:i + 4], "big")
-        tag = raw[i + 4:i + 8]
-        if tag == b"acTL":
-            return True
-        if tag in (b"IDAT", b"IEND"):
-            return False
-        i += 12 + length
-    return False
+    return fitimage.is_apng(raw)
+
+
+# What Discord takes for a sticker as is: PNG (APNG is a PNG) and GIF. Its Create
+# Guild Sticker endpoint takes PNG, APNG, GIF or Lottie, at most 512 KB, and
+# discord.py 2.7.1 passes the file through untouched - guild.py create_sticker
+# (line 3085) hands it to http.py create_guild_sticker (line 1673), which sets the
+# part's content type from the first 16 bytes (utils._get_mime_type_for_image:
+# PNG, JPEG, GIF, WebP), so a GIF goes up as image/gif. A JPEG is converted to a
+# PNG by the fitter (Discord takes no JPEG sticker); a WebP is refused by type.
+_STICKER_FORMATS = ("image/png", "image/gif")
+_STICKER_FITTABLE = _STICKER_FORMATS + ("image/jpeg",)
 
 
 @action("create_sticker", identity.MANAGE,
         "Add a sticker to a server, from a picture: an attachment "
         "(image='attachment' or 'attachment:1', with channel_id and message_id of the "
         "message that carries it), the assets folder ('asset:x.png') or a public https "
-        "link. Discord wants a PNG or APNG of exactly 320x320 pixels, at most 512 KB, "
-        "a name of 2-30 characters and one related Unicode emoji; the description is "
-        "optional (2-100 characters). Refused before anything changes if a limit is "
-        "broken or the server has no free sticker slot. Always previewed and confirmed.",
+        "link. Discord wants a PNG, APNG or GIF of exactly 320x320 pixels, at most "
+        "512 KB - any other size, a JPEG or a bigger file is fitted (padded, or "
+        "cropped with fit='crop') and the preview says how; a name of 2-30 characters "
+        "and one related Unicode emoji; the description is optional (2-100 "
+        "characters). Refused before anything changes if a limit is broken or the "
+        "server has no free sticker slot. Always previewed and confirmed.",
         {"guild_id": {"type": "int", "required": True},
          "name": {"type": "str", "required": True, "desc": "Sticker name, 2-30 characters"},
          "emoji": {"type": "str", "required": True,
                    "desc": "The related emoji Discord requires: one Unicode emoji"},
          "image": {"type": "str", "required": True,
                    "desc": "Picture source: attachment | attachment:N | asset:<file> | "
-                           "https://link (a 320x320 PNG or APNG)"},
+                           "https://link (PNG, APNG, GIF or JPEG)"},
          "description": {"type": "str", "desc": "Optional, 2-100 characters"},
+         "fit": {"type": "str", "desc": "pad (default): a picture that isn't 320x320 is "
+                                        "fitted inside it on a transparent canvas; "
+                                        "crop: its middle square is used; none: refuse "
+                                        "it instead"},
          "channel_id": {"type": "int", "desc": "Channel of the message carrying the "
                                                "attachment, if you use one"},
          "message_id": {"type": "int", "desc": "Message carrying the attachment"},
@@ -3872,46 +4022,76 @@ async def _create_sticker(ctx, p):
         raise ActionError(f"a sticker's related emoji has to be one Unicode emoji "
                           f"(from the emoji keyboard), and {p['emoji']!r} isn't one.")
 
+    fit = _fit_choice(p.get("fit"), ("pad", "crop", "none"), "pad", "a sticker",
+                      aliases={"auto": "pad"})
+
     pic = (await _look_pictures(ctx, p, ("image",)))["image"]
-    if pic.media != "image/png":
-        raise ActionError(f"a sticker has to be a PNG or APNG, and that picture is a "
-                          f"{_expr_kind(pic)}.")
-    if len(pic.raw) > STICKER_MAX_BYTES:
-        raise ActionError(
+    # The first limit the picture breaks, in today's words - the refusal when
+    # fit=none, and the reason the fitter runs otherwise.
+    problem = None
+    if pic.media not in _STICKER_FORMATS:
+        problem = (f"a sticker has to be a PNG, APNG or GIF, and that picture is a "
+                   f"{_expr_kind(pic)}.")
+    elif len(pic.raw) > STICKER_MAX_BYTES:
+        problem = (
             f"that picture is {lookimage._size_words(len(pic.raw))}, and Discord takes "
             f"at most {lookimage._limit_words(STICKER_MAX_BYTES)} for a sticker - "
             "shrink it and ask again.")
-    if not pic.width:
-        raise ActionError(f"I couldn't read that PNG's size, and a sticker has to be "
-                          f"exactly {STICKER_SIDE}x{STICKER_SIDE}.")
-    if (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
-        raise ActionError(f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
-                          f"pixels, and that picture is {pic.width}x{pic.height}.")
+    elif not pic.width:
+        problem = (f"I couldn't read that {_expr_kind(pic)}'s size, and a sticker has "
+                   f"to be exactly {STICKER_SIDE}x{STICKER_SIDE}.")
+    elif (pic.width, pic.height) != (STICKER_SIDE, STICKER_SIDE):
+        problem = (f"a sticker has to be exactly {STICKER_SIDE}x{STICKER_SIDE} "
+                   f"pixels, and that picture is {pic.width}x{pic.height}.")
+    fitted = None
+    if problem:
+        if fit == "none" or pic.media not in _STICKER_FITTABLE:
+            raise ActionError(problem)
+        fitted = await _fit_or_refuse("sticker", pic, fit, problem)
+        if (fitted.media not in _STICKER_FORMATS
+                or len(fitted.raw) > STICKER_MAX_BYTES
+                or lookimage.dimensions(fitted.raw, fitted.media)
+                != (STICKER_SIDE, STICKER_SIDE)):
+            raise ActionError(_FIT_ODD)         # the fitter's promise, checked anyway
+    raw = fitted.raw if fitted else pic.raw
+    media = fitted.media if fitted else pic.media
     used = len(g.stickers)
     limit = g.sticker_limit
     if used >= limit:
         raise ActionError(
             f"{g.name} has no free sticker slot ({used} of {limit} in use) - delete "
             "one first, or boost the server for more.")
-    animated = _is_apng(pic.raw)
+    # The format Discord gives it, read from the bytes that go up (the fitted ones).
+    fmt = (discord.StickerFormatType.gif if media == "image/gif"
+           else discord.StickerFormatType.apng if _is_apng(raw)
+           else discord.StickerFormatType.png)
 
     if ctx.dry_run:
-        kind = "APNG (animated)" if animated else "PNG"
-        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}",
-                 f"Related emoji: {emoji}",
-                 f"Description: {desc!r}" if desc else "No description.",
-                 f"Slots: {used} of {limit} stickers in use; "
-                 f"{limit - used - 1} left after this."]
+        kind = "APNG (animated)" if _is_apng(pic.raw) else "PNG"
+        lines = [f"Picture: {pic.describe().replace('PNG', kind, 1)}"]
+        if fitted:
+            lines += _fit_lines(pic, fitted, "sticker")
+        if fmt is discord.StickerFormatType.gif:
+            lines.append("It's a GIF, so it becomes a GIF sticker.")
+        lines += [f"Related emoji: {emoji}",
+                  f"Description: {desc!r}" if desc else "No description.",
+                  f"Slots: {used} of {limit} stickers in use; "
+                  f"{limit - used - 1} left after this."]
         return {"summary": f"Add sticker **{name}** to **{g.name}**",
                 "detail": "\n".join(lines)}
 
+    filename = "sticker.gif" if media == "image/gif" else "sticker.png"
     s = await _expr_call(
         g.create_sticker(name=name, description=desc, emoji=emoji,
-                         file=discord.File(io.BytesIO(pic.raw), filename="sticker.png"),
+                         file=discord.File(io.BytesIO(raw), filename=filename),
                          reason=p.get("reason") or VIA),
         "sticker", "it limits how fast a server's stickers can change.")
-    return {"status": "sticker_created", "guild": g.name,
-            "sticker": guild_sticker_dict(s), "slots_left": limit - used - 1}
+    out = {"status": "sticker_created", "guild": g.name,
+           "sticker": guild_sticker_dict(s), "format": fmt.name,
+           "slots_left": limit - used - 1}
+    if fitted:
+        out["fitted"] = _fit_facts(pic, fitted)
+    return out
 
 
 async def _expr_sound(ctx, p):

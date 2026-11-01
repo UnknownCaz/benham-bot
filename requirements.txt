@@ -11,6 +11,11 @@ anthropic>=0.40
 # exaroton skill).
 requests>=2.28
 
+# create_emoji / create_sticker fit a picture to Discord's limits (scale, pad or
+# crop, fewer colours or frames) instead of refusing it - core/fitimage.py, run
+# in a child process behind a pixel and frame cap (INTENT 60, Stage 8 follow-up).
+Pillow>=12
+
 # Voice was archived 2026-08-16 and took six dependencies with it: PyNaCl,
 # discord-ext-voice-recv, davey, faster-whisper, numpy and edge-tts. That trio of
 # voice-recv/davey/discord.py was version-locked around a monkeypatch of a PRIVATE
