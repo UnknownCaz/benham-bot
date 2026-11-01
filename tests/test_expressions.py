@@ -515,6 +515,168 @@ m = refusal(cl, "create_emoji", {"guild_id": GUILD, "name": "late", "image": "at
                                  **ATT})
 check("Forbidden is run()'s permission sentence", "lacks the permission" in (m or ""), True)
 
+# ========================================================= fitting the picture
+#
+# Caz's yes 2026-11-01 ("Lets do it!"): a picture over a limit is fitted, the way
+# Discord's own upload screen does it, instead of refused. These pictures are
+# REAL (made with Pillow) because the fitter decodes them; the hand-built ones
+# above are headers with nothing behind them, which the fitter calls damaged.
+import contextlib  # noqa: E402
+import hashlib  # noqa: E402
+import io  # noqa: E402
+import random  # noqa: E402
+import time  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+from benham.core import fitimage  # noqa: E402
+
+
+def real_noise(size, seed, mode="RGB"):
+    return Image.frombytes(mode, size,
+                           random.Random(seed).randbytes(size[0] * size[1] * len(mode)))
+
+
+def real(im, fmt, **kw):
+    buf = io.BytesIO()
+    im.save(buf, format=fmt, **kw)
+    return buf.getvalue()
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def opened(raw):
+    return Image.open(io.BytesIO(raw))
+
+
+BIG = real(real_noise((1200, 1200), 11), "PNG")
+BIG_WORDS = lookimage._size_words(len(BIG))
+EMO = {"guild_id": GUILD, "name": "big", "image": "attachment", **ATT}
+
+section("create_emoji - a picture over 256 KB is fitted (fit=auto, the default)")
+cl, g = fresh([_Att(1, "big.png", BIG)])
+result, preview = go(cl, "create_emoji", EMO)
+d = preview["detail"]
+check("still a preview first, Discord never asked", (result, g.calls), (None, []))
+check("...the source line is today's, hash and all",
+      f"Picture: PNG, 1200x1200, {BIG_WORDS}, from attachment big.png (#" in d, True)
+check("...then what came in -> what goes up",
+      f"\nYour picture: PNG, 1200x1200, {BIG_WORDS} -> emoji: PNG, 128x128, " in d, True)
+check("...then one line per step",
+      "\n- scaled it down from 1200x1200 to 128x128\n" in d, True)
+check("...and the slots line after it", "0 of 50 static emoji in use" in d, True)
+want = fitimage.fit_emoji(BIG, "image/png")
+result, _ = go(cl, "create_emoji", EMO, force=True)
+sent = g.calls[0][1]["image"]
+check("the confirmed call uploads the FITTED bytes, the ones the preview measured",
+      (sha(sent) == sha(want.raw), opened(sent).size, len(sent) <= 256 * 1024),
+      (True, (128, 128), True))
+check("...and the result records the fit beside its source",
+      (result["fitted"]["width"], result["fitted"]["height"], result["fitted"]["bytes"],
+       result["fitted"]["steps"][0], "big.png" in result["fitted"]["source"],
+       result["fitted"]["uploaded"].startswith("PNG, 128x128, ")),
+      (128, 128, len(sent), "scaled it down from 1200x1200 to 128x128", True, True))
+check("the preview's numbers are the upload's (its line names the sent size)",
+      f"-> emoji: {want.describe()}" in d, True)
+
+section("create_emoji - a picture that fits is not touched, and its result has no fit")
+cl, g = fresh([_Att(1, "ok.png", real(real_noise((100, 100), 12), "PNG"))])
+result, _ = go(cl, "create_emoji", {**EMO, "name": "ok"}, force=True)
+check("the bytes Discord gets are the picture's own", g.calls[0][1]["image"],
+      real(real_noise((100, 100), 12), "PNG"))
+check("...and no fitted record", "fitted" in result, False)
+
+section("create_emoji - fit=none keeps today's refusal, word for word")
+cl, g = fresh([_Att(1, "big.png", BIG)])
+today = (f"that picture is {BIG_WORDS}, and Discord takes at most 256 KB for an emoji "
+         "- shrink it and ask again.")
+check("at the preview", refusal(cl, "create_emoji", {**EMO, "fit": "none"}, force=False),
+      today)
+check("at the confirm", refusal(cl, "create_emoji", {**EMO, "fit": "none"}), today)
+check("...nothing sent", g.calls, [])
+check("an unknown fit is one sentence",
+      refusal(cl, "create_emoji", {**EMO, "fit": "pad"}, force=False),
+      "fit is auto or none for an emoji, and 'pad' isn't one of them.")
+cl, g = fresh([_Att(1, "big.png", png(pad=300 * 1024))])
+check("a big picture the fitter can't open: today's sentence, then why the fit failed",
+      refusal(cl, "create_emoji", EMO),
+      f"that picture is {lookimage._size_words(len(png(pad=300 * 1024)))}, and Discord "
+      "takes at most 256 KB for an emoji - shrink it and ask again. "
+      + fitimage.DAMAGED)
+
+section("create_emoji - a GIF over 256 KB stays an animated GIF")
+GIFBIG = real(real_noise((300, 300), 20).quantize(8), "GIF", save_all=True,
+              append_images=[real_noise((300, 300), 21 + i).quantize(8) for i in range(39)],
+              duration=50, loop=0)
+check("(the source is over 256 KB)", len(GIFBIG) > 256 * 1024, True)
+cl, g = fresh([_Att(1, "spin.gif", GIFBIG)])
+_, preview = go(cl, "create_emoji", {**EMO, "name": "spin"})
+d = preview["detail"]
+check("the preview counts the frames on both sides",
+      "Your picture: GIF, 300x300, " in d and ", 40 frames -> emoji: GIF, 128x128, " in d,
+      True)
+check("...and still says it becomes animated",
+      "It's a GIF, so it becomes an animated emoji." in d, True)
+result, _ = go(cl, "create_emoji", {**EMO, "name": "spin"}, force=True)
+sent = g.calls[0][1]["image"]
+check("the upload is an animated GIF under 256 KB",
+      (sent[:3], getattr(opened(sent), "n_frames", 1) > 1, len(sent) <= 256 * 1024,
+       result["emoji"]["animated"]), (b"GIF", True, True, True))
+
+section("create_emoji - the fitter is a child process that cannot hang the bot")
+_real_exec = asyncio.create_subprocess_exec
+_procs = []
+
+
+async def _spy(*a, **k):
+    proc = await _real_exec(*a, **k)
+    _procs.append(proc)
+    return proc
+
+
+_saved = (capabilities._FIT_CHILD, capabilities.FIT_TIMEOUT)
+asyncio.create_subprocess_exec = _spy
+try:
+    capabilities._FIT_CHILD = ("-c", "import time; time.sleep(60)")
+    capabilities.FIT_TIMEOUT = 1
+    cl, g = fresh([_Att(1, "big.png", BIG)])
+    t0 = time.time()
+    m = refusal(cl, "create_emoji", EMO)
+    check("a child past its timeout -> the took-too-long sentence",
+          m, "that picture took too long to process - send a smaller one.")
+    check("...in about the timeout, not the child's 60 s", time.time() - t0 < 20, True)
+    check("...and that child was killed and reaped - none left running",
+          (len(_procs), _procs[0].returncode is not None), (1, True))
+    check("...nothing sent", g.calls, [])
+    capabilities.FIT_TIMEOUT = 25
+    capabilities._FIT_CHILD = ("-c", "import sys; sys.stdin.buffer.read(); sys.exit(3)")
+    check("a child that dies without an answer -> one sentence",
+          refusal(cl, "create_emoji", EMO), capabilities._FIT_BROKE)
+    capabilities._FIT_CHILD = (
+        "-c", "import sys; sys.stdin.buffer.read(); "
+              "sys.stdout.write('{\"ok\": true, \"bytes\": 99}\\n'); sys.exit(0)")
+    check("a child whose bytes don't match its own report -> the same sentence",
+          refusal(cl, "create_emoji", EMO), capabilities._FIT_BROKE)
+    check("...and every child was reaped", all(p.returncode is not None for p in _procs),
+          True)
+finally:
+    asyncio.create_subprocess_exec = _real_exec
+    capabilities._FIT_CHILD, capabilities.FIT_TIMEOUT = _saved
+
+section("create_emoji - fit in the words do help prints")
+from benham.cli import do as _do  # noqa: E402
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    _do._print_help("create_emoji")
+_help = _buf.getvalue()
+check("a fit line: optional str, auto (default) or none",
+      any(l.split()[:3] == ["fit", "str", "optional"] and "auto (default)" in l
+          and "none: refuse it instead" in l for l in _help.splitlines()), True)
+check("...and the summary says a bigger picture is shrunk to fit",
+      "a bigger picture is shrunk to fit" in _help, True)
+
 # =============================================================== list_stickers
 section("list_stickers - a read that taints (names and descriptions are other people's)")
 registered("list_stickers", 0, False, False, True)
