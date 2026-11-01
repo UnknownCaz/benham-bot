@@ -1064,8 +1064,8 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   with Pillow's bomb guard as the backstop, and the decode in a child process (`python -m benham.core.fitimage`)
   killed after 25 s. Same tiers and gates as the stage; no verb added (93), no fingerprint row moved. Merge
   `93d7a44`; live 2026-11-01 09:52 local (pid 22260); emoji proven live in Testing (a 2.4 MB PNG -> 20 KB, a
-  2.0 MB 40-frame GIF -> 152 KB 10 frames, each created and deleted); the sticker path proven offline, its live
-  run waiting on his word about Testing's full sticker slots. **Build 2, not scoped:** a friend working with
+  2.0 MB 40-frame GIF -> 152 KB 10 frames, each created and deleted); the sticker path proven offline only - its
+  live run SKIPPED on his word 2026-11-01 10:06 local ("Skip the live sticker test; offline proof is enough for now"; Testing's 5 slots are full). **Build 2, not scoped:** a friend working with
   Benham to fit THEIR picture, in a DM or a server thread (his end goal, 11-01 08:59) - it touches decisions 50
   and 59 and the guest lane, so it gets its own interview and its own set-in-stone.
 - **B. Events** - `list_events`, `create_event`, `edit_event`, `start_event`, `cancel_event`. *Why:*
