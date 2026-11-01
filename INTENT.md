@@ -1050,6 +1050,24 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   `edit_server_look` - everyone sees them and a picture or a sound cannot be previewed in full.
   Deletes are tier 3 like `delete_emoji`. Lists are READ and taint (names and descriptions are other
   people's text).
+  *Follow-up, his yes 2026-11-01 08:59 local ("Lets do it!") and the scope 09:06 ("Build 1 is good, after we
+  build it we interview for build 2"):* **the fitter** - a picture over Discord's limit is FITTED, not refused,
+  the way Discord's own upload screen does it. `create_emoji` gains `fit` (auto | none): longest side 128 px,
+  under 256 KB, PNG/JPEG/GIF kept, a GIF scaled then 256 -> 128 -> 64 colours then every other frame dropped
+  with its time kept; `create_sticker` gains `fit` (pad | crop | none) to exactly 320x320 under 512 KB, APNG
+  stays APNG, a JPEG becomes PNG, and GIF stickers are accepted (Discord and discord.py 2.7.1 both take them;
+  the old "PNG or APNG" refusal was ours). The preview prints `Your picture: ... -> emoji: ...` and one line
+  per step; the confirmed call uploads the fitted bytes (deterministic, so the preview's numbers are the
+  upload's). **The posture change, priced:** `lookimage` stays header-only; decoding happens in
+  `core/fitimage.py` (Pillow, `Pillow>=12` in requirements, 13.0.0 in the Mac venv) only behind a fence - bytes
+  already past `lookimage.check`, a 40-million-pixel and 600-frame cap read from the header before any decode
+  with Pillow's bomb guard as the backstop, and the decode in a child process (`python -m benham.core.fitimage`)
+  killed after 25 s. Same tiers and gates as the stage; no verb added (93), no fingerprint row moved. Merge
+  `93d7a44`; live 2026-11-01 09:52 local (pid 22260); emoji proven live in Testing (a 2.4 MB PNG -> 20 KB, a
+  2.0 MB 40-frame GIF -> 152 KB 10 frames, each created and deleted); the sticker path proven offline, its live
+  run waiting on his word about Testing's full sticker slots. **Build 2, not scoped:** a friend working with
+  Benham to fit THEIR picture, in a DM or a server thread (his end goal, 11-01 08:59) - it touches decisions 50
+  and 59 and the guest lane, so it gets its own interview and its own set-in-stone.
 - **B. Events** - `list_events`, `create_event`, `edit_event`, `start_event`, `cancel_event`. *Why:*
   game nights; nothing exists. Create, edit and start are tier 2 `outward` + `always_confirm` (a
   scheduled event notifies the whole server); cancel is tier 3.
