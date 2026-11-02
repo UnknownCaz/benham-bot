@@ -1065,9 +1065,13 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   killed after 25 s. Same tiers and gates as the stage; no verb added (93), no fingerprint row moved. Merge
   `93d7a44`; live 2026-11-01 09:52 local (pid 22260); emoji proven live in Testing (a 2.4 MB PNG -> 20 KB, a
   2.0 MB 40-frame GIF -> 152 KB 10 frames, each created and deleted); the sticker path proven offline only - its
-  live run SKIPPED on his word 2026-11-01 10:06 local ("Skip the live sticker test; offline proof is enough for now"; Testing's 5 slots are full). **Build 2, not scoped:** a friend working with
-  Benham to fit THEIR picture, in a DM or a server thread (his end goal, 11-01 08:59) - it touches decisions 50
-  and 59 and the guest lane, so it gets its own interview and its own set-in-stone.
+  live run SKIPPED on his word 2026-11-01 10:06 local ("Skip the live sticker test; offline proof is enough for now"; Testing's 5 slots are full). **Build 2 PARKED on his word 2026-11-01 21:40 local:** a friend working with
+  Benham to fit THEIR picture, in a DM or a server thread (his end goal, 11-01 08:59), touches decisions 50 and 59
+  and the guest lane. The interview opened with one question (who gives the go for a friend's fitting session)
+  and he parked the whole build, uncut: "Let's skip this as a later build, it'd need to indentify the user's permissions, to see if they're allowed to upload a emoji."
+  The why to carry when it comes back: the gate is the submitter's own Discord permission (Manage Expressions
+  in that server), read by Benham before any fitting - the same check the UI makes. No interview, no
+  set-in-stone, nothing built.
 - **B. Events** - `list_events`, `create_event`, `edit_event`, `start_event`, `cancel_event`. *Why:*
   game nights; nothing exists. Create, edit and start are tier 2 `outward` + `always_confirm` (a
   scheduled event notifies the whole server); cancel is tier 3.
