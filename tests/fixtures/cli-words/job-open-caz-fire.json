@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "job",
+    "open",
+    "stage B rehearsal",
+    "--with",
+    "caz",
+    "--confirm-token",
+    "abc123"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "Queued open_job -> <ROOT>/state/outbox/<REQ>.json\n  open a job with 'caz': 'stage B rehearsal'\ndone: status=ok\n  {'deleted': 1}\n",
+  "stderr": ""
+}

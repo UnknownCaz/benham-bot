@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "job",
+    "close",
+    "j1",
+    "--outcome",
+    "rehearsal done"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued close_job -> <ROOT>/state/outbox/<REQ>.json\n  close job j1\ndone: status=confirmation_required\n\nclose_job: 1 message in #asd would go\nby doom, <DATE>\n\nNO JOB WAS CLOSED YET. To confirm, re-run with the token:\n  python benham.py --face benham job close j1 --outcome \"rehearsal done\" --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}
