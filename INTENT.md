@@ -1121,6 +1121,33 @@ Rules every stage keeps, all already law:
 
 ---
 
+### Stage 9 — Known people, purposes and borrowed tools (2026-11-03)
+
+**Goal, his words (2026-11-03, the Biggie session):** *"Hey can you add the Biggie, or Blank, or Doom, to the
+guest list they need help finding a game online. Message them about them being added and start up the
+conversation about finding the game"* - and Benham finds the person, puts the add up as a card, same for
+tooling, opens the DM with the purpose, closes the loop himself, sends Caz a friendly heads-up, then a
+keep-or-remove card per borrowed tool. Set in stone 2026-11-03 16:10 local (decision 61). The plan with every
+goal's why, the measurement behind it and his four decided calls: `docs/plans/PLAN-known-people.md`.
+
+Three stages, one Opus hand each, in order, each landing clean (suite green on PC and Mac, Testing-only live
+tests, decision 26 deploys) before the next starts:
+
+- **A. Known people** - `state/people.json` read live (never at boot), `add_person` (find by name or id, tier-2
+  card naming the person and their shared servers, write the state), `remove_person`, `list_people`; the guest
+  check and `outreach`'s reachable set read people.json as well as the config lists; `benham.py person` CLI.
+  *Why:* goals 1, 2, 3, 9 - no ssh, no restart, one list.
+- **B. Purposes** - `state/purposes.json`; `open_purpose` (person, purpose text, tools; the opener DM goes out
+  with the purpose in the brain's system note while the purpose is open, NEVER through the outreach store);
+  the guest brain gets the max_tokens retry from `agent._create`; `guest.model` to `claude-opus-5-5`.
+  *Why:* goals 4 and 5; today's two breaks.
+- **C. Closing and borrowed tools** - done detection (the guest says done or satisfied, judged the way
+  `guest/answers.py` judges), quiet 1 day then one nudge, 1 more day then close; the heads-up DM to Caz (purpose,
+  what Benham did, what it found, tools used); `grant_tool` / `revoke_tool` per person per tool as cards, default
+  grant chat + web search only; the keep/remove card under the heads-up. *Why:* goals 6, 7, 8 and his calls 1-2.
+- **Required test, not optional:** the first turn rehearsed in Testing with a fake guest id through the real
+  path before any friend sees it; then one real run with a friend Caz names, watched live, on his yes.
+
 ## 5. Decisions — settled, do not re-litigate
 
 All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 29 and 30 are the exception in a second sense: 30 is a decision Claude made about what Claude may do, and Tyler ratified it by asking for it in writing.
@@ -1187,6 +1214,7 @@ All from Tyler, 2026-08-16, except where a row carries its own later date. Rows 
 | 58 | **His name is Caz - Benham never uses his legal name** (2026-10-20, Caz in the skiff's chat after the #kestra test, where Benham tried to tell Hermes his legal name and the privacy screen turned the line into "I go by the owner, Caz goes by Caz": *"just dont have it name me legally EVER, simply occlude that as an important fact my name is Caz."*). Every string the model reads or Discord shows - persona.md, the system prompt and hard rules in agent.py, tool descriptions, policy reasons, the friend and bot-guest notes, notify kinds, the owner-only slash refusal - says Caz, and persona.md states it as a fact: his name is Caz, the only name used for him, with everyone. Rooms now record his lines as `caz` (older lines keep their old author tag). Not changed: comments and docstrings (no model reads them), and the PC CLI's printed words, which are a pinned contract read by sessions (decision 38). The privacy screen (55) stays as the net under this. |
 | 59 | **Tier 3 opens in the friends server; admin there runs from his DM** (2026-10-30 21:26 local, Caz, in a friends-server tooling session. His words: *"Heyo can we do some work on Benham? I want to grant him some tooling for the friends server."* and, asked what the server should get out of it, *"Anything and everyhting an admin can do through the UI, I should be able to do through asking Benham and prompts."*; then two card picks, "Yes, open tier 3 there" and "DM only for now"). Measured first: Benham has held Administrator in that guild since 2026-07-25, tier 2 was already reachable there from his DM, and only the eight tier-3 verbs refused. `faces.benham.destructive_guilds` gains the friends guild (Mac `config/control.json`, backup `control.json.bak-2026-10-30-2124` beside it; restart 01:25:20Z, pid 52136; banner "Destructive actions allowed in guilds: [2]"; `guild_info` reads `destructive_allowed: true` there, Testing unchanged, RadioTower and NBN still walled; the PC's `config/control.json` copy now mirrors the Mac's). What this amends: the 2026-07-26 posture that the friends server is "structurally safe, not safe-because-Claude-was-careful" - for this one guild the guard is now the three gates (allowlist passed, mandatory dry-run, Approve tap or the 6-hex token on a typed yes; decision 37), not the wall. Not changed: `agent_guilds` (his @ there still does nothing - decision 49's "Not yet" of 10-05 stands; orders come from his DM or a session over the CLI), `post_guilds`, the guest lane. The parity build scoped the same night (expressions, events, settings and ordering, moderation) is NOT set in stone and gets its own row when he says so. |
 | 60 | **Admin parity in the friends server - four stages, set in stone** (2026-10-30 21:41 local, Caz: *"Set in stone"* on the plan as shown in chat, after picking all four groups on the scoping card). The plan is Stage 8, verbatim: A expressions (emoji, sticker and soundboard uploads, lists, tier-3 deletes), B events, C settings and ordering, D the moderation set - about 22 verbs, 68 to about 90, one Opus hand per stage, in order, Testing-only live tests, decision 26 deploys, a human test for him per stage. Goal line, his words: *"Anything and everyhting an admin can do through the UI, I should be able to do through asking Benham and prompts."* What this does not change: decision 59's DM-only route, the three tier-3 gates, the privacy screen, the Caz-name rule, Codex's grant table, the CLI words. Opinion recorded as the session's, not his: build in Benham rather than Hermes because the gates, tests and the admin role already live here; Hermes reaches the same verbs later through a skill over `benham.py do`. |
+| 61 | **Known people, purposes and borrowed tools - three stages, set in stone** (2026-11-03 16:10 local, Caz: *"Set in stone"* in chat, after the Biggie failure of 14:23-14:28 and four scoping forms). The plan is `docs/plans/PLAN-known-people.md`, verbatim, Stage 9 below. His words: *"the allow list is archaic, anytime I want to have Benham go and message someone the process to reach from; Unknown Person to Known User (with set tooling), has genuinely been unachievable."* and *"The purpose should expire the guest shouldnt."* His four calls: quiet 1 day then nudge once, 1 more day then close; the close heads-up goes to Caz only, the guest gets Benham's normal closing line; the guest brain moves to Opus 5.5 for everything; Biggie waits for the build, no retry. What this does not change: the guest lane's floor (no client tools unless Caz grants one per person per tool, each on a card), decision 59's DM-only route for admin, the three tier-3 gates, the privacy screen, decision 51's answer binding for real outreach asks. Opinion recorded as the session's, not his: a brain-carried chat must never open through `outreach`; that note is what relayed Biggie. |
 
 ### Baseline — clean as of 2026-08-16
 

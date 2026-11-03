@@ -1,0 +1,112 @@
+# Known people, purposes and borrowed tools - Plan
+
+**Status: SET IN STONE 2026-11-03 16:10 local, Caz's word "Set in stone" in chat after the four calls below were
+decided on forms. INTENT decision 61, Stage 9. Build in progress.** Written 2026-11-03 15:58 local by the
+session that ran Biggie's game search (b78c87fb), from Caz's words in that chat.
+
+## Purpose, in Caz's words (2026-11-03, 15:0x-15:4x local)
+
+> "the allow list is archaic, anytime I want to have Benham go and message someone the process to reach
+> from; Unknown Person to Known User (with set tooling), has genuinely been unachievable."
+>
+> "I want to be able to message Benham about, 'Hey can you add the Biggie, or Blank, or Doom, to the
+> guest list they need help finding a game online. Message them about them being added and start up the
+> conversation about finding the game', and Benham would then be able to find that person and request
+> to add that person via the prompt thing, and same for the tooling for that person."
+>
+> "The purpose should expire the guest shouldnt. So say they need access to websearch (or something)
+> they use it, and then I get a response from Benham on what was done and found with the tool, in the
+> form of a friendly heads up, then I get prompted to have the tool removed, or kept."
+>
+> On who closes a purpose: "1 and 2, Benham should know to nudge or ask Biggie if they're done... Benham
+> should be able to determine the completion state of an ask if the guest doesnt say they done."
+
+## What today cost (the measurement behind the plan)
+
+Getting Biggie from stranger to "Benham can talk to him" on 2026-11-03 took: his user id typed by Caz
+(name lookup needed the members intent, off until that day); four hand edits of `config/control.json`
+on two machines (`guest.ids`, then `outreach.people`, then `web_search`/`searches_per_turn`, then
+`max_tokens`), each with a backup; three restarts, because every list is read once at boot; one Dev
+Portal change. There is no `add` command: `benham.py guest` offers status, forget, off. Then the
+opener went through `outreach`, whose bound-answer note turned the brain into a relay, and the 500-token
+guest cap cut three searched replies off before their results. Caz: "This is awful cut this off, and
+mark this as a major failure." Record: Benham board Now block, 14:28 local.
+
+## Goals - each with its why on the same line
+
+1. **One grant, from Caz's words, anywhere Benham hears him (DM now; channels where INTENT 49/50
+   already let him @).** *Why: the whole point of Benham is reaching Caz away from the PC; a grant that
+   needs ssh is not a grant.*
+2. **Benham finds the person by name and puts the add up as a preview card.** *Why: his "request to add
+   that person via the prompt thing" - the approve flow tier 2/3 already uses; nothing new to learn.*
+3. **The person stays known for good; the purpose and any extra tool expire.** *Why: his words, "The
+   purpose should expire the guest shouldnt."*
+4. **Default grant is chat + web search, nothing else; any further tool is its own card, per person,
+   per tool.** *Why: the guest lane's security floor is "no client tools, ever" (guest.py docstring);
+   today's failure happened with zero tools; each tool a guest gets is a thing their words can make
+   Benham do. Caz picks per person.*
+5. **A conversation carries its purpose into the brain.** *Why: step 3 of his flow, "start up the
+   conversation about finding the game" - today a chat is only history; the brain never knows the goal.
+   And NEVER through `outreach` for a brain-carried chat: its bound-answer note is what relayed Biggie.*
+6. **Benham closes the purpose himself: the guest says done or satisfied, or it goes quiet and Benham
+   asks once ("did one of those land, or keep digging?"), or the quiet timer ends it.** *Why: his "1
+   and 2"; Biggie never says done; a loop Benham cannot close is a loop Caz has to.*
+7. **On close, a friendly heads-up DM to Caz: what the purpose was, what Benham did, what it found,
+   which tools it used.** *Why: his words; the heads-up IS the audit, in his DM, in Benham's voice.*
+8. **Under the heads-up, one card per borrowed tool: keep or remove.** *Why: his words; deciding after
+   real use beats deciding up front.*
+9. **Lists live in the bot's own state and take effect without a restart.** *Why: three restarts in one
+   afternoon, and `guest_quiet` already learned this lesson (INTENT known bug 2026-08-20).*
+
+## What exists and is reused (do not rebuild)
+
+- The approve card: tier 2/3 confirm flow in `bot.py`, Approve/Deny, token for tier 3.
+- `find_user` by name: works since the members intent went on 2026-11-03 (side session, pid 7560).
+- The guest origin in `policy.py`: every verb unreachable by a guest unless declared `guest=True`
+  (two are, today). The archived `archive/guest-tools/guest_agent.py` ran per-guest grants through the
+  same `capabilities.run` chokepoint - the skeleton for goal 4.
+- Conversations store (`conversations`, `conv close/bank`) for the lifecycle; `guest_note` for giving
+  the brain Benham's side of a thread; `guest_quiet` for a state file with a deadline that survives
+  restarts (the shape goal 9 wants).
+- The owner agent's max_tokens retry (INTENT known bug 2026-10-11, `agent._create`): the guest path
+  never got it. Today's cut-offs are that bug on the other lane.
+
+## What is new
+
+- Verbs: `add_person` (find + card + write state), `grant_tool` / `revoke_tool` (per person, per tool,
+  card each), `open_purpose` (DM the opener WITH the purpose in the brain's note), and the close path
+  (done-detection, one nudge, quiet timer, heads-up, keep/remove card).
+- State: `state/people.json` (who is known, since when, by whose word) and `state/purposes.json`
+  (open purposes with their tools and deadlines), read live, not at boot.
+- Guest brain: purpose in the system note while open; the max_tokens retry ported from `agent._create`;
+  `max_tokens` default raised (2000 is live since 14:25 local on both configs).
+
+## Required test, not optional
+
+Before any friend sees it: rehearse the FIRST TURN in the Testing Server with a fake guest id (the
+`_testconfig` two invented ids), through the real path - opener with purpose, one searched reply, read
+the reply text in the log for a cut-off. Then one real run with a friend Caz names, watched live.
+Today's failure was on the one part that already existed; the first turn is the test.
+
+## Out of scope here
+
+Voice; the collaborator/project axis (INTENT 3.4) beyond what goal 5 needs; the Chillbar @ ("Not yet"
+since 10-05, his call); any tool a guest can run on the PC (Phase B removed PC access, INTENT 39).
+
+## Open calls for Caz
+
+- ~~Quiet timer length before the nudge, and before the close~~ **DECIDED 2026-11-03 16:0x local, Caz's pick on the
+  call-1 form: "1 day nudge, 1 day close."** One day of quiet, Benham asks once; another day, it closes and the
+  heads-up goes to Caz.
+- ~~Whether the heads-up also goes to the guest~~ **DECIDED 2026-11-03 16:0x local, Caz's pick on the call-2 form:
+  "You only; guest gets the normal closing line."** The report is Caz's; the guest gets Benham's friendly close in
+  the chat and nothing about the report.
+- ~~Which model the guest brain runs for a purposed chat~~ **DECIDED 2026-11-03 16:1x local, Caz's pick on the
+  call-3 form: "Opus 5.5 for everything."** The guest brain moves to `claude-opus-5-5`, purposed or not. One config
+  line (`guest.model`) plus the restart; NOT changed yet, it lands with the build or earlier on his word. Cost: the
+  guest bill grows roughly five-fold per token; the daily caps (100/guest, 400 global) stay as the ceiling.
+- ~~Biggie himself~~ **DECIDED 2026-11-03 16:1x local, Caz's pick on the call-4 form: "Wait for the plan, no retry."**
+  He stays a guest; nobody messages him until this is built. The mute on Benham for him lifts at 19:28 local
+  2026-11-03 (the verb caps at 240 min); if HE writes to Benham after that, the brain answers with the fixed cap.
+
+All four calls are decided. What is left is Caz reading the whole page and saying "set in stone", or sending it back.
