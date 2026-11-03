@@ -55,6 +55,11 @@ def _allowed():
 
     Falling back to the guest whitelist rather than to nobody keeps this usable on
     a fresh clone, and that whitelist is already curated by hand.
+
+    Known people (state/people.json, INTENT decision 61) are in both halves: the
+    serving process unions them into outreach_people when the config list is set,
+    and into guest_people when it is not (rpc.identity_snapshot). A person
+    `add_person` made known is reachable here on the next run, no restart.
     """
     who = remote.identity()   # the SERVING face's config, not this tree's copy
     people = who.get("outreach_people")

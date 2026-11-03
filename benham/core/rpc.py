@@ -128,17 +128,38 @@ def authorize_unprompted(conv):
 def identity_snapshot():
     """The identity facts the CLIs read: who owns this face, who its guests
     are, who outreach may contact. Read from the SERVING process, so a PC
-    whose control.json has drifted from the Mac's still guards by the truth."""
+    whose control.json has drifted from the Mac's still guards by the truth.
+
+    Known people (state/people.json, INTENT decision 61) are unioned in, read
+    from disk on this call: into the guest people and ids, and into
+    outreach_people when control.json narrows outreach with a list of its own.
+    When it does not, outreach_people stays None and outreach falls back to the
+    guest people - which already carry them. Either way a person add_person
+    wrote one second ago is reachable from the PC's CLI with no restart, and
+    owners never are (the store's owner rows are skipped here, as is_guest
+    skips them)."""
     from benham.core import identity
+    from benham.core import people as known
     cfg = identity.CONTROL.get("outreach") or {}
     people = cfg.get("people") or {}
+    owners = set(identity.OWNER_IDS)
+    state = {str(k): int(v) for k, v in known.names().items() if int(v) not in owners}
+    guest_people = {str(k): int(v) for k, v in identity.GUEST_PEOPLE.items()}
+    for name, uid in state.items():
+        if uid not in guest_people.values():
+            guest_people.setdefault(name, uid)
+    outreach = None
+    if people:
+        outreach = {str(k).strip().lower(): int(v) for k, v in people.items()}
+        for name, uid in state.items():
+            if uid not in outreach.values():
+                outreach.setdefault(name.strip().lower(), uid)
     return {
         "face": paths.PROCESS_FACE,
         "owner_ids": sorted(identity.OWNER_IDS),
-        "guest_people": {str(k): int(v) for k, v in identity.GUEST_PEOPLE.items()},
-        "guest_ids": sorted(identity.GUEST_IDS),
-        "outreach_people": ({str(k).strip().lower(): int(v) for k, v in people.items()}
-                            if people else None),
+        "guest_people": guest_people,
+        "guest_ids": sorted(set(identity.GUEST_IDS) | set(state.values())),
+        "outreach_people": outreach,
     }
 
 

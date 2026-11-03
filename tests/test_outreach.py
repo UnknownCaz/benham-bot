@@ -46,12 +46,13 @@ import shutil
 import sys
 import tempfile
 
-from benham.core import conversations as C, identity
+from benham.core import conversations as C, identity, people
 from benham.cli import outreach
 
 DOOM = 777000777000777000
 TYLER = 273967061619965952
 STRANGER = 999000111
+NEWBIE = 555000555000555009   # invented; on no config list, only in people.json
 
 _fails = []
 
@@ -147,6 +148,31 @@ def main():
         identity.CONTROL["outreach"] = {"people": {"doom": DOOM}}
         check("...and the config narrows it below the whitelist",
               [refused(str(DOOM)), refused(str(STRANGER))], [DOOM, "refused"])
+
+        section("Known people (state/people.json) are reachable live - INTENT 61")
+        # Goal 9: no restart. The store is written AFTER outreach was imported and
+        # after identity read its config, and the very next resolve sees it.
+        identity.CONTROL.pop("outreach", None)
+        _whitelist(DOOM)
+        check("before: a person on no list is refused", refused(str(NEWBIE)), "refused")
+        people.add(NEWBIE, {"name": "Newbie", "by": "cli"})
+        try:
+            check("no outreach list: a known person resolves by id (via the "
+                  "guest fallback, which now carries them)", refused(str(NEWBIE)), NEWBIE)
+            check("...and by name, case-insensitively", refused("newbie"), NEWBIE)
+            check("...while the config guest still resolves", refused("777000777000777000"), DOOM)
+            identity.CONTROL["outreach"] = {"people": {"doom": DOOM}}
+            check("an outreach list in config is UNIONED with the store, not a wall "
+                  "against it", [refused("doom"), refused("newbie")], [DOOM, NEWBIE])
+            check("...and still refuses a stranger", refused(str(STRANGER)), "refused")
+            people.add(TYLER, {"name": "caz-by-mistake", "by": "cli"})
+            check("an owner written into the store is still refused",
+                  refused(str(TYLER)), "refused")
+            people.remove(TYLER)
+        finally:
+            people.remove(NEWBIE)
+            identity.CONTROL.pop("outreach", None)
+        check("after removal: refused again, no restart", refused(str(NEWBIE)), "refused")
 
         section("It composes nothing - delivery is the bounded action")
         # The whole security argument. If this ever calls dm/send directly it needs
