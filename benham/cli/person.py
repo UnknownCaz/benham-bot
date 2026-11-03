@@ -24,7 +24,7 @@ import sys
 from benham import paths
 from benham.cli.delete import run_two_step
 from benham.core.outbox import (EXIT_FAIL, EXIT_OK, console_utf8, enqueue,
-                                usage, wait_result)
+                                report_outcome, usage)
 
 USAGE = ("Usage: python benham.py person list\n"
          "       python benham.py person add <name|@mention|id> [--note \"why\"] "
@@ -45,15 +45,9 @@ def _take(argv, flag):
 
 def _list(timeout=60):
     final = enqueue(face=paths.PROCESS_FACE, action="list_people")
-    result, where = wait_result(final, timeout=timeout)
-    if result is None:
-        print(f"no result within {timeout}s. The request is still queued and will "
-              f"run when the bot gets to it. (is the bot running? "
-              f"`python benham.py status`)", file=sys.stderr)
-        return EXIT_FAIL
-    if where == "failed":
-        print(f"REFUSED: {result.get('error', '(no error recorded)')}", file=sys.stderr)
-        return EXIT_FAIL
+    code, result = report_outcome(final, timeout=timeout)
+    if code != EXIT_OK or not result:
+        return code if code != EXIT_OK else EXIT_FAIL
     r = result.get("result") or {}
     rows = r.get("people") or []
     print(f"known people ({len(rows)}) - guest chat {str(r.get('guest_chat', '?')).upper()}")
