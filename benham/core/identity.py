@@ -26,6 +26,7 @@ import json
 import os
 
 from benham import paths
+from benham.core import people
 CONTROL_FILE = os.path.join(paths.CONFIG_DIR, "control.json")
 
 # Tiers, ordered. Compared with >= so a threshold check reads naturally.
@@ -483,6 +484,8 @@ def guest_enabled(face=None):
 
     NOT a live kill switch. CONTROL is read once at import, so `enabled: false` - or
     striking someone from `ids` - takes effect on the next restart and not before.
+    (The PEOPLE half of "who may talk to Benham" is live since decision 61:
+    state/people.json is read on every is_guest call. This switch is not.)
     Cutting a guest off right now means bouncing the bot. That is how every other
     setting in this file behaves (owner_ids and destructive_guilds included), and
     making this one reload on its own would put a second, different answer to "who
@@ -496,6 +499,13 @@ def guest_enabled(face=None):
 
 def is_guest(user_id, face=None):
     """True for a user on the guest allowlist, and never for an owner.
+
+    The allowlist is TWO sources, unioned: this face's `guest.ids` in control.json
+    (read once at import, as ever) and state/people.json (people.py, read from
+    disk on EVERY call - INTENT decision 61, Stage 9 A). The second is how a
+    person becomes known without ssh or a restart: add_person writes it and the
+    very next DM is a guest's. Striking someone from people.json likewise takes
+    effect on their next message.
 
     The owner exclusion is not tidiness. Tyler reaching the guest path would silently
     downgrade him into a no-tools conversation with a separate memory, and the
@@ -516,7 +526,9 @@ def is_guest(user_id, face=None):
         guests = set(people_map(gates["guest"].get("ids")).values())
     if uid in owners:
         return False
-    return uid in guests
+    if uid in guests:
+        return True
+    return uid in people.ids(face)
 
 
 def guest_config(face=None):
