@@ -70,7 +70,11 @@ PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "guest_person
 SEARCH_LOG = os.path.join(paths.process_state_dir(), "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
-MODEL = _CFG.get("model") or "claude-haiku-4-5"
+# Opus for every guest chat, purposed or not - Caz's call 3 on the known-people
+# plan (2026-11-03 16:1x local, "Opus 5.5 for everything"), after a Sonnet/Haiku
+# brain failed a friend on its first real search. `guest.model` in control.json
+# overrides this default, read once at import like every knob here.
+MODEL = _CFG.get("model") or "claude-opus-5-5"
 MAX_TOKENS = int(_CFG.get("max_tokens", 500))
 # One retry at this cap when a reply is cut off at MAX_TOKENS - agent._create's
 # rule, ported to this lane (INTENT 61/62, Stage 9 B; see _create below).

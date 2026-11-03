@@ -472,6 +472,23 @@ a copy in `state/look_backups/`); `list_people` shows both sources. From the she
 `guest off`. The same people are in `outreach`'s reachable set. The `enabled` switch itself is
 still a boot-time setting, as above.
 
+**Jobs (INTENT decisions 61 and 62, 2026-11-03).** A job is a goal in Caz's words, who it is
+with (a known person, or `caz`), the tools it may use (`web_search` only, for now) and a state,
+in `state/jobs.json`, read live like `people.json`. `open_job` is always confirmed; the card shows
+who, the goal, the tools and the exact opener. For a person the opener goes out as a plain DM -
+never through `outreach` or the conversations store - and while the job is open their messages
+reach the guest brain with the goal as its note (`bot.job_note`) instead of the outreach
+bound/waiting notes, so it keeps helping rather than recording an answer. For `caz` nothing is
+sent. `list_jobs` and `close_job` (outcome required, nothing sent) complete the set; from the
+shell, `python benham.py job list | open "<goal>" --with <who> | close <job_id> --outcome "..."`.
+
+**The guest model and its budget.** `guest.model` in `control.json` picks the model; with no
+line there it is `claude-opus-5-5` (Caz's call, 2026-11-03: Opus for every guest chat).
+`guest.max_tokens` (default 500) is one reply's budget, and a reply cut off at it is asked again
+once at `guest.max_tokens_retry` (default 8000) - the owner agent's rule since 2026-10-11 - and if
+it is still cut, the guest reads what was written plus a one-line notice. Both are read once at
+import, like the rest of the block.
+
 `test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
 codebase already had once was a gate that was written, tested and green while the live path went
 somewhere else. It asserts that a guest saying "yes" cannot fire a pending tier-3 confirmation or
