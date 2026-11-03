@@ -1,4 +1,17 @@
 {
+  "add_person": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "add_role": {
     "always_confirm": true,
     "blocked_when_tainted": false,
@@ -690,6 +703,19 @@
     "taints": true,
     "tier": 0
   },
+  "list_people": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_pins": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -955,6 +981,19 @@
     "posts": false,
     "taints": true,
     "tier": 0
+  },
+  "remove_person": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
   },
   "remove_role": {
     "always_confirm": true,

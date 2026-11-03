@@ -73,9 +73,9 @@ Every capability declares one, and `capabilities.run()` enforces it.
 <!-- GENERATED:tier-table -->
 | tier | examples | gate |
 |---|---|---|
-| **read** (26) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
+| **read** (27) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
 | **speak** (11) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
-| **manage** (43) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
+| **manage** (45) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (13) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 <!-- /GENERATED:tier-table -->
 
@@ -161,7 +161,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 <!-- GENERATED:count -->
-`do` covers all 93 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+`do` covers all 96 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
 <!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)
@@ -461,6 +461,16 @@ false` - or removing an id - does nothing to a running bot. To cut a guest off i
 bounce the process. Every other control-plane setting behaves this way (`owner_ids`,
 `destructive_guilds`); giving this one live reload would mean two different answers in the
 codebase to "who may talk to Benham", which is a worse problem than the delay.
+
+**Known people are the live half (INTENT decision 61, 2026-11-03).** `state/people.json` is a
+second source of guests, unioned with `guest.ids` and read on EVERY check - so a person made
+known takes effect on their next message, and so does a removal, with no restart and no config
+edit. It is written only by two always-confirmed verbs, `add_person` (finds them by name or id;
+the card names them, their id and the servers they share with Benham) and `remove_person` (keeps
+a copy in `state/look_backups/`); `list_people` shows both sources. From the shell:
+`python benham.py person list | add <name> [--note "why"] | remove <name>`, two-step like
+`guest off`. The same people are in `outreach`'s reachable set. The `enabled` switch itself is
+still a boot-time setting, as above.
 
 `test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
 codebase already had once was a gate that was written, tested and green while the live path went

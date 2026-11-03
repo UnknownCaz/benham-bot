@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "person",
+    "remove",
+    "doom",
+    "--note",
+    "x"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "--note is for add only\n"
+}

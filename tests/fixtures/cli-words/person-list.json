@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "person",
+    "list"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "done: status=ok\nknown people (2) - guest chat ON\n  doom                             555000555000555000   config [guest.ids]\n  New Bie (@newbie)                555000555000555101   state  since <TS>-05:00 by caz - game hunt\n",
+  "stderr": ""
+}

@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "person",
+    "add",
+    "doom",
+    "--note",
+    "game hunt"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued add_person -> <ROOT>/state/outbox/<REQ>.json\n  make 'doom' a known person\ndone: status=confirmation_required\n\nadd_person: 1 message in #asd would go\nby doom, <DATE>\n\nNOBODY WAS ADDED YET. To confirm, re-run with the token:\n  python benham.py --face benham person add \"doom\" --note \"game hunt\" --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

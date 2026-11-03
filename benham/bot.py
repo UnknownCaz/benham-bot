@@ -62,6 +62,7 @@ from benham.core import loopclose
 from benham.core import msgparts
 from benham.core import notify
 from benham.core import outbox
+from benham.core import people
 from benham.core import policy
 from benham.core import rooms
 from benham.core import rotlog
@@ -604,9 +605,15 @@ async def on_ready():
         _grants = sorted(capabilities.guest_grants())
         _surface = ("no client tools" if not _grants
                     else f"UNEXPECTED GUEST GRANTS: {', '.join(_grants)}")
+        # people.json (INTENT 61): the live half of the allowlist, read on every
+        # DM. Named here so the banner never under-reports who can talk - and
+        # said to be live, since this line is a boot snapshot of a list that is not.
+        _known = _named(people.names())
+        _known = f" + known (state/people.json, live): {_known}" if _known else ""
         log(f"Guest chat: ON ({guest.MODEL}, DM only, {_surface}"
             f"{', web search on' if guest.WEB_SEARCH else ''}) — "
-            f"{_named(identity.people_map(identity.guest_config().get('ids'))) or 'nobody whitelisted'}, "
+            f"{_named(identity.people_map(identity.guest_config().get('ids'))) or 'nobody whitelisted'}"
+            f"{_known}, "
             f"caps {guest.DAILY_CAP}/guest/day, {guest.GLOBAL_CAP}/day global")
     else:
         log("Guest chat: OFF — only owners get a reply")

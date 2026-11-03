@@ -40,6 +40,7 @@ from benham.core import identity
 from benham.core import lookimage
 from benham.core import looksound
 from benham.core import pathsafe
+from benham.core import people
 from benham.core import policy
 from benham.core import rooms
 from benham.core import wire
@@ -3322,6 +3323,295 @@ async def _guest_wake(ctx, p):
     uid = int(p["user_id"])
     was_quiet = guest_mod.wake(uid)
     return {"status": "woken" if was_quiet else "was_not_quiet", "user_id": uid}
+
+
+# --- Known people (INTENT decision 61, Stage 9 A) -----------------------------
+#
+# Who Benham knows - can DM him (a guest chat: chat + web search, no client
+# tools) and be reached by `outreach` - lives in TWO places, unioned everywhere
+# it is asked: control.json's guest.ids / outreach.people (read once at boot,
+# edited by hand) and state/people.json (people.py, read on every check,
+# written by add_person / remove_person). The second is the live one: goal 9 of
+# docs/plans/PLAN-known-people.md, "no ssh, no restart, one list". These verbs
+# never read or write control.json's lists beyond reporting them - a config
+# person is changed at the keyboard, as ever.
+#
+# taints on all three: names and display names are attacker-writable Discord
+# strings, and a note is whatever someone typed.
+
+def _config_people():
+    """{user_id: [list names]} for the config half, owners left out (is_guest
+    never counts an owner as a guest, and resolve_target refuses one)."""
+    out = {}
+    lists = (("guest.ids", identity.people_map(identity.guest_config().get("ids"))),
+             ("outreach.people",
+              identity.people_map((identity.CONTROL.get("outreach") or {}).get("people"))))
+    for label, pm in lists:
+        for name, uid in pm.items():
+            if identity.is_owner(uid):
+                continue
+            row = out.setdefault(int(uid), {"names": [], "lists": []})
+            if name != str(uid) and name not in row["names"]:
+                row["names"].append(name)
+            if label not in row["lists"]:
+                row["lists"].append(label)
+    return out
+
+
+@action("list_people", identity.READ,
+        "Who this bot knows: everyone who can DM it and be reached by outreach, each "
+        "with where they come from - 'state' (added with add_person; live, no restart "
+        "needed) or 'config' (control.json's guest.ids or outreach.people, edited by "
+        "hand), or both.",
+        {}, taints=True)
+async def _list_people(ctx, p):
+    state = people.load()
+    config = _config_people()
+    rows = []
+    for uid in set(state) | set(config):
+        s, c = state.get(uid), config.get(uid)
+        if s is not None and identity.is_owner(uid):
+            continue                     # never a guest, whatever the file says
+        names = (c or {}).get("names") or []
+        row = {"user_id": uid,
+               "name": (s or {}).get("name") or (names[0] if names else str(uid)),
+               "display_name": (s or {}).get("display_name"),
+               "source": "config+state" if (s and c) else ("state" if s else "config"),
+               "lists": ((c or {}).get("lists") or []) + (["people.json"] if s else [])}
+        if s:
+            row.update({"since": s.get("since"), "by": s.get("by"), "note": s.get("note")})
+        rows.append(row)
+    rows.sort(key=lambda r: (str(r["name"]).lower(), r["user_id"]))
+    out = {"count": len(rows),
+           "guest_chat": "on" if identity.guest_enabled() else "off",
+           "people": rows}
+    if not rows:
+        out["message"] = "Nobody is known yet - add_person makes someone known."
+    return out
+
+
+# The acting face's own name for the card's lines - "Benham" in a benham
+# process, as Caz reads it; derived like VIA, never hardcoded (test_face_wording).
+_ME = _paths.PROCESS_FACE.capitalize()
+
+
+def _known_means():
+    """What being known buys, in the words the card shows. Read from the guest
+    lane's live knobs, so the card cannot promise web search that is off."""
+    from benham.guest import guest as guest_mod
+    tools = "chat + web search" if guest_mod.WEB_SEARCH else "chat"
+    return f"can DM {_ME} and be messaged by him; {tools} only"
+
+
+def _shared_guilds(ctx, uid):
+    """The servers this bot shares with `uid`, by name - from the member cache,
+    which is whole since the members intent went on (2026-11-03)."""
+    out = []
+    for g in getattr(ctx.client, "guilds", None) or []:
+        get = getattr(g, "get_member", None)
+        if get is not None and get(int(uid)) is not None:
+            out.append(g.name)
+    return sorted(out, key=str.lower)
+
+
+async def _person_lookup(ctx, query):
+    """A name, @mention or id -> one person, the way find_user resolves it.
+
+    One record: user_id, name (the account name), display_name, bot, shares
+    (server names), unknown (Discord has no such user). A name that matches
+    several people resolves only when exactly one of them matches it EXACTLY;
+    otherwise it is refused with the candidates and their ids - picking one
+    would be a guess, and a guess here makes a stranger known."""
+    needle = str(query).strip()
+    uid = _as_user_id(needle)
+    if uid is not None:
+        try:
+            u = await ctx.user(uid)
+        except (ActionError, discord.HTTPException):
+            u = None
+        if u is None:
+            return {"user_id": uid, "name": str(uid), "display_name": None,
+                    "bot": False, "shares": [], "unknown": True}
+        return {"user_id": u.id, "name": u.name,
+                "display_name": getattr(u, "global_name", None) or u.name,
+                "bot": bool(getattr(u, "bot", False)),
+                "shares": _shared_guilds(ctx, u.id), "unknown": False}
+    found = await _find_user(ctx, {"query": needle})
+    matches = found["matches"]
+    low = needle.lower()
+    if len(matches) > 1:
+        exact = [m for m in matches if _rank(m, low) == 0]
+        matches = exact if len(exact) == 1 else matches
+    if not matches:
+        raise ActionError(f"Nobody in a server this bot is in matches {needle!r}. Their user "
+                          "id works too (Discord: right-click them > Copy User ID).")
+    if len(matches) > 1:
+        names = "; ".join(f"{m['display_name']} (@{m['name']}, id {m['user_id']})"
+                          for m in matches[:6])
+        more = f" and {len(matches) - 6} more" if len(matches) > 6 else ""
+        raise ActionError(f"{needle!r} matches {len(matches)} people: {names}{more}. "
+                          "Say which with their id.")
+    m = matches[0]
+    shares = _shared_guilds(ctx, m["user_id"]) or sorted(
+        (g["name"] for g in m.get("guilds") or []), key=str.lower)
+    return {"user_id": m["user_id"], "name": m["name"].split("#")[0],
+            "display_name": m["display_name"], "bot": bool(m["bot"]),
+            "shares": shares, "unknown": False}
+
+
+def _person_label(rec):
+    shown = rec.get("display_name") or rec.get("name") or str(rec["user_id"])
+    at = rec.get("name")
+    if at and at != shown and at != str(rec["user_id"]):
+        return f"{shown} (@{at}, id {rec['user_id']})"
+    return f"{shown} (id {rec['user_id']})"
+
+
+@action("add_person", identity.MANAGE,
+        "Make someone a KNOWN person: they can DM this bot and be messaged by it "
+        "(outreach) - a guest chat, chat + web search only, no tools. Finds them by "
+        "name, @mention or user id, the way find_user does; a name that fits several "
+        "people is refused with their ids. The preview names them, their id and the "
+        "servers they share with this bot. Takes effect at once, no restart, and lasts "
+        "until remove_person. Always previewed and confirmed.",
+        {"query": {"type": "str", "required": True,
+                   "desc": "Their name, an @mention, or their user id"},
+         "note": {"type": "str",
+                  "desc": "Why they are being added, a few words (kept on their record)"}},
+        always_confirm=True, taints=True)
+async def _add_person(ctx, p):
+    who = await _person_lookup(ctx, p["query"])
+    uid = who["user_id"]
+    label = _person_label(who)
+    if identity.is_owner(uid):
+        raise ActionError(f"{label} is an owner - Caz is never a guest, so there's "
+                          "nothing to add.")
+    if who["bot"]:
+        raise ActionError(f"{label} is a bot account. Known people are humans; a bot "
+                          "that answers in a channel is a bot guest (control.json "
+                          "bot_guests, INTENT 53).")
+    had = people.get(uid)
+    if had is not None:
+        raise ActionError(f"{label} is already known - since {had.get('since') or '?'}, "
+                          f"by {had.get('by') or '?'}. list_people shows everyone.")
+    note = (str(p.get("note") or "").strip() or None)
+    config = _config_people().get(uid)
+    if ctx.dry_run:
+        lines = []
+        if who["unknown"]:
+            lines.append("Discord has no user with this id - check it. Nobody can DM "
+                         f"{_ME} as them until it is a real account.")
+        elif who["shares"]:
+            lines.append(f"Shares with {_ME}: {', '.join(who['shares'])}")
+        else:
+            lines.append(f"Shares no server with {_ME}.")
+        lines.append(f"Being known means: {_known_means()}.")
+        lines.append("Takes effect at once, no restart; lasts until remove_person.")
+        if note:
+            lines.append(f"Note: {note}")
+        if config:
+            lines.append(f"Already in control.json ({', '.join(config['lists'])}); this "
+                         "adds them to the live list too.")
+        if not identity.guest_enabled():
+            lines.append("Guest chat is OFF on this face, so they can be messaged but "
+                         f"can't DM {_ME} until it's turned on.")
+        return {"summary": f"Add **{label}** to the known people",
+                "detail": "\n".join(lines)}
+    rec = people.add(uid, {
+        "name": who["name"], "display_name": who["display_name"],
+        "since": eventtime.now().astimezone(eventtime.DETROIT).isoformat(timespec="seconds"),
+        "by": "caz" if identity.is_owner(ctx.actor_id) else "cli",
+        "note": note})
+    ctx.log(f"add_person: {uid} ({who['name']}) is known, by {rec['by']}")
+    return {"status": "person_added", "user_id": uid, **rec, "shares": who["shares"],
+            "unknown_to_discord": who["unknown"], "source": "state",
+            "can_dm_now": identity.guest_enabled() and identity.is_guest(uid),
+            "means": _known_means()}
+
+
+def _person_in_state(query):
+    """A name, @mention or id -> (user_id, record) from people.json, or a
+    one-sentence refusal. Matched against the STORE, never Discord: the person
+    may have left every server, and what is being removed is this record."""
+    needle = str(query).strip()
+    state = people.load()
+    uid = _as_user_id(needle)
+    if uid is None and needle.isdigit():
+        uid = int(needle)
+    if uid is not None:
+        if uid in state:
+            return uid, state[uid]
+        raise ActionError(f"Nobody with id {uid} was added with add_person - "
+                          "list_people shows who is known and from where.")
+    low = needle.lstrip("@").lower()
+    hits = [(u, r) for u, r in state.items()
+            if low in (str(r.get("name") or "").lower(), str(r.get("display_name") or "").lower())]
+    if not hits:
+        raise ActionError(f"Nobody called {needle!r} was added with add_person - "
+                          "list_people shows who is known and from where.")
+    if len(hits) > 1:
+        names = "; ".join(_person_label({"user_id": u, **r}) for u, r in hits)
+        raise ActionError(f"{needle!r} fits {len(hits)} known people: {names}. Say which "
+                          "with their id.")
+    return hits[0]
+
+
+def _people_keep(ctx, uid, rec):
+    """Save the record to look_backups/people-<id>-<Detroit stamp>.json before it
+    goes, and return the path. NOT best effort, like _settings_keep: the card
+    promised the copy, so a copy that can't be made stops the removal."""
+    try:
+        now = eventtime.now().astimezone(eventtime.DETROIT)
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        base = os.path.join(LOOK_BACKUP_DIR, f"people-{uid}-{now.strftime('%Y%m%d-%H%M%S')}")
+        path, n = base + ".json", 1
+        while os.path.exists(path):
+            n += 1
+            path = f"{base}-{n}.json"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"saved_at": now.isoformat(timespec="seconds"), "user_id": uid,
+                       "record": rec,
+                       # add_person with these makes them known again.
+                       "restore": {"query": str(uid), "note": rec.get("note")}},
+                      fh, indent=2, ensure_ascii=False)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"remove_person: could not save {uid}'s record ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save their record first ({type(e).__name__}), so I "
+                          "didn't remove anyone. Nothing was changed.")
+
+
+@action("remove_person", identity.MANAGE,
+        "Stop knowing someone add_person made known: from their next message they "
+        "can't DM this bot, and outreach can't reach them. Takes their name, @mention or "
+        "id as list_people shows it. Their record is saved first (add_person brings "
+        "them back). Only undoes add_person - someone listed in control.json stays "
+        "known until that file is edited. Always previewed and confirmed.",
+        {"query": {"type": "str", "required": True,
+                   "desc": "Their name, an @mention, or their user id (list_people)"}},
+        always_confirm=True, taints=True)
+async def _remove_person(ctx, p):
+    uid, rec = _person_in_state(p["query"])
+    label = _person_label({"user_id": uid, **rec})
+    config = _config_people().get(uid)
+    if ctx.dry_run:
+        lines = [f"Known since {rec.get('since') or '?'}, by {rec.get('by') or '?'}"
+                 + (f" - note: {rec['note']}" if rec.get("note") else "") + ".",
+                 f"From their next message they can't DM {_ME}, and outreach can't "
+                 "reach them. No restart.",
+                 "Their record is saved first; add_person brings them back."]
+        if config:
+            lines.append(f"They stay known anyway: control.json lists them "
+                         f"({', '.join(config['lists'])}). This removes only the live entry.")
+        return {"summary": f"Remove **{label}** from the known people",
+                "detail": "\n".join(lines)}
+    saved = _people_keep(ctx, uid, rec)
+    gone = people.remove(uid)
+    ctx.log(f"remove_person: {uid} ({rec.get('name')}) removed, copy at {saved}")
+    return {"status": "person_removed" if gone is not None else "was_not_known",
+            "user_id": uid, "name": rec.get("name"), "display_name": rec.get("display_name"),
+            "backup": saved, "still_known": identity.is_guest(uid),
+            "still_known_from": (config or {}).get("lists") or []}
 
 
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",
