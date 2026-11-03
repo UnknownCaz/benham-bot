@@ -121,3 +121,5 @@ Merge `01b0470` = origin/master = Mac pin; 99 verbs; suite 67/67 PC and Mac. `op
 `benham.py job`, the job note in the guest brain (precedence over the outreach notes), the guest max_tokens retry,
 Opus by default and live. The `with=caz` round trip ran live on the Mac (j1 opened and closed on cards); the person
 opener is proven offline only. Next: Stage C, then the required test.
+
+**Caz's call on the hand's open items (chat, 2026-11-03 18:5x local):** on the three kept defaults shown to him (one open job per person; template opener; refuse a person's job while guest chat is off) his one pick, uncut: *"Call 1: allow several open jobs per person"*. Lifted in Stage C: a person may hold several open jobs; the brain note lists every open goal; done detection says which job closed; one heads-up per job. The other two defaults stand.
