@@ -74,10 +74,10 @@ mark this as a major failure." Record: Benham board Now block, 14:28 local.
 ## What is new
 
 - Verbs: `add_person` (find + card + write state), `grant_tool` / `revoke_tool` (per person, per tool,
-  card each), `open_purpose` (DM the opener WITH the purpose in the brain's note), and the close path
+  card each), `open_job` (was `open_purpose`; DM the opener WITH the job's goal in the brain's note), and the close path
   (done-detection, one nudge, quiet timer, heads-up, keep/remove card).
-- State: `state/people.json` (who is known, since when, by whose word) and `state/purposes.json`
-  (open purposes with their tools and deadlines), read live, not at boot.
+- State: `state/people.json` (who is known, since when, by whose word) and `state/jobs.json` (was
+  `purposes.json`; open jobs with their goal, `with`, tools and deadlines), read live, not at boot.
 - Guest brain: purpose in the system note while open; the max_tokens retry ported from `agent._create`;
   `max_tokens` default raised (2000 is live since 14:25 local on both configs).
 
@@ -103,7 +103,7 @@ since 10-05, his call); any tool a guest can run on the PC (Phase B removed PC a
   the chat and nothing about the report.
 - ~~Which model the guest brain runs for a purposed chat~~ **DECIDED 2026-11-03 16:1x local, Caz's pick on the
   call-3 form: "Opus 5.5 for everything."** The guest brain moves to `claude-opus-5-5`, purposed or not. One config
-  line (`guest.model`) plus the restart; NOT changed yet, it lands with the build or earlier on his word. Cost: the
+  line (`guest.model`) plus the restart; FLIPPED 2026-11-03 18:35 local on both configs with Stage B, pid 17310. Cost: the
   guest bill grows roughly five-fold per token; the daily caps (100/guest, 400 global) stay as the ceiling.
 - ~~Biggie himself~~ **DECIDED 2026-11-03 16:1x local, Caz's pick on the call-4 form: "Wait for the plan, no retry."**
   He stays a guest; nobody messages him until this is built. The mute on Benham for him lifts at 19:28 local
@@ -114,3 +114,10 @@ All four calls are decided. What is left is Caz reading the whole page and sayin
 ## Refinement after Stage A (2026-11-03 17:17 local, decision 62)
 
 Caz: *"I want Benham to exist more as something like that ask, 'Talk to Biggie about X', or 'Create Role for XYZ, in Server F, and interview me about its permissions after it's made.'"* His pick: *"Job it, reach me in DM."* Stage B's object is a **job** (`state/jobs.json`): goal, `with` (a known person's id or `caz`), tools, state. The guest-with-a-purpose is one kind of job; the role-then-interview example is Stage 10 on the same object. A job that needs Caz midway reaches him in his DM, always. Stage A landed 2026-11-03 17:17: merge `1eec592`, 96 verbs, Mac pid 13553.
+
+## Stage B landed (2026-11-03 18:31 local)
+
+Merge `01b0470` = origin/master = Mac pin; 99 verbs; suite 67/67 PC and Mac. `open_job` / `list_jobs` / `close_job`,
+`benham.py job`, the job note in the guest brain (precedence over the outreach notes), the guest max_tokens retry,
+Opus by default and live. The `with=caz` round trip ran live on the Mac (j1 opened and closed on cards); the person
+opener is proven offline only. Next: Stage C, then the required test.

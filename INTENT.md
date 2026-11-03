@@ -1142,7 +1142,13 @@ tests, decision 26 deploys) before the next starts:
   job in the guest brain's system note while the job is open, NEVER through the outreach store; for `caz`: no DM, the job
   is Benham's own to run and come back on). A job that needs Caz midway reaches him in his DM, always (decision 62);
   the guest brain gets the max_tokens retry from `agent._create`; `guest.model` to `claude-opus-5-5`.
-  *Why:* goals 4 and 5; today's two breaks.
+  *Why:* goals 4 and 5; today's two breaks. **LANDED 2026-11-03 18:31 local:** merge `01b0470`, 99 verbs
+  (read 28, speak 11, manage 47, destructive 13), suite 67/67 PC and Mac; live `guest.model` flipped to
+  `claude-opus-5-5` on both configs 18:35 local (backups `control.json.bak-2026-11-03-1835-opus`), restart ->
+  pid 17310, banner `Guest chat: ON (claude-opus-5-5 ...)`. The person opener is proven offline only; the
+  required test below is still owed. Hand's calls, kept by the session: one open job per person (the note
+  carries one goal; Caz may hold several); `with` must resolve to someone who can DM back; `open_job` for a
+  person is refused while guest chat is off; the default opener is a template so the card shows exact text.
 - **C. Closing and borrowed tools** - done detection (the counterparty says done or satisfied, judged the way
   `guest/answers.py` judges), quiet 1 day then one nudge, 1 more day then close; the heads-up DM to Caz (the job,
   what Benham did, what it found, tools used); `grant_tool` / `revoke_tool` per person per tool as cards, default
@@ -1317,6 +1323,10 @@ input is half a request). Same rule in the confirm-explain call, the answer chec
 `answer_conversation` would record his words half-copied) and `rehearse`. The ordinary turn is
 untouched: one call, same cap. `friend_turn` (tools off, text only) was left as it was - a cut
 there still posts what was written. `tests/test_max_tokens.py` replays the 13:03Z shape.
+**The guest lane never had this retry** - Biggie's three cut replies of 2026-11-03 14:23-14:25 were this bug
+on the other lane. Ported 2026-11-03 (`5d3808f`, Stage 9 B): `guest._create` retries once at
+`guest.max_tokens_retry` (default 8000), searches from both calls logged and charged once, a one-line cut
+notice if still cut. `tests/test_guest_max_tokens.py`.
 
 ### 2026-09-16 — c38: the timer was right and the sentence was wrong (c19 in reverse)
 
