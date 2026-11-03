@@ -37,6 +37,7 @@ import discord
 from benham.core import eventtime
 from benham.core import fitimage
 from benham.core import identity
+from benham.core import jobs
 from benham.core import lookimage
 from benham.core import looksound
 from benham.core import pathsafe
@@ -3612,6 +3613,275 @@ async def _remove_person(ctx, p):
             "user_id": uid, "name": rec.get("name"), "display_name": rec.get("display_name"),
             "backup": saved, "still_known": identity.is_guest(uid),
             "still_known_from": (config or {}).get("lists") or []}
+
+
+# --- Jobs (INTENT decisions 61 and 62, Stage 9 B) ------------------------------
+#
+# A job is Caz's goal, who it is WITH (a known person, or Caz himself), the tools
+# it may use, and a state - core/jobs.py, read live. open_job for a person sends
+# the opener as a PLAIN DM, the dm_user path, and never the outreach store: on
+# 2026-11-03 the opener to a friend went through outreach, his answer was bound as
+# an outreach answer, and the guest brain was told to acknowledge it - so it
+# relayed instead of helping. While the job is open bot.py hands the guest brain
+# the goal instead (bot.job_note). For `with: caz` nothing is sent; the job is
+# this bot's own to run and come back on (decision 62: a job that needs Caz midway
+# reaches him in his DM, always - Stages C and 10 build those reaches).
+#
+# taints on all three: the goal and outcome are typed text, the opener goes to a
+# person, and a job's names are Discord strings.
+
+def _job_who(query):
+    """`with` -> (jobs.CAZ, "Caz") or (user_id, label). Known people only.
+
+    Resolved against what list_people shows - people.json first, then
+    control.json's lists - and never by asking Discord: a job is opened with
+    someone already known, never a stranger (add_person is the door for that).
+    And they must be able to DM this bot back, or the job's replies would land
+    nowhere; someone only on outreach.people cannot."""
+    needle = str(query).strip()
+    if needle.lower() in (jobs.CAZ, "@caz"):
+        return jobs.CAZ, "Caz"
+    state, config = people.load(), _config_people()
+    uid = _as_user_id(needle)
+    if uid is None and needle.isdigit():
+        uid = int(needle)
+    if uid is not None and identity.is_owner(uid):
+        raise ActionError("That's Caz - a job with him is `with: caz`, and it sends "
+                          "nothing.")
+    if uid is None:
+        low = needle.lstrip("@").lower()
+        hits = {u for u, r in state.items()
+                if low in (str(r.get("name") or "").lower(),
+                           str(r.get("display_name") or "").lower())}
+        hits |= {u for u, r in config.items()
+                 if low in (n.lower() for n in r["names"])}
+        hits = {u for u in hits if not identity.is_owner(u)}
+        if not hits:
+            raise ActionError(f"Nobody called {needle!r} is a known person - list_people "
+                              "shows who is, and add_person makes someone known.")
+        if len(hits) > 1:
+            raise ActionError(f"{needle!r} fits {len(hits)} known people (ids "
+                              f"{', '.join(str(u) for u in sorted(hits))}). Say which "
+                              "with their id.")
+        uid = hits.pop()
+    elif uid not in state and uid not in config:
+        raise ActionError(f"{uid} isn't a known person - add_person makes someone "
+                          "known first.")
+    rec = state.get(uid)
+    if rec is not None:
+        label = _person_label({"user_id": uid, **rec})
+    else:
+        names = (config.get(uid) or {}).get("names") or []
+        label = f"{names[0]} (id {uid})" if names else f"{uid} (id {uid})"
+    if not identity.is_guest(uid):
+        raise ActionError(f"{label} is only on outreach.people, so they can't DM this "
+                          "bot back and a job's replies would land nowhere. add_person "
+                          "makes them a guest.")
+    if not identity.guest_enabled():
+        raise ActionError("Guest chat is OFF on this face, so nobody could answer a "
+                          "job's opener. Turn guest chat on first.")
+    return uid, label
+
+
+def _job_tools(raw):
+    """The tools list, checked. Default: web search. Only web_search exists in
+    Stage B; anything else is refused by name."""
+    if raw is None:
+        return list(jobs.TOOLS)
+    out = []
+    for t in raw:
+        name = str(t).strip().lower().replace("-", "_").replace(" ", "_")
+        if not name:
+            continue
+        if name not in jobs.TOOLS:
+            raise ActionError(f"{str(t).strip()!r} can't be given to a job yet - only "
+                              "web_search. Stage C grants other tools.")
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _tools_words(tools):
+    return "web search" if "web_search" in tools else "none beyond chat"
+
+
+def _default_opener(label, goal):
+    """The opener when none is given: short, in the acting face's voice, and
+    quoting Caz's goal rather than retelling it. The card shows it in full, so a
+    clumsy one is caught before it goes; the owner agent writes its own."""
+    name = label.split(" (")[0]
+    return (f"Hey {name}! {_ME} here - Caz asked me to give you a hand with this: "
+            f"\"{goal}\". Tell me what you've got so far and I'll start digging.")
+
+
+def _job_label(job):
+    """Who a stored job is with, for lists and cards."""
+    w = job.get("with")
+    if w == jobs.CAZ:
+        return "Caz"
+    try:
+        uid = int(w)
+    except (TypeError, ValueError):
+        return str(w)
+    rec = people.get(uid)
+    if rec is not None:
+        return _person_label({"user_id": uid, **rec})
+    names = (_config_people().get(uid) or {}).get("names") or []
+    return f"{names[0]} (id {uid})" if names else f"{uid} (id {uid})"
+
+
+@action("open_job", identity.MANAGE,
+        "Open a JOB: a goal in Caz's words, who it is with, and the tools it may use. "
+        "With a known person (name, @mention or id; list_people), the opener goes to "
+        "them as a plain DM, and while the job is open their messages reach the guest "
+        "chat with the goal in its note - it keeps helping them until they're sorted, "
+        "and nothing they say is recorded as an answer or passed on. With 'caz', "
+        "nothing is sent: the job is this bot's own to run and come back to him on. "
+        "One open job per person. Tools: web_search only (the default). The preview "
+        "shows who, the goal, the tools and the exact opener. Always previewed and "
+        "confirmed; close_job ends it.",
+        {"goal": {"type": "str", "required": True,
+                  "desc": "What Caz asked for, in his words"},
+         "with": {"type": "str", "required": True,
+                  "desc": "A known person's name, @mention or id - or 'caz'"},
+         "tools": {"type": "list",
+                   "desc": "Tools the job may use; only 'web_search' (the default)"},
+         "opener": {"type": "str",
+                    "desc": "The first DM, in this bot's voice. Default: a short line "
+                            "quoting the goal. Not for 'caz'."}},
+        outward=True, always_confirm=True, taints=True)
+async def _open_job(ctx, p):
+    goal = str(p["goal"]).strip()
+    if not goal:
+        raise ActionError("open_job needs a goal - what Caz asked for, in his words.")
+    who, label = _job_who(p["with"])
+    tools = _job_tools(p.get("tools"))
+    opener = str(p.get("opener") or "").strip() or None
+    person = who != jobs.CAZ
+    if not person and opener:
+        raise ActionError("A job with Caz sends nothing, so it has no opener.")
+    if person:
+        had = jobs.open_for(who)
+        if had is not None:
+            raise ActionError(f"{label} already has an open job, {had['id']}: "
+                              f"\"{had['goal'][:120]}\". close_job it first.")
+        opener = opener or _default_opener(label, goal)
+    if ctx.dry_run:
+        lines = [f"Goal (Caz's words): {goal}"]
+        if person:
+            lines.append(f"With: {label}")
+        else:
+            lines.append("With: Caz - no DM goes out; the job is "
+                         f"{_ME}'s own to run and come back to you on.")
+        lines.append(f"Tools: {_tools_words(tools)}")
+        if person:
+            lines.append("Opener, sent to them as a plain DM the moment you approve:")
+            lines.extend(f"> {line}" for line in opener.splitlines() or [""])
+            lines.append("While it's open, their messages reach the guest chat with "
+                         "this goal in its note - not through outreach; nothing is "
+                         "recorded as an answer or passed on.")
+        lines.append("Open until close_job.")
+        shown = goal if len(goal) <= 80 else goal[:77] + "..."
+        return {"summary": (f"Open a job with **{label}**: {shown}" if person
+                            else f"Open a job for **Caz**: {shown}"),
+                "detail": "\n".join(lines)}
+    now = jobs.stamp()
+    by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
+    job = jobs.create({"goal": goal, "with": str(who), "tools": tools, "state": "open",
+                       "opened": now, "opened_by": by, "last_activity": now,
+                       "opener": opener,
+                       "log": [{"at": now, "event": "opened", "by": by}]})
+    out = {"status": "job_opened", "job_id": job["id"], "with": job["with"],
+           "with_label": label, "goal": goal, "tools": tools, "opener_sent": False}
+    if person:
+        try:
+            sent = await _dm_user(ctx, {"user_id": who, "content": opener})
+        except (ActionError, discord.HTTPException, policy.OutwardBlocked) as e:
+            reason = getattr(getattr(e, "decision", None), "reason", None) or str(e)
+            jobs.update(job["id"], state="closed", closed=jobs.stamp(), closed_by=by,
+                        outcome=f"opener not sent: {reason}",
+                        log={"event": "opener_failed", "error": reason})
+            ctx.log(f"open_job: {job['id']} opener to {who} failed ({reason}) - closed")
+            raise ActionError(f"Job {job['id']} was written, but the opener didn't go "
+                              f"out ({reason}), so I closed it. Nothing reached them.")
+        jobs.update(job["id"], opener_message_id=sent["message_id"],
+                    log={"event": "opener_sent", "message_id": sent["message_id"]})
+        out.update({"opener_sent": True, "message_id": sent["message_id"],
+                    "to": sent.get("to"), "opener": opener})
+    ctx.log(f"open_job: {job['id']} with {job['with']} by {by}"
+            + (f", opener {out.get('message_id')}" if person else ", nothing sent"))
+    return out
+
+
+@action("list_jobs", identity.READ,
+        "The jobs this bot has been given: each one's goal, who it is with, its tools, "
+        "its state (open / nudged / closed), when it opened and its last activity. "
+        "Newest first.",
+        {"state": {"type": "str", "desc": "open | closed | all (default all)"}},
+        taints=True)
+async def _list_jobs(ctx, p):
+    want = str(p.get("state") or "all").strip().lower()
+    if want not in ("open", "closed", "all"):
+        raise ActionError("state is open, closed or all.")
+    every = list(jobs.load().values())
+    rows = []
+    for j in reversed(every):
+        if want == "open" and not jobs.is_open(j):
+            continue
+        if want == "closed" and jobs.is_open(j):
+            continue
+        row = {k: j.get(k) for k in ("id", "goal", "with", "tools", "state", "opened",
+                                      "opened_by", "last_activity", "turns")}
+        row["with_label"] = _job_label(j)
+        for k in ("closed", "closed_by", "outcome", "opener_message_id"):
+            if j.get(k) is not None:
+                row[k] = j[k]
+        rows.append(row)
+    out = {"count": len(rows), "open": sum(1 for j in every if jobs.is_open(j)),
+           "jobs": rows}
+    if not rows:
+        out["message"] = ("No jobs yet - open_job makes one." if not every
+                          else f"No {want} jobs.")
+    return out
+
+
+@action("close_job", identity.MANAGE,
+        "Close an open job, with its outcome in a few words. Nothing is sent to "
+        "anyone; from their next message the person it was with gets the ordinary "
+        "guest chat again. Always previewed and confirmed.",
+        {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"},
+         "outcome": {"type": "str", "required": True,
+                     "desc": "How it ended, a few words"}},
+        always_confirm=True, taints=True)
+async def _close_job(ctx, p):
+    job = jobs.get(p["job_id"])
+    if job is None:
+        raise ActionError(f"No job {str(p['job_id']).strip()!r} - list_jobs shows them.")
+    if not jobs.is_open(job):
+        raise ActionError(f"Job {job['id']} is already closed ({job.get('closed') or '?'}"
+                          f": {job.get('outcome') or 'no outcome'}).")
+    outcome = str(p["outcome"]).strip()
+    if not outcome:
+        raise ActionError("close_job needs an outcome - how it ended, a few words.")
+    label = _job_label(job)
+    if ctx.dry_run:
+        lines = [f"Goal: {job['goal']}",
+                 f"Outcome: {outcome}",
+                 f"Opened {job.get('opened') or '?'} by {job.get('opened_by') or '?'}; "
+                 f"{job.get('turns') or 0} message(s) from them since; last activity "
+                 f"{job.get('last_activity') or '?'}.",
+                 "Nothing is sent to anyone."]
+        return {"summary": f"Close job **{job['id']}** with **{label}**",
+                "detail": "\n".join(lines)}
+    by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
+    now = jobs.stamp()
+    done = jobs.update(job["id"], state="closed", closed=now, closed_by=by,
+                       outcome=outcome, log={"event": "closed", "by": by,
+                                             "outcome": outcome})
+    ctx.log(f"close_job: {job['id']} closed by {by}: {outcome[:120]!r}")
+    return {"status": "job_closed", "job_id": job["id"], "with": job["with"],
+            "with_label": label, "goal": job["goal"], "outcome": outcome,
+            "closed": done.get("closed") if done else now, "closed_by": by}
 
 
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",
