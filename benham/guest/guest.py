@@ -70,8 +70,15 @@ PERSONA_FILE = os.path.join(paths.prompts_for(paths.PROCESS_FACE), "guest_person
 SEARCH_LOG = os.path.join(paths.process_state_dir(), "guest_searches.jsonl")
 
 _CFG = identity.guest_config()
-MODEL = _CFG.get("model") or "claude-haiku-4-5"
+# Opus for every guest chat, purposed or not - Caz's call 3 on the known-people
+# plan (2026-11-03 16:1x local, "Opus 5.5 for everything"), after a Sonnet/Haiku
+# brain failed a friend on its first real search. `guest.model` in control.json
+# overrides this default, read once at import like every knob here.
+MODEL = _CFG.get("model") or "claude-opus-5-5"
 MAX_TOKENS = int(_CFG.get("max_tokens", 500))
+# One retry at this cap when a reply is cut off at MAX_TOKENS - agent._create's
+# rule, ported to this lane (INTENT 61/62, Stage 9 B; see _create below).
+MAX_TOKENS_RETRY = int(_CFG.get("max_tokens_retry", 8000))
 HISTORY_TURNS = int(_CFG.get("history_turns", 10))
 COOLDOWN = float(_CFG.get("cooldown_seconds", 3))
 DAILY_CAP = int(_CFG.get("daily_message_cap", 100))
@@ -457,6 +464,67 @@ def _get_client():
     return _client
 
 
+CUT_NOTICE = ("✂️ Cut off: I hit my length limit for one reply and the rest "
+              "of it never got written. Say \"keep going\" and I'll pick it up "
+              "from here.")
+
+
+def _log_usage(_log, user_id, resp, label=""):
+    """The usage line usage.py parses, one per API call - so a retried turn is
+    billed in the log as the two calls it was."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    # Same shape usage.py already parses for agent turns, so guest traffic shows
+    # up in `usage.py --today` with no change to that file.
+    # cache_read/cache_write ride BEFORE model= on purpose: usage.py's RE_AGENT
+    # captures everything up to " model=" as the body and hands it to kv(), which
+    # parses arbitrary key=value tokens - so these are free to add here and would
+    # be invisible (or worse, break the model match) after it. They are logged
+    # because a prompt cache fails SILENTLY: a stale-looking bill is the only
+    # symptom otherwise. cache_read of 0 across a live back-and-forth means the
+    # system prefix stopped being byte-identical - look there first.
+    _log(f"agent usage [guest:{user_id}{label}] "
+         f"in={getattr(u, 'input_tokens', 0)} out={getattr(u, 'output_tokens', 0)} "
+         f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
+         f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
+         f"model={MODEL}")
+
+
+def _create(_log, user_id, **kw):
+    """One guest model call that is never cut off in silence. Returns
+    (resp, calls) - `calls` is every response, the cut one first when there was a
+    retry, so the caller can log and charge the searches of the turn ONCE.
+
+    THE AFTERNOON THIS EXISTS FOR. 2026-11-03 14:2x local, a friend's game
+    search: this lane ran web search every turn with max_tokens 500, and each
+    reply was cut off BEFORE the search results were written - out=487/758/595
+    in the log, three one-sentence apologies and no names. The owner agent had
+    fixed this exact shape on 2026-10-11 (agent._create, INTENT known bug "a
+    long reply was dropped in silence at max_tokens"); this lane never got it.
+
+    So the same rule: a call that stops at MAX_TOKENS is asked again, ONCE, with
+    MAX_TOKENS_RETRY of room - the same request, so nothing has happened to undo
+    (a server-side search has no client half to unwind). Once, because a reply
+    that does not fit in the retry's room will not fit on a third try either; if
+    it is still cut, respond() keeps what was written and says so out loud
+    (CUT_NOTICE). Still no client tool - this changes the budget, not the call.
+    """
+    api = _get_client()
+    resp = api.messages.create(model=MODEL, max_tokens=MAX_TOKENS, **kw)
+    _log_usage(_log, user_id, resp)
+    calls = [resp]
+    if getattr(resp, "stop_reason", None) == "max_tokens" and MAX_TOKENS_RETRY > MAX_TOKENS:
+        _log(f"guest chat [{user_id}]: hit max_tokens={MAX_TOKENS} - retrying once at "
+             f"{MAX_TOKENS_RETRY}")
+        resp = api.messages.create(model=MODEL, max_tokens=MAX_TOKENS_RETRY, **kw)
+        _log_usage(_log, user_id, resp, " retry")
+        calls.append(resp)
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        _log(f"guest chat [{user_id}]: still cut off at max_tokens - the reply says so")
+    return resp, calls
+
+
 def respond(user_id, text, log=None, content=None, note=None):
     """One guest turn: their message in, Benham's reply out.
 
@@ -530,9 +598,8 @@ def respond(user_id, text, log=None, content=None, note=None):
         # client tools; see the module docstring. shared_tools is server-side-only
         # by charter, so building the entry there does not weaken this paragraph.
         kw["tools"] = [shared_tools.web_search_tool(SEARCHES_PER_TURN)]
-    resp = _get_client().messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
+    resp, calls = _create(
+        _log, user_id,
         # The persona is a static file read once into _persona_cache: same bytes on
         # every turn, no clock, no per-guest interpolation. That makes it the one
         # thing here worth a cache breakpoint - it is ~3.3k tokens re-billed at full
@@ -574,7 +641,11 @@ def respond(user_id, text, log=None, content=None, note=None):
     except Exception as e:  # noqa: BLE001 - an offer must never eat a reply
         _log(f"guest issue offer failed to park ({e}) - reply unaffected")
 
-    queries = shared_tools.search_queries(resp)
+    # Every call of the turn, the cut one included - its searches ran and were
+    # billed - but each query logged ONCE and the turn charged ONCE: a retry is
+    # this lane's own doing, not a second searched turn of theirs, and the
+    # retry usually repeats the first call's queries word for word.
+    queries = list(dict.fromkeys(q for r in calls for q in shared_tools.search_queries(r)))
     if queries:
         _log_searches(user_id, queries)
         charge_search(user_id)   # a searched turn counts double - Tyler's rule
@@ -583,6 +654,11 @@ def respond(user_id, text, log=None, content=None, note=None):
     # Strip directives, apply none. Nothing here parses one - see the module
     # docstring for why that stays true now that voice took the applier with it.
     reply = directives.strip_directive(raw)
+    cut = getattr(resp, "stop_reason", None) == "max_tokens"
+    if cut:
+        # Cut even after the retry: keep what was written, and say so - a reply
+        # that just stops reads like Benham lost interest.
+        reply = f"{reply}\n\n{CUT_NOTICE}" if reply else CUT_NOTICE
     if not reply:
         reply = "...I've got nothing for that one, sorry."
     if offer_line:
@@ -595,22 +671,7 @@ def respond(user_id, text, log=None, content=None, note=None):
     _remember(key, text, reply)
     mine, everyone = spent_today(user_id)   # already charged by check()
 
-    u = getattr(resp, "usage", None)
-    if u is not None:
-        # Same shape usage.py already parses for agent turns, so guest traffic shows
-        # up in `usage.py --today` with no change to that file.
-        # cache_read/cache_write ride BEFORE model= on purpose: usage.py's RE_AGENT
-        # captures everything up to " model=" as the body and hands it to kv(), which
-        # parses arbitrary key=value tokens - so these are free to add here and would
-        # be invisible (or worse, break the model match) after it. They are logged
-        # because a prompt cache fails SILENTLY: a stale-looking bill is the only
-        # symptom otherwise. cache_read of 0 across a live back-and-forth means the
-        # system prefix stopped being byte-identical - look there first.
-        _log(f"agent usage [guest:{user_id}] "
-             f"in={getattr(u, 'input_tokens', 0)} out={getattr(u, 'output_tokens', 0)} "
-             f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
-             f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
-             f"model={MODEL}")
+    # The usage lines were written per call, in _create.
     _log(f"guest chat: {user_id} used {mine}/{DAILY_CAP} today "
          f"(global {everyone}/{GLOBAL_CAP})")
     return reply

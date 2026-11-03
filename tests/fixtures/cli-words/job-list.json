@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "job",
+    "list"
+  ],
+  "face": true,
+  "exit": 0,
+  "stdout": "done: status=ok\njobs (2 shown, 1 open)\n  j2    open    with doom (id 555000555000555000)  [web_search]\n        goal: find a half-remembered game\n        opened <TS>-05:00 by caz; last activity <TS>-05:00 (3 from them)\n  j1    closed  with Caz  [web_search]\n        goal: stage B rehearsal\n        opened <TS>-05:00 by cli; last activity <TS>-05:00 (0 from them)\n        closed <TS>-05:00 by cli: rehearsal done\n",
+  "stderr": ""
+}

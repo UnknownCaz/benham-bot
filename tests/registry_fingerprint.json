@@ -99,6 +99,19 @@
     "taints": false,
     "tier": 3
   },
+  "close_job": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "create_automod_rule": {
     "always_confirm": true,
     "blocked_when_tainted": false,
@@ -690,6 +703,19 @@
     "taints": true,
     "tier": 0
   },
+  "list_jobs": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 0
+  },
   "list_members": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -851,6 +877,19 @@
     "posts": false,
     "taints": false,
     "tier": 1
+  },
+  "open_job": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": true,
+    "posts": false,
+    "taints": true,
+    "tier": 2
   },
   "pin_message": {
     "always_confirm": false,

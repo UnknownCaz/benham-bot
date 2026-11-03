@@ -181,7 +181,7 @@ def seed(clone):
 _NEEDS_TOKEN = {"delete_message", "purge_messages", "purge_guild", "delete_channel",
                 "delete_role", "kick_member", "ban_member", "delete_emoji",
                 "guest_off",   # always_confirm, tier 2 - same two-step shape
-                "add_person", "remove_person"}
+                "add_person", "remove_person", "open_job", "close_job"}
 FAKE_TOKEN = "abc123"
 REFUSED_CHANNEL = 404  # a channel id that "Discord refuses", for the failed/ path
 
@@ -234,6 +234,19 @@ def _answer(req):
                 {"user_id": GUEST_ID_2 + 100, "name": "newbie", "display_name": "New Bie",
                  "source": "state", "lists": ["people.json"],
                  "since": "2026-11-03T16:30:00-05:00", "by": "caz", "note": "game hunt"}]}}
+    if action == "list_jobs":
+        return "sent", {**base, "status": "ok", "action": action, "result": {
+            "count": 2, "open": 1, "jobs": [
+                {"id": "j2", "goal": "find a half-remembered game", "with": str(GUEST_ID),
+                 "tools": ["web_search"], "state": "open",
+                 "opened": "2026-11-03T18:00:00-05:00", "opened_by": "caz",
+                 "last_activity": "2026-11-03T18:05:00-05:00", "turns": 3,
+                 "with_label": f"doom (id {GUEST_ID})"},
+                {"id": "j1", "goal": "stage B rehearsal", "with": "caz", "tools": ["web_search"],
+                 "state": "closed", "opened": "2026-11-03T17:50:00-05:00", "opened_by": "cli",
+                 "last_activity": "2026-11-03T17:50:00-05:00", "turns": 0,
+                 "with_label": "Caz", "closed": "2026-11-03T17:52:00-05:00",
+                 "closed_by": "cli", "outcome": "rehearsal done"}]}}
     # every other registry capability
     return "sent", {**base, "status": "ok", "action": action,
                     "result": {"status": "sent", "message_id": 123456789}}
@@ -576,6 +589,17 @@ CASES = {
                         "--confirm-token", FAKE_TOKEN],
     "person-remove-preview": ["person", "remove", "doom"],
     "person-remove-note": ["person", "remove", "doom", "--note", "x"],
+    # --- job (2026-11-03, INTENT 61/62 Stage 9 B): a new verb, pinned from birth.
+    "job-usage": ["job"],
+    "job-unknown": ["job", "start", "x"],
+    "job-list": ["job", "list"],
+    "job-list-bad": ["job", "list", "maybe"],
+    "job-open-nowith": ["job", "open", "find a game"],
+    "job-open-preview": ["job", "open", "find a half-remembered game", "--with", "doom"],
+    "job-open-caz-fire": ["job", "open", "stage B rehearsal", "--with", "caz",
+                          "--confirm-token", FAKE_TOKEN],
+    "job-close-nooutcome": ["job", "close", "j1"],
+    "job-close-preview": ["job", "close", "j1", "--outcome", "rehearsal done"],
 }
 
 

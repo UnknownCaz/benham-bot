@@ -17,8 +17,8 @@
     <h2 id="three">The three agents (and a half)</h2>
     <table>
       <tr><th>agent</th><th>file</th><th>model</th><th>can reach</th></tr>
-      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all <!-- GENERATED:count -->96<!-- /GENERATED:count --> capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
-      <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code></td><td><code>guest.model</code> (claude-haiku-4-5)</td><td><em>No client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only, plus <code>idea..</code> filing. A workspace/tool-loop variant existed until 2026-08-16; see <code>archive/guest-tools/</code>.</td></tr>
+      <tr><td><strong>Owner agent</strong> — the one you talk to</td><td><code>agent.py</code></td><td><code>agent.model</code> in control.json (currently claude-sonnet-5)</td><td>all <!-- GENERATED:count -->99<!-- /GENERATED:count --> capabilities via <code>capabilities.py</code>, web search, and <code>pc_task</code> delegation</td></tr>
+      <tr><td><strong>Guest agent</strong> — what friends get</td><td><code>guest.py</code></td><td><code>guest.model</code> in control.json (default claude-opus-5-5)</td><td><em>No client tools at all</em> — the API call passes no <code>tools</code> argument. Server-side web search only, plus <code>idea..</code> filing. A workspace/tool-loop variant existed until 2026-08-16; see <code>archive/guest-tools/</code>.</td></tr>
       <tr><td><strong>PC session</strong> — removed in Phase B (2026-09-05)</td><td><em>gone</em></td><td>—</td><td>nothing; see <a href="../inner/pc-access.html">PC access</a></td></tr>
     </table>
     <p>The PC session drove the real Claude Code CLI on the PC until Phase B deleted the lane outright (INTENT decision 39).</p>
@@ -42,7 +42,7 @@
     <table>
       <tr><th>agent</th><th>billing</th><th>the shape of the cost</th></tr>
       <tr><td>owner agent</td><td>API</td><td>the full registry of tool schemas + system prompt (~7.4k tokens measured pre-Stage-4) per call, but cache-marked — after the first call each turn reads it at a tenth of the price. History is stored as plain text pairs, so long phone conversations don't drag channel dumps along.</td></tr>
-      <tr><td>guest agent</td><td>API (bills you)</td><td>haiku + 500 max tokens keeps each message cheap; the caps (100/guest/day, 400 global, 3s cooldown) bound the total. Searched turns count double.</td></tr>
+      <tr><td>guest agent</td><td>API (bills you)</td><td>guest.model (default Opus, Caz's call 2026-11-03) at guest.max_tokens, one retry at guest.max_tokens_retry when a reply is cut; the caps (100/guest/day, 400 global, 3s cooldown) bound the total. Searched turns count double.</td></tr>
       <tr><td>PC session</td><td><code>pc.use_api_key</code>: currently <code>false</code> = bills the Claude subscription</td><td>a trivial task runs a few cents on API; not free</td></tr>
     </table>
     <p>Check actual spend: <code>python benham.py usage --today</code> — see

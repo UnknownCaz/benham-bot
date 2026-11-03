@@ -73,9 +73,9 @@ Every capability declares one, and `capabilities.run()` enforces it.
 <!-- GENERATED:tier-table -->
 | tier | examples | gate |
 |---|---|---|
-| **read** (27) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
+| **read** (28) | `read_channel`, `search_messages`, `find_user`, `read_attachments`, `guild_info` | none |
 | **speak** (11) | `send_message`, `send_embed`, `send_file`, `dm_user`, `react` | owner only |
-| **manage** (45) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
+| **manage** (47) | `pin_message`, `add_role`, `create_channel`, `set_channel_permissions`, `timeout_member` | owner only |
 | **destructive** (13) | `delete_message`, `purge_messages`, `delete_channel`, `kick_member`, `ban_member` | guild allowlist + dry-run + explicit confirm |
 <!-- /GENERATED:tier-table -->
 
@@ -161,7 +161,7 @@ the bot must be running; the invisible readers and `status.py` are standalone. G
 | `python benham.py do <action> key=value ...` | Run it. Values are parsed as JSON when they look like it, so `fields='[{...}]'` works. |
 
 <!-- GENERATED:count -->
-`do` covers all 96 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
+`do` covers all 99 registered capabilities and replaces the need for a script per action. The older single-purpose CLIs below still work and route through their original code paths.
 <!-- /GENERATED:count -->
 
 ### CLI - write to Discord (via the outbox; bot must be running)
@@ -471,6 +471,23 @@ a copy in `state/look_backups/`); `list_people` shows both sources. From the she
 `python benham.py person list | add <name> [--note "why"] | remove <name>`, two-step like
 `guest off`. The same people are in `outreach`'s reachable set. The `enabled` switch itself is
 still a boot-time setting, as above.
+
+**Jobs (INTENT decisions 61 and 62, 2026-11-03).** A job is a goal in Caz's words, who it is
+with (a known person, or `caz`), the tools it may use (`web_search` only, for now) and a state,
+in `state/jobs.json`, read live like `people.json`. `open_job` is always confirmed; the card shows
+who, the goal, the tools and the exact opener. For a person the opener goes out as a plain DM -
+never through `outreach` or the conversations store - and while the job is open their messages
+reach the guest brain with the goal as its note (`bot.job_note`) instead of the outreach
+bound/waiting notes, so it keeps helping rather than recording an answer. For `caz` nothing is
+sent. `list_jobs` and `close_job` (outcome required, nothing sent) complete the set; from the
+shell, `python benham.py job list | open "<goal>" --with <who> | close <job_id> --outcome "..."`.
+
+**The guest model and its budget.** `guest.model` in `control.json` picks the model; with no
+line there it is `claude-opus-5-5` (Caz's call, 2026-11-03: Opus for every guest chat).
+`guest.max_tokens` (default 500) is one reply's budget, and a reply cut off at it is asked again
+once at `guest.max_tokens_retry` (default 8000) - the owner agent's rule since 2026-10-11 - and if
+it is still cut, the guest reads what was written plus a one-line notice. Both are read once at
+import, like the rest of the block.
 
 `test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
 codebase already had once was a gate that was written, tested and green while the live path went

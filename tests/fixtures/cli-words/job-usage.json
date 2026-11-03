@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "job"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py job list [open|closed|all]\n       python benham.py job open \"<goal>\" --with <name|@mention|id|caz> [--opener \"text\"] [--tools web_search] [--confirm-token TOK] [--no-wait]\n       python benham.py job close <job_id> --outcome \"how it ended\" [--confirm-token TOK] [--no-wait]\n"
+}
