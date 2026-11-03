@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "person",
+    "add"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "person add takes exactly one name, @mention or id (quote a name with spaces)\nUsage: python benham.py person list\n       python benham.py person add <name|@mention|id> [--note \"why\"] [--confirm-token TOK] [--no-wait]\n       python benham.py person remove <name|@mention|id> [--confirm-token TOK] [--no-wait]\n"
+}

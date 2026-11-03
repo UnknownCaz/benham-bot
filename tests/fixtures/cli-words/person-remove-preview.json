@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "person",
+    "remove",
+    "doom"
+  ],
+  "face": true,
+  "exit": 1,
+  "stdout": "Queued remove_person -> <ROOT>/state/outbox/<REQ>.json\n  stop knowing 'doom'\ndone: status=confirmation_required\n\nremove_person: 1 message in #asd would go\nby doom, <DATE>\n\nNOBODY WAS REMOVED YET. To confirm, re-run with the token:\n  python benham.py --face benham person remove \"doom\" --confirm-token abc123\n  (expires in <N>s; expired means cancelled, never assumed yes)\n",
+  "stderr": ""
+}

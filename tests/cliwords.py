@@ -180,7 +180,8 @@ def seed(clone):
 
 _NEEDS_TOKEN = {"delete_message", "purge_messages", "purge_guild", "delete_channel",
                 "delete_role", "kick_member", "ban_member", "delete_emoji",
-                "guest_off"}   # always_confirm, tier 2 - same two-step shape
+                "guest_off",   # always_confirm, tier 2 - same two-step shape
+                "add_person", "remove_person"}
 FAKE_TOKEN = "abc123"
 REFUSED_CHANNEL = 404  # a channel id that "Discord refuses", for the failed/ path
 
@@ -225,6 +226,14 @@ def _answer(req):
     if action == "restart":
         return "sent", {**base, "status": "ok", "action": action,
                         "result": {"status": "restarting", "pid": 4242, "in_seconds": 2}}
+    if action == "list_people":
+        return "sent", {**base, "status": "ok", "action": action, "result": {
+            "count": 2, "guest_chat": "on", "people": [
+                {"user_id": GUEST_ID, "name": "doom", "display_name": None,
+                 "source": "config", "lists": ["guest.ids"]},
+                {"user_id": GUEST_ID_2 + 100, "name": "newbie", "display_name": "New Bie",
+                 "source": "state", "lists": ["people.json"],
+                 "since": "2026-11-03T16:30:00-05:00", "by": "caz", "note": "game hunt"}]}}
     # every other registry capability
     return "sent", {**base, "status": "ok", "action": action,
                     "result": {"status": "sent", "message_id": 123456789}}
@@ -557,6 +566,16 @@ CASES = {
     # rather than captured against a pre-Phase-B tree it never existed in.
     "rehearse-usage": ["rehearse"],
     "rehearse-bad-id": ["rehearse", "x", "--look"],
+    # --- person (2026-11-03, INTENT 61 Stage 9 A): a new verb, pinned from birth.
+    "person-usage": ["person"],
+    "person-unknown": ["person", "befriend", "doom"],
+    "person-list": ["person", "list"],
+    "person-add-noarg": ["person", "add"],
+    "person-add-preview": ["person", "add", "doom", "--note", "game hunt"],
+    "person-add-fire": ["person", "add", "doom", "--note", "game hunt",
+                        "--confirm-token", FAKE_TOKEN],
+    "person-remove-preview": ["person", "remove", "doom"],
+    "person-remove-note": ["person", "remove", "doom", "--note", "x"],
 }
 
 

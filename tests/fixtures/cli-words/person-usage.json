@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "person"
+  ],
+  "face": true,
+  "exit": 2,
+  "stdout": "",
+  "stderr": "Usage: python benham.py person list\n       python benham.py person add <name|@mention|id> [--note \"why\"] [--confirm-token TOK] [--no-wait]\n       python benham.py person remove <name|@mention|id> [--confirm-token TOK] [--no-wait]\n"
+}

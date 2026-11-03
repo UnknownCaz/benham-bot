@@ -51,6 +51,7 @@ COMMANDS = {
     "restart":      ("benham.cli.restart",      "ask the running bot to exit; its supervisor brings it back"),
     "webhook":      ("benham.cli.webhook",      "post via a saved webhook / manage webhooks"),
     "guest":        ("benham.guest.guest",      "guest chat admin: status | forget <user_id> | forget-all | off"),
+    "person":       ("benham.cli.person",       "who Benham knows: list | add <name> | remove <name> (live, carded)"),
     "ideas":        ("benham.cli.ideas",        "guest ideas inbox: new since sweep | --all | --sweep"),
     "issues":       ("benham.cli.issues",       "intake tracker: list | loop (close the loop) | retry"),
 }

@@ -462,6 +462,16 @@ bounce the process. Every other control-plane setting behaves this way (`owner_i
 `destructive_guilds`); giving this one live reload would mean two different answers in the
 codebase to "who may talk to Benham", which is a worse problem than the delay.
 
+**Known people are the live half (INTENT decision 61, 2026-11-03).** `state/people.json` is a
+second source of guests, unioned with `guest.ids` and read on EVERY check - so a person made
+known takes effect on their next message, and so does a removal, with no restart and no config
+edit. It is written only by two always-confirmed verbs, `add_person` (finds them by name or id;
+the card names them, their id and the servers they share with Benham) and `remove_person` (keeps
+a copy in `state/look_backups/`); `list_people` shows both sources. From the shell:
+`python benham.py person list | add <name> [--note "why"] | remove <name>`, two-step like
+`guest off`. The same people are in `outreach`'s reachable set. The `enabled` switch itself is
+still a boot-time setting, as above.
+
 `test_guest.py` drives the real `bot.on_message` rather than a helper, because the failure this
 codebase already had once was a gate that was written, tested and green while the live path went
 somewhere else. It asserts that a guest saying "yes" cannot fire a pending tier-3 confirmation or
