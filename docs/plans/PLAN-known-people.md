@@ -110,3 +110,7 @@ since 10-05, his call); any tool a guest can run on the PC (Phase B removed PC a
   2026-11-03 (the verb caps at 240 min); if HE writes to Benham after that, the brain answers with the fixed cap.
 
 All four calls are decided. What is left is Caz reading the whole page and saying "set in stone", or sending it back.
+
+## Refinement after Stage A (2026-11-03 17:17 local, decision 62)
+
+Caz: *"I want Benham to exist more as something like that ask, 'Talk to Biggie about X', or 'Create Role for XYZ, in Server F, and interview me about its permissions after it's made.'"* His pick: *"Job it, reach me in DM."* Stage B's object is a **job** (`state/jobs.json`): goal, `with` (a known person's id or `caz`), tools, state. The guest-with-a-purpose is one kind of job; the role-then-interview example is Stage 10 on the same object. A job that needs Caz midway reaches him in his DM, always. Stage A landed 2026-11-03 17:17: merge `1eec592`, 96 verbs, Mac pid 13553.
