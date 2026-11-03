@@ -40,6 +40,7 @@ from benham.core import identity
 from benham.core import lookimage
 from benham.core import looksound
 from benham.core import pathsafe
+from benham.core import people
 from benham.core import policy
 from benham.core import rooms
 from benham.core import wire
@@ -3322,6 +3323,71 @@ async def _guest_wake(ctx, p):
     uid = int(p["user_id"])
     was_quiet = guest_mod.wake(uid)
     return {"status": "woken" if was_quiet else "was_not_quiet", "user_id": uid}
+
+
+# --- Known people (INTENT decision 61, Stage 9 A) -----------------------------
+#
+# Who Benham knows - can DM him (a guest chat: chat + web search, no client
+# tools) and be reached by `outreach` - lives in TWO places, unioned everywhere
+# it is asked: control.json's guest.ids / outreach.people (read once at boot,
+# edited by hand) and state/people.json (people.py, read on every check,
+# written by add_person / remove_person). The second is the live one: goal 9 of
+# docs/plans/PLAN-known-people.md, "no ssh, no restart, one list". These verbs
+# never read or write control.json's lists beyond reporting them - a config
+# person is changed at the keyboard, as ever.
+#
+# taints on all three: names and display names are attacker-writable Discord
+# strings, and a note is whatever someone typed.
+
+def _config_people():
+    """{user_id: [list names]} for the config half, owners left out (is_guest
+    never counts an owner as a guest, and resolve_target refuses one)."""
+    out = {}
+    lists = (("guest.ids", identity.people_map(identity.guest_config().get("ids"))),
+             ("outreach.people",
+              identity.people_map((identity.CONTROL.get("outreach") or {}).get("people"))))
+    for label, pm in lists:
+        for name, uid in pm.items():
+            if identity.is_owner(uid):
+                continue
+            row = out.setdefault(int(uid), {"names": [], "lists": []})
+            if name != str(uid) and name not in row["names"]:
+                row["names"].append(name)
+            if label not in row["lists"]:
+                row["lists"].append(label)
+    return out
+
+
+@action("list_people", identity.READ,
+        "Who Benham knows: everyone who can DM him and be reached by outreach, each "
+        "with where they come from - 'state' (added with add_person; live, no restart "
+        "needed) or 'config' (control.json's guest.ids or outreach.people, edited by "
+        "hand), or both.",
+        {}, taints=True)
+async def _list_people(ctx, p):
+    state = people.load()
+    config = _config_people()
+    rows = []
+    for uid in set(state) | set(config):
+        s, c = state.get(uid), config.get(uid)
+        if s is not None and identity.is_owner(uid):
+            continue                     # never a guest, whatever the file says
+        names = (c or {}).get("names") or []
+        row = {"user_id": uid,
+               "name": (s or {}).get("name") or (names[0] if names else str(uid)),
+               "display_name": (s or {}).get("display_name"),
+               "source": "config+state" if (s and c) else ("state" if s else "config"),
+               "lists": ((c or {}).get("lists") or []) + (["people.json"] if s else [])}
+        if s:
+            row.update({"since": s.get("since"), "by": s.get("by"), "note": s.get("note")})
+        rows.append(row)
+    rows.sort(key=lambda r: (str(r["name"]).lower(), r["user_id"]))
+    out = {"count": len(rows),
+           "guest_chat": "on" if identity.guest_enabled() else "off",
+           "people": rows}
+    if not rows:
+        out["message"] = "Nobody is known yet - add_person makes someone known."
+    return out
 
 
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",

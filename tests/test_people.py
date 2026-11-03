@@ -17,11 +17,13 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import _testconfig  # noqa: F401,E402 - must precede every benham import
 
+import asyncio
 import json
 import os
 import sys
 
 from benham import paths
+from benham.core import capabilities
 from benham.core import identity
 from benham.core import people
 from benham.core import policy
@@ -149,6 +151,74 @@ write_raw({str(NEWBIE): {"name": "newbie"}}, face="codex")
 check("a codex row does not make a benham guest", identity.is_guest(NEWBIE), False)
 check("people.ids('codex') sees it", people.ids("codex"), frozenset({NEWBIE}))
 wipe("codex")
+
+
+# --------------------------------------------------------------------------
+# The verbs, through the one chokepoint (capabilities.run) as the CLI reaches
+# them - LOCAL_CLI - and as Caz does, in a DM.
+
+def go(name, params=None, client=None, force=False, owner_dm=False):
+    """capabilities.run -> (result, preview). Raises ActionError."""
+    cctx = (CallContext.owner_dm(OWNER, channel_id=1) if owner_dm
+            else CallContext.local())
+    return asyncio.run(capabilities.run(
+        client, lambda *_: None, name, params or {},
+        actor_id=OWNER if owner_dm else None, force=force, call_ctx=cctx))
+
+
+def refusal(name, params=None, client=None, force=False, owner_dm=False):
+    try:
+        go(name, params, client=client, force=force, owner_dm=owner_dm)
+        return None
+    except capabilities.ActionError as e:
+        return str(e)
+
+
+section("list_people - config people, state people, and where each comes from")
+wipe()
+r, pending = go("list_people")
+check("a read: no preview, no confirm", pending, None)
+config_ids = sorted(identity.people_map(identity.guest_config().get("ids")).values())
+check("with no state: exactly the config guests", [x["user_id"] for x in r["people"]], config_ids)
+check("...each sourced 'config' from guest.ids",
+      {(x["source"], tuple(x["lists"])) for x in r["people"]}, {("config", ("guest.ids",))})
+check("guest chat reported on/off", r["guest_chat"], "on")
+check("count matches", r["count"], len(config_ids))
+
+people.add(NEWBIE, {"name": "newbie", "display_name": "New Bie", "since": "2026-11-03T16:30:00-05:00",
+                    "by": "caz", "note": "game hunt"})
+people.add(_testconfig.GUEST_ID, {"name": "doom", "by": "cli"})
+people.add(OWNER, {"name": "owner-by-mistake", "by": "cli"})
+r, _ = go("list_people")
+rows = {x["user_id"]: x for x in r["people"]}
+check("a state person shows with source 'state' - written mid-process, seen now",
+      rows.get(NEWBIE, {}).get("source"), "state")
+check("...with since, by, note and display name",
+      {k: rows.get(NEWBIE, {}).get(k) for k in ("since", "by", "note", "display_name")},
+      {"since": "2026-11-03T16:30:00-05:00", "by": "caz", "note": "game hunt",
+       "display_name": "New Bie"})
+check("...and lists ['people.json']", rows.get(NEWBIE, {}).get("lists"), ["people.json"])
+check("someone in both is 'config+state'",
+      rows.get(_testconfig.GUEST_ID, {}).get("source"), "config+state")
+check("an owner row in the store is never listed", OWNER in rows, False)
+check("sorted by name", [x["name"].lower() for x in r["people"]],
+      sorted(x["name"].lower() for x in r["people"]))
+wipe()
+
+saved = dict(identity.CONTROL)
+identity.CONTROL["outreach"] = {"people": {"draco": _testconfig.GUEST_ID_2, "caz": OWNER}}
+r, _ = go("list_people")
+rows = {x["user_id"]: x for x in r["people"]}
+check("outreach.people is a config source too, named",
+      (rows.get(_testconfig.GUEST_ID_2, {}).get("lists"), rows.get(_testconfig.GUEST_ID_2, {}).get("name")),
+      (["guest.ids", "outreach.people"], "draco"))
+check("an owner on outreach.people is left out", OWNER in rows, False)
+identity.CONTROL.clear()
+identity.CONTROL.update(saved)
+
+check("list_people is owner-only - a guest cannot reach it",
+      policy.authorize(capabilities.REGISTRY["list_people"],
+                       CallContext.guest_dm(_testconfig.GUEST_ID)).allowed, False)
 
 
 # --------------------------------------------------------------------------
