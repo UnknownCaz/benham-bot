@@ -3381,6 +3381,7 @@ async def _list_people(ctx, p):
                "lists": ((c or {}).get("lists") or []) + (["people.json"] if s else [])}
         if s:
             row.update({"since": s.get("since"), "by": s.get("by"), "note": s.get("note")})
+        row["tools"] = people.tools_for(uid)       # Stage 9 C: what they hold now
         rows.append(row)
     rows.sort(key=lambda r: (str(r["name"]).lower(), r["user_id"]))
     out = {"count": len(rows),
@@ -3630,7 +3631,7 @@ async def _remove_person(ctx, p):
 # taints on all three: the goal and outcome are typed text, the opener goes to a
 # person, and a job's names are Discord strings.
 
-def _job_who(query):
+def _job_who(query, need_chat_on=True):
     """`with` -> (jobs.CAZ, "Caz") or (user_id, label). Known people only.
 
     Resolved against what list_people shows - people.json first, then
@@ -3677,7 +3678,7 @@ def _job_who(query):
         raise ActionError(f"{label} is only on outreach.people, so they can't DM this "
                           "bot back and a job's replies would land nowhere. add_person "
                           "makes them a guest.")
-    if not identity.guest_enabled():
+    if need_chat_on and not identity.guest_enabled():
         raise ActionError("Guest chat is OFF on this face, so nobody could answer a "
                           "job's opener. Turn guest chat on first.")
     return uid, label
@@ -3882,6 +3883,123 @@ async def _close_job(ctx, p):
     return {"status": "job_closed", "job_id": job["id"], "with": job["with"],
             "with_label": label, "goal": job["goal"], "outcome": outcome,
             "closed": done.get("closed") if done else now, "closed_by": by}
+
+
+# --- Borrowed tools (INTENT decision 61, Stage 9 C; goal 4 of the plan) ----------
+#
+# A person holds a tool set in people.json (people.tools_for). The default, with no
+# grant ever made, is chat + web search - what every guest has always had. Each
+# change is its own card, per person, per tool: Caz's "same for the tooling for that
+# person". In this stage the only grantable tool is web_search, because it is the
+# only one the guest brain can honor: the lane passes NO client tools (guest.py's
+# docstring), and web search is server-side. Granting a guest any further tool -
+# a client tool run through capabilities.run with the guest origin, the shape the
+# archived archive/guest-tools/guest_agent.py had - is a separate later stage, not
+# built here, because it would break that floor.
+
+def _tool_name(raw):
+    name = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if name not in people.GRANTABLE:
+        shown = str(raw or "").strip() or "that"
+        raise ActionError(f"The guest brain can't run {shown}; web_search is the only "
+                          "tool it has.")
+    return name
+
+
+def _tool_holder(query):
+    """(user_id, label, new_row) for grant/revoke. A known person who can DM
+    this bot; `new_row` is the people.json row to write for a config-only guest
+    (None when they already have a row)."""
+    who, label = _job_who(query, need_chat_on=False)
+    if who == jobs.CAZ:
+        raise ActionError("Caz doesn't borrow tools - grant_tool is for the people "
+                          f"{_ME} talks to.")
+    if people.get(who) is not None:
+        return who, label, None
+    names = (_config_people().get(who) or {}).get("names") or []
+    return who, label, {"name": names[0] if names else str(who), "since": jobs.stamp(),
+                        "by": "caz", "note": "row written by a tool card"}
+
+
+def _tool_words(tool):
+    return "web search" if tool == "web_search" else tool
+
+
+def _jobs_holding(uid, tool):
+    return [j["id"] for j in jobs.load().values()
+            if j["with"] == str(uid) and jobs.is_open(j) and tool in j["tools"]]
+
+
+@action("grant_tool", identity.MANAGE,
+        "Give one known person one tool for their chats with this bot. Today the "
+        "only tool is web_search - every known person holds it unless it was taken "
+        "away with revoke_tool; anything else is refused by name, because the guest "
+        "chat runs no client tools. Takes effect from their next message, no "
+        "restart. Always previewed and confirmed.",
+        {"who": {"type": "str", "required": True,
+                 "desc": "A known person's name, @mention or id (list_people)"},
+         "tool": {"type": "str", "required": True, "desc": "web_search"}},
+        always_confirm=True, taints=True)
+async def _grant_tool(ctx, p):
+    tool = _tool_name(p["tool"])
+    uid, label, new_row = _tool_holder(p["who"])
+    held = people.tools_for(uid)
+    if tool in held:
+        raise ActionError(f"{label} already holds {_tool_words(tool)}.")
+    if ctx.dry_run:
+        lines = [f"They'd hold: {_tool_words(tool)} (chat is always on).",
+                 f"From their next message the guest chat can search the web for them. "
+                 "Every query is logged; a searched message counts double against "
+                 "their daily cap.",
+                 "No restart. revoke_tool takes it back."]
+        if new_row is not None:
+            lines.append("They have no people.json row yet (control.json lists them), "
+                         "so this writes one holding their tools.")
+        if not identity.guest_config().get("web_search", True):
+            lines.append("Note: guest.web_search is off in control.json, so no guest "
+                         "searches until that is on.")
+        return {"summary": f"Give **{label}** {_tool_words(tool)}",
+                "detail": "\n".join(lines)}
+    rec = people.set_tools(uid, held + [tool], new_record=new_row)
+    ctx.log(f"grant_tool: {uid} now holds {rec['tools']}")
+    return {"status": "tool_granted", "user_id": uid, "label": label, "tool": tool,
+            "tools": rec["tools"], "row_written": new_row is not None}
+
+
+@action("revoke_tool", identity.MANAGE,
+        "Take one tool away from one known person. Today the only tool is web_search; "
+        "without it their chats with this bot are talk only. Their open jobs lose it "
+        "too. Takes effect from their next message, no restart; grant_tool gives it "
+        "back. Always previewed and confirmed.",
+        {"who": {"type": "str", "required": True,
+                 "desc": "A known person's name, @mention or id (list_people)"},
+         "tool": {"type": "str", "required": True, "desc": "web_search"}},
+        always_confirm=True, taints=True)
+async def _revoke_tool(ctx, p):
+    tool = _tool_name(p["tool"])
+    uid, label, new_row = _tool_holder(p["who"])
+    held = people.tools_for(uid)
+    if tool not in held:
+        raise ActionError(f"{label} doesn't hold {_tool_words(tool)}.")
+    holding = _jobs_holding(uid, tool)
+    if ctx.dry_run:
+        left = [t for t in held if t != tool]
+        lines = [f"They'd hold: {', '.join(_tool_words(t) for t in left) or 'chat only'}.",
+                 f"From their next message the guest chat answers them without "
+                 f"{_tool_words(tool)}.",
+                 "No restart. grant_tool gives it back."]
+        if holding:
+            lines.append(f"Their open job(s) {', '.join(holding)} lose it too.")
+        if new_row is not None:
+            lines.append("They have no people.json row yet (control.json lists them), "
+                         "so this writes one holding their tools.")
+        return {"summary": f"Take {_tool_words(tool)} away from **{label}**",
+                "detail": "\n".join(lines)}
+    rec = people.set_tools(uid, [t for t in held if t != tool], new_record=new_row)
+    ctx.log(f"revoke_tool: {uid} now holds {rec['tools'] or 'chat only'}")
+    return {"status": "tool_revoked", "user_id": uid, "label": label, "tool": tool,
+            "tools": rec["tools"], "row_written": new_row is not None,
+            "open_jobs_affected": holding}
 
 
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",
