@@ -298,7 +298,7 @@ r, preview = go("add_person", {"query": str(BIGGIE_LIKE), "note": "needs a game 
                 client=CLIENT)
 check("unconfirmed: no result, a preview", (r, preview is not None), (None, True))
 check("the card names display name, @username and id",
-      preview["summary"], f"Add **Big Like (@biglike, id {BIGGIE_LIKE})** to the people Benham knows")
+      preview["summary"], f"Add **Big Like (@biglike, id {BIGGIE_LIKE})** to the known people")
 check("...and the servers they share with Benham",
       "Shares with Benham: Chillbar, Testing Server" in preview["detail"], True)
 check("...and what being known means, in the plan's words",
@@ -340,7 +340,7 @@ check("by display name, confirmed, by = caz", (r["user_id"], people.get(BIGGIE_L
 wipe()
 r, preview = go("add_person", {"query": "alex"}, client=CLIENT)
 check("several matches, one of them exact: the exact one",
-      preview["summary"], f"Add **Alex A (@alex, id {ALEX_A})** to the people Benham knows")
+      preview["summary"], f"Add **Alex A (@alex, id {ALEX_A})** to the known people")
 err = refusal("add_person", {"query": "ale"}, client=CLIENT) or ""
 check("several matches, none exact: refused, with both ids to pick from",
       (str(ALEX_A) in err, str(ALEX_B) in err, "Say which with their id" in err),
@@ -364,7 +364,7 @@ r, preview = go("add_person", {"query": str(FAKE)}, client=CLIENT)
 check("the card says so plainly",
       "Discord has no user with this id - check it." in preview["detail"], True)
 check("...and names it by id", preview["summary"],
-      f"Add **{FAKE} (id {FAKE})** to the people Benham knows")
+      f"Add **{FAKE} (id {FAKE})** to the known people")
 r, _ = go("add_person", {"query": str(FAKE)}, client=CLIENT, force=True)
 check("confirmed anyway: stored, named by its id",
       (people.get(FAKE) or {}).get("name"), str(FAKE))
@@ -406,7 +406,7 @@ check("set up: known", identity.is_guest(BIGGIE_LIKE), True)
 r, preview = go("remove_person", {"query": "biglike"}, client=CLIENT)
 check("unconfirmed: a card, nothing removed", (r, identity.is_guest(BIGGIE_LIKE)), (None, True))
 check("the card names them", preview["summary"],
-      f"Remove **Big Like (@biglike, id {BIGGIE_LIKE})** from the people Benham knows")
+      f"Remove **Big Like (@biglike, id {BIGGIE_LIKE})** from the known people")
 check("...says since / by / note",
       preview["detail"].splitlines()[0].startswith("Known since 20")
       and "by cli - note: game hunt." in preview["detail"], True)
