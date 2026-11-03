@@ -389,6 +389,96 @@ check("add_person is owner-only - a guest cannot reach it",
                        CallContext.guest_dm(_testconfig.GUEST_ID)).allowed, False)
 
 
+section("remove_person - the round trip: add, card, remove, copy kept")
+import tempfile  # noqa: E402
+_bk = tempfile.mkdtemp(prefix="benham-people-backups-")
+capabilities.LOOK_BACKUP_DIR = os.path.join(_bk, "look_backups")
+
+
+def backups():
+    d = capabilities.LOOK_BACKUP_DIR
+    return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+
+wipe()
+go("add_person", {"query": str(BIGGIE_LIKE), "note": "game hunt"}, client=CLIENT, force=True)
+check("set up: known", identity.is_guest(BIGGIE_LIKE), True)
+r, preview = go("remove_person", {"query": "biglike"}, client=CLIENT)
+check("unconfirmed: a card, nothing removed", (r, identity.is_guest(BIGGIE_LIKE)), (None, True))
+check("the card names them", preview["summary"],
+      f"Remove **Big Like (@biglike, id {BIGGIE_LIKE})** from the people Benham knows")
+check("...says since / by / note",
+      preview["detail"].splitlines()[0].startswith("Known since 20")
+      and "by cli - note: game hunt." in preview["detail"], True)
+check("...and that a copy is kept",
+      "Their record is saved first; add_person brings them back." in preview["detail"], True)
+check("no backup from a preview", backups(), [])
+
+r, pending = go("remove_person", {"query": "Big Like"}, client=CLIENT, force=True)
+check("confirmed (by display name): removed", (r["status"], pending), ("person_removed", None))
+check("gone from the very next check - no restart", identity.is_guest(BIGGIE_LIKE), False)
+check("gone from people.json", people.get(BIGGIE_LIKE), None)
+check("and not still known from config", (r["still_known"], r["still_known_from"]), (False, []))
+files = backups()
+check("one copy in look_backups, named people-<id>-<stamp>",
+      len(files) == 1 and files[0].startswith(f"people-{BIGGIE_LIKE}-"), True)
+with open(os.path.join(capabilities.LOOK_BACKUP_DIR, files[0]), encoding="utf-8") as f:
+    kept = json.load(f)
+check("the copy holds the record and how to bring them back",
+      (kept["record"]["note"], kept["restore"]), ("game hunt", {"query": str(BIGGIE_LIKE),
+                                                                "note": "game hunt"}))
+check("r['backup'] is that file", os.path.basename(r["backup"]), files[0])
+r, _ = go("list_people")
+check("list_people no longer shows them", BIGGIE_LIKE in [x["user_id"] for x in r["people"]], False)
+
+section("remove_person - refusals and the config half")
+check("someone never added: refused, pointing at list_people",
+      "list_people shows who is known" in (refusal("remove_person", {"query": str(BIGGIE_LIKE)},
+                                                    client=CLIENT) or ""), True)
+check("an unknown name: refused the same way",
+      "Nobody called 'nobody' was added" in (refusal("remove_person", {"query": "nobody"},
+                                                      client=CLIENT) or ""), True)
+check("a config-only person can't be removed here (that is a control.json edit)",
+      "was added with add_person" in (refusal("remove_person",
+                                               {"query": str(_testconfig.GUEST_ID)},
+                                               client=CLIENT) or ""), True)
+go("add_person", {"query": str(_testconfig.GUEST_ID)}, client=CLIENT, force=True)
+r, preview = go("remove_person", {"query": str(_testconfig.GUEST_ID)}, client=CLIENT)
+check("in both: the card says they stay known through control.json",
+      "They stay known anyway: control.json lists them (guest.ids)." in preview["detail"], True)
+r, _ = go("remove_person", {"query": str(_testconfig.GUEST_ID)}, client=CLIENT, force=True)
+check("...and after: still a guest, from guest.ids",
+      (r["still_known"], r["still_known_from"], identity.is_guest(_testconfig.GUEST_ID)),
+      (True, ["guest.ids"], True))
+people.add(ALEX_A, {"name": "alex", "display_name": "Alex"})
+people.add(ALEX_B, {"name": "alexb", "display_name": "Alex"})
+err = refusal("remove_person", {"query": "alex"}, client=CLIENT) or ""
+check("a name two records answer to: refused with both ids",
+      (str(ALEX_A) in err, str(ALEX_B) in err), (True, True))
+check("an @mention works", go("remove_person", {"query": f"<@{ALEX_B}>"}, client=CLIENT,
+                               force=True)[0]["user_id"], ALEX_B)
+wipe()
+
+section("remove_person - no copy, no removal")
+people.add(BIGGIE_LIKE, {"name": "biglike"})
+_real_dir = capabilities.LOOK_BACKUP_DIR
+_blocker = os.path.join(_bk, "a-file")
+with open(_blocker, "w") as f:
+    f.write("x")
+capabilities.LOOK_BACKUP_DIR = os.path.join(_blocker, "look_backups")   # can't be made
+err = refusal("remove_person", {"query": str(BIGGIE_LIKE)}, client=CLIENT, force=True) or ""
+check("the save fails: refused in words", "Nothing was changed." in err, True)
+check("...and they are still known", identity.is_guest(BIGGIE_LIKE), True)
+capabilities.LOOK_BACKUP_DIR = _real_dir
+wipe()
+
+check("remove_person is owner-only - a guest cannot reach it",
+      policy.authorize(capabilities.REGISTRY["remove_person"],
+                       CallContext.guest_dm(_testconfig.GUEST_ID)).allowed, False)
+import shutil  # noqa: E402
+shutil.rmtree(_bk, True)
+
+
 # --------------------------------------------------------------------------
 print()
 if _fails:

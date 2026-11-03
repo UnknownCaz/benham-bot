@@ -3524,6 +3524,91 @@ async def _add_person(ctx, p):
             "means": _known_means()}
 
 
+def _person_in_state(query):
+    """A name, @mention or id -> (user_id, record) from people.json, or a
+    one-sentence refusal. Matched against the STORE, never Discord: the person
+    may have left every server, and what is being removed is this record."""
+    needle = str(query).strip()
+    state = people.load()
+    uid = _as_user_id(needle)
+    if uid is None and needle.isdigit():
+        uid = int(needle)
+    if uid is not None:
+        if uid in state:
+            return uid, state[uid]
+        raise ActionError(f"Nobody with id {uid} was added with add_person - "
+                          "list_people shows who is known and from where.")
+    low = needle.lstrip("@").lower()
+    hits = [(u, r) for u, r in state.items()
+            if low in (str(r.get("name") or "").lower(), str(r.get("display_name") or "").lower())]
+    if not hits:
+        raise ActionError(f"Nobody called {needle!r} was added with add_person - "
+                          "list_people shows who is known and from where.")
+    if len(hits) > 1:
+        names = "; ".join(_person_label({"user_id": u, **r}) for u, r in hits)
+        raise ActionError(f"{needle!r} fits {len(hits)} known people: {names}. Say which "
+                          "with their id.")
+    return hits[0]
+
+
+def _people_keep(ctx, uid, rec):
+    """Save the record to look_backups/people-<id>-<Detroit stamp>.json before it
+    goes, and return the path. NOT best effort, like _settings_keep: the card
+    promised the copy, so a copy that can't be made stops the removal."""
+    try:
+        now = eventtime.now().astimezone(eventtime.DETROIT)
+        os.makedirs(LOOK_BACKUP_DIR, exist_ok=True)
+        base = os.path.join(LOOK_BACKUP_DIR, f"people-{uid}-{now.strftime('%Y%m%d-%H%M%S')}")
+        path, n = base + ".json", 1
+        while os.path.exists(path):
+            n += 1
+            path = f"{base}-{n}.json"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"saved_at": now.isoformat(timespec="seconds"), "user_id": uid,
+                       "record": rec,
+                       # add_person with these makes them known again.
+                       "restore": {"query": str(uid), "note": rec.get("note")}},
+                      fh, indent=2, ensure_ascii=False)
+        return path
+    except Exception as e:  # noqa: BLE001 - every failure is the same answer
+        ctx.log(f"remove_person: could not save {uid}'s record ({type(e).__name__}: {e})")
+        raise ActionError(f"I couldn't save their record first ({type(e).__name__}), so I "
+                          "didn't remove anyone. Nothing was changed.")
+
+
+@action("remove_person", identity.MANAGE,
+        "Stop knowing someone add_person made known: from their next message they "
+        "can't DM Benham, and outreach can't reach them. Takes their name, @mention or "
+        "id as list_people shows it. Their record is saved first (add_person brings "
+        "them back). Only undoes add_person - someone listed in control.json stays "
+        "known until that file is edited. Always previewed and confirmed.",
+        {"query": {"type": "str", "required": True,
+                   "desc": "Their name, an @mention, or their user id (list_people)"}},
+        always_confirm=True, taints=True)
+async def _remove_person(ctx, p):
+    uid, rec = _person_in_state(p["query"])
+    label = _person_label({"user_id": uid, **rec})
+    config = _config_people().get(uid)
+    if ctx.dry_run:
+        lines = [f"Known since {rec.get('since') or '?'}, by {rec.get('by') or '?'}"
+                 + (f" - note: {rec['note']}" if rec.get("note") else "") + ".",
+                 "From their next message they can't DM Benham, and outreach can't "
+                 "reach them. No restart.",
+                 "Their record is saved first; add_person brings them back."]
+        if config:
+            lines.append(f"They stay known anyway: control.json lists them "
+                         f"({', '.join(config['lists'])}). This removes only the live entry.")
+        return {"summary": f"Remove **{label}** from the people Benham knows",
+                "detail": "\n".join(lines)}
+    saved = _people_keep(ctx, uid, rec)
+    gone = people.remove(uid)
+    ctx.log(f"remove_person: {uid} ({rec.get('name')}) removed, copy at {saved}")
+    return {"status": "person_removed" if gone is not None else "was_not_known",
+            "user_id": uid, "name": rec.get("name"), "display_name": rec.get("display_name"),
+            "backup": saved, "still_known": identity.is_guest(uid),
+            "still_known_from": (config or {}).get("lists") or []}
+
+
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",
         {"guild_id": {"type": "int", "required": True},
          "nickname": {"type": "str", "desc": "Blank resets to the bot's own username"}}, needs_guild=True, taints=True)
