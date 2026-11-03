@@ -411,6 +411,247 @@ except OSError:
 
 
 # --------------------------------------------------------------------------
+# The guest brain's note, through the REAL bot.on_message (test_guest_answers'
+# rig): a job's note replaces the outreach notes for that person, and a person
+# with no open job is handled exactly as before (decision 51). This is the
+# offline replay of the 14:23 break - the brain is a recorder, so what it was
+# TOLD is the thing under test.
+
+import tempfile  # noqa: E402
+
+from benham import bot  # noqa: E402
+from benham.core import agent  # noqa: E402
+from benham.core import confirm  # noqa: E402
+from benham.core import jsonio  # noqa: E402
+from benham.guest import guest  # noqa: E402
+
+GUEST = _testconfig.GUEST_ID
+BOT_ID = 752313060970201218
+
+
+class _GUser:
+    def __init__(self, uid, name):
+        self.id, self.name, self.display_name = uid, name, name
+
+    def __str__(self):
+        return self.name
+
+
+class _Typing:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _GChannel:
+    def __init__(self):
+        self.id, self.sent = 4242, []
+
+    def typing(self):
+        return _Typing()
+
+    async def send(self, content=None, **kw):
+        self.sent.append(content)
+
+
+class _GReplied:
+    def __init__(self, content):
+        self.author = _GUser(BOT_ID, "Benham")
+        self.content = content
+        self.attachments, self.embeds, self.stickers, self.message_snapshots = [], [], [], []
+
+
+class _GRef:
+    def __init__(self, message_id, content):
+        self.message_id, self.resolved = message_id, _GReplied(content)
+
+
+class _GMsg:
+    def __init__(self, uid, content, reference=None):
+        self.author = _GUser(uid, "friend")
+        self.content = content
+        self.guild = None
+        self.channel = _GChannel()
+        self.mentions = []
+        self.attachments, self.embeds, self.stickers, self.message_snapshots = [], [], [], []
+        self.reference = reference
+        self.id = 999000222
+        self.reactions_added = []
+
+    async def add_reaction(self, emoji):
+        self.reactions_added.append(emoji)
+
+
+class _Blk:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class _JudgeModel:
+    """The judge's Anthropic client, scripted to bind nothing unless told."""
+
+    def __init__(self, reply='{"answers": []}'):
+        self.reply, self.calls, self.messages = reply, [], self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        text = self.reply(kw) if callable(self.reply) else self.reply
+        return _Blk(content=[_Blk(type="text", text=text)],
+                    usage=_Blk(input_tokens=1, output_tokens=1))
+
+
+LOG, OWNER_DMS, BRAIN = [], [], []
+bot.record_message = lambda m: {"is_self": False, "channel": "dm",
+                                "author": str(m.author), "content": m.content}
+bot.log = LOG.append
+bot.strip_mention = lambda m: m.content
+
+
+async def _reply_in(channel, text, **kw):
+    channel.sent.append(text)
+bot.reply_in = _reply_in
+
+
+async def _owner(text, kind=None):
+    OWNER_DMS.append((text, kind))
+bot.ask_owner_dm = _owner
+
+
+def _respond(user_id, text, log=None, content=None, note=None):
+    BRAIN.append((user_id, text, note))
+    return "guest reply"
+guest.respond = _respond
+agent.ENABLED = True
+confirm.current = lambda: None
+confirm.live = lambda: []
+_tmp = tempfile.mkdtemp(prefix="benham-jobs-test-")
+guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
+guest.USAGE_FILE = os.path.join(_tmp, "guest_usage.json")
+guest.QUIET_FILE = os.path.join(_tmp, "guest_quiet.json")
+guest._quiet = None
+guest.COOLDOWN = 0
+jsonio.write_json(guest.USAGE_FILE, {})
+_next = [1552030327386543000]
+
+
+def greset():
+    wipe()
+    conversations.forget()
+    conversations.set_batch_message(GUEST, None)
+    guest.wake(GUEST)
+    guest._last_call.clear()
+    LOG.clear()
+    OWNER_DMS.clear()
+    BRAIN.clear()
+
+
+def ask(question):
+    """An outreach question delivered to GUEST, as advance_conversation does."""
+    c = conversations.open_conversation(GUEST, purpose=question, question=question,
+                                        direction=conversations.ASKING)
+    _next[0] += 1
+    conversations.set_batch_message(GUEST, _next[0], shown=[c["id"]])
+    conversations.record_ask_message(c["id"], _next[0])
+    conversations.mark_delivered(c["id"])
+    return _next[0], c
+
+
+def deliver(text, reference=None, model=None):
+    guest._client = model or _JudgeModel()
+    msg = _GMsg(GUEST, text, reference)
+    asyncio.run(bot.on_message(msg))
+    return msg
+
+
+GOAL = "help them find a half-remembered game"
+WANT_NOTE = ("From Benham's side, not from them: Caz asked you to help them with this: "
+             "help them find a half-remembered game. You opened this chat about it. "
+             "Tools you may use for it: web search. Keep helping until they say "
+             "they're sorted; don't pass anything to Caz, don't say you recorded "
+             "anything.")
+Q = "What was the game called, roughly?"
+
+section("No open job: the decision-51 path, exactly as before")
+greset()
+deliver("hey benham")
+check("nothing waiting, no job: no note at all", BRAIN[-1][2], None)
+greset()
+ask(Q)
+deliver("i dunno, it had a robot in it")
+check("a question waiting: the 'still waiting' note", "still waiting for the answer" in
+      (BRAIN[-1][2] or ""), True)
+greset()
+mid, c = ask(Q)
+msg = deliver("it was called Robo Something", reference=_GRef(mid, Q))
+check("a reply to the question binds (decision 51 untouched)",
+      conversations.get(c["id"])["state"], conversations.ANSWERED)
+check("...and the brain is told it was just recorded - the old note, for a real ask",
+      "just recorded" in (BRAIN[-1][2] or ""), True)
+check("...and Caz hears about it, as before", len(OWNER_DMS), 1)
+
+section("An open job: its note, word for word, and the outreach notes never fire")
+greset()
+job = jobs.create({"goal": GOAL, "with": str(GUEST), "tools": ["web_search"],
+                   "opened": jobs.stamp(), "opened_by": "caz",
+                   "last_activity": "2026-11-03T17:00:00-05:00"})
+deliver("ok so it was a 2d platformer, ps2 era maybe")
+check("the brain gets the job's note, word for word", BRAIN[-1][2], WANT_NOTE)
+check("...no 'recorded', no 'acknowledge'",
+      ("recorded as their answer" in BRAIN[-1][2], "Acknowledge" in BRAIN[-1][2]),
+      (False, False))
+check("nothing went to Caz", OWNER_DMS, [])
+j = jobs.get(job["id"])
+check("their message touched the job: one turn, last_activity moved",
+      (j["turns"], j["last_activity"] != "2026-11-03T17:00:00-05:00"), (1, True))
+check("the log names the job", any(f"is in job {job['id']}" in line for line in LOG), True)
+
+ask(Q)
+deliver("still thinking about it")
+check("a question ALSO waiting: still the job's note, not 'still waiting'",
+      BRAIN[-1][2], WANT_NOTE)
+check("second message: two turns", jobs.get(job["id"])["turns"], 2)
+
+section("The 14:23 shape: an outreach ask is bound - the note is still the job's")
+greset()
+job = jobs.create({"goal": GOAL, "with": str(GUEST), "tools": ["web_search"]})
+mid, c = ask(Q)
+deliver("Robo Something, i think", reference=_GRef(mid, Q))
+check("decision 51 still binds a reply to a real outreach ask",
+      conversations.get(c["id"])["state"], conversations.ANSWERED)
+check("...but the brain is NOT told to acknowledge and stop - it keeps helping",
+      BRAIN[-1][2], WANT_NOTE)
+
+section("A job with no tools says so; a quiet brain still counts the turn")
+greset()
+job = jobs.create({"goal": GOAL, "with": str(GUEST), "tools": []})
+deliver("hi")
+check("tools: none", "Tools you may use for it: none - just talk it through." in
+      (BRAIN[-1][2] or ""), True)
+guest.quiet(GUEST, 10)
+BRAIN.clear()
+deliver("hello?")
+check("quieted: the brain sits out", BRAIN, [])
+check("...but the job still saw them", jobs.get(job["id"])["turns"], 2)
+guest.wake(GUEST)
+
+section("Closed, or someone else's, or Caz's: no job note")
+greset()
+job = jobs.create({"goal": GOAL, "with": str(GUEST), "tools": ["web_search"]})
+jobs.update(job["id"], state="closed")
+deliver("thanks!")
+check("a closed job: back to the ordinary chat (no note)", BRAIN[-1][2], None)
+check("...and a closed job is not touched", jobs.get(job["id"])["turns"], 0)
+greset()
+jobs.create({"goal": GOAL, "with": str(_testconfig.GUEST_ID_2)})
+jobs.create({"goal": GOAL, "with": "caz"})
+deliver("hey")
+check("a job with someone else, or with Caz, is not this guest's", BRAIN[-1][2], None)
+greset()
+
+
+# --------------------------------------------------------------------------
 print()
 if _fails:
     print(f"{len(_fails)} FAILED")

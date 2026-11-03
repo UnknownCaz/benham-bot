@@ -57,6 +57,7 @@ from benham.core import initiative
 from benham.core import identity
 from benham.core import invites
 from benham.core import issues
+from benham.core import jobs
 from benham.core import jsonio
 from benham.core import loopclose
 from benham.core import msgparts
@@ -1647,6 +1648,27 @@ def guest_note(bound, waiting):
     return None
 
 
+def job_note(job):
+    """Benham's side of a JOB's chat, for the guest brain (INTENT 61/62, Stage 9 B).
+
+    THE BREAK THIS ENDS. 2026-11-03 14:23 local: the opener to a friend went
+    through outreach, so his answer was bound as an outreach answer and
+    guest_note told the brain "their message was just recorded as their
+    answer... Acknowledge it in a few words" - it relayed his description
+    instead of helping him. A job is not a question waiting for an answer; it is
+    a goal to keep working on with them. So while a job with this person is
+    open, THIS is the note, and guest_note's bound/waiting notes never fire for
+    their messages (handle_guest_dm). Text, like guest_note: a second system
+    block after the cached persona, never remembered, no tool.
+    """
+    tools = ("web search" if "web_search" in (job.get("tools") or [])
+             else "none - just talk it through")
+    return ("From Benham's side, not from them: Caz asked you to help them with "
+            f"this: {job['goal']}. You opened this chat about it. Tools you may use "
+            f"for it: {tools}. Keep helping until they say they're sorted; don't "
+            "pass anything to Caz, don't say you recorded anything.")
+
+
 async def handle_guest_dm(message):
     """One guest turn: text in, text out, and the reply target cannot vary.
 
@@ -1667,6 +1689,16 @@ async def handle_guest_dm(message):
     list is not: telling a stranger that an allowlist exists and they are not on it
     invites them to go find out who can add them.
     """
+    # An open JOB with this person (INTENT 61/62, Stage 9 B), read live: every
+    # message from them while it is open is activity (Stage C's quiet timer reads
+    # last_activity), and the job's note replaces the outreach notes below.
+    _job = jobs.open_for(message.author.id)
+    if _job is not None:
+        try:
+            jobs.touch(_job["id"])
+        except OSError as e:   # a stamp must never cost them their reply
+            log(f"job {_job['id']}: last_activity not written ({e})")
+
     # `idea..` filing - checked BEFORE the outreach quiet on purpose: an idea
     # filed mid-conversation should still bank (Claude sees it live through the
     # inbox watch; the DM ping reaches Tyler either way). Never routed through
@@ -1789,7 +1821,18 @@ async def handle_guest_dm(message):
         return
 
     log(f"guest chat from {message.author} ({message.author.id}): {text[:200]!r}")
-    note = guest_note(bound, questions_in_front_of(message.author.id))
+    # An open job's note takes precedence: the outreach bound/waiting notes are
+    # what turned the brain into a relay on 2026-11-03 (break 1), so they never
+    # fire for a message from someone with an open job. With no open job this is
+    # the decision-51 path, unchanged. Read again here, not reused from the top:
+    # a close_job between the two moments must win.
+    _job = jobs.open_for(message.author.id)
+    if _job is not None:
+        note = job_note(_job)
+        log(f"guest chat: {message.author.id} is in job {_job['id']} - its note, "
+            f"not the outreach note")
+    else:
+        note = guest_note(bound, questions_in_front_of(message.author.id))
     try:
         files = []
         async with message.channel.typing():
