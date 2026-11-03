@@ -12,6 +12,10 @@ So, in this file:
   * a person holds a tool set in people.json; grant_tool / revoke_tool change it
     one tool at a time, each on a card; web_search is the only grantable tool,
     anything else refused in words;
+  * the guest brain is handed exactly what the person holds, read live (a
+    revoke one second ago is honored), narrowed to an open job's tools, and the
+    job's note says what the turn really carries; open_job's tools are a subset
+    of what the person holds;
 
 Fully offline: no Discord, no API.
 
@@ -229,6 +233,213 @@ rows = {x["user_id"]: x for x in r["people"]}
 check("revoked: []", rows[KNOWN]["tools"], [])
 check("default: web_search", rows[FRIEND]["tools"], ["web_search"])
 wipe_all()
+
+section("open_job - a job's tools are a subset of what the person holds")
+setup_people()
+people.set_tools(KNOWN, [])
+check("asking for web search they don't hold: refused, naming the gap and the door",
+      refusal("open_job", {"goal": "x", "with": str(KNOWN), "tools": ["web_search"]}),
+      f"Big Like (@biglike, id {KNOWN}) doesn't hold web search - grant_tool gives it "
+      "first, or open the job without it (tools=[]).")
+r, preview = go("open_job", {"goal": "x", "with": str(KNOWN)})
+check("no tools given: the default is what they hold - chat only here",
+      "Tools: none beyond chat" in preview["detail"], True)
+r, preview = go("open_job", {"goal": "x", "with": str(FRIEND)})
+check("a default holder's default job gets web search", "Tools: web search" in
+      preview["detail"], True)
+r, preview = go("open_job", {"goal": "x", "with": "caz", "tools": ["web_search"]})
+check("a job with Caz may carry web search", "Tools: web search" in preview["detail"], True)
+wipe_all()
+
+
+# --------------------------------------------------------------------------
+# The guest brain, through the REAL bot.on_message (test_jobs' rig): what the
+# brain is handed - the tools and the note - is the thing under test.
+
+import tempfile  # noqa: E402
+
+from benham import bot  # noqa: E402
+from benham.core import agent  # noqa: E402
+from benham.core import confirm  # noqa: E402
+from benham.core import conversations  # noqa: E402
+from benham.core import jsonio  # noqa: E402
+from benham.guest import guest  # noqa: E402
+
+BOT_ID = 752313060970201218
+
+
+class _GUser:
+    def __init__(self, uid, name):
+        self.id, self.name, self.display_name = uid, name, name
+
+    def __str__(self):
+        return self.name
+
+
+class _Typing:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _GChannel:
+    def __init__(self):
+        self.id, self.sent = 4242, []
+
+    def typing(self):
+        return _Typing()
+
+    async def send(self, content=None, **kw):
+        self.sent.append(content)
+
+
+class _GMsg:
+    def __init__(self, uid, content):
+        self.author = _GUser(uid, "friend")
+        self.content = content
+        self.guild = None
+        self.channel = _GChannel()
+        self.mentions = []
+        self.attachments, self.embeds, self.stickers, self.message_snapshots = [], [], [], []
+        self.reference = None
+        self.id = 999000222
+        self.reactions_added = []
+
+    async def add_reaction(self, emoji):
+        self.reactions_added.append(emoji)
+
+
+class _Blk:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class _Model:
+    """The cheap-judge Anthropic client, scripted per call."""
+
+    def __init__(self, reply='{"answers": []}'):
+        self.reply, self.calls, self.messages = reply, [], self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        text = self.reply(kw) if callable(self.reply) else self.reply
+        return _Blk(content=[_Blk(type="text", text=text)],
+                    usage=_Blk(input_tokens=1, output_tokens=1))
+
+
+LOG, OWNER_DMS, BRAIN = [], [], []
+REPLY = ["guest reply"]
+bot.record_message = lambda m: {"is_self": False, "channel": "dm",
+                                "author": str(m.author), "content": m.content}
+bot.log = LOG.append
+bot.strip_mention = lambda m: m.content
+
+
+async def _reply_in(channel, text, **kw):
+    channel.sent.append(text)
+bot.reply_in = _reply_in
+
+
+async def _owner(text, kind=None):
+    OWNER_DMS.append((text, kind))
+bot.ask_owner_dm = _owner
+
+
+def _respond(user_id, text, log=None, content=None, note=None, tools=None, **kw):
+    BRAIN.append({"user": user_id, "text": text, "note": note, "tools": tools})
+    return REPLY[0]
+_REAL_RESPOND = guest.respond
+guest.respond = _respond
+agent.ENABLED = True
+confirm.current = lambda: None
+confirm.live = lambda: []
+_tmp = tempfile.mkdtemp(prefix="benham-jobs-close-test-")
+guest.MEMORY_FILE = os.path.join(_tmp, "guest_memory.json")
+guest.USAGE_FILE = os.path.join(_tmp, "guest_usage.json")
+guest.QUIET_FILE = os.path.join(_tmp, "guest_quiet.json")
+guest._quiet = None
+guest.COOLDOWN = 0
+jsonio.write_json(guest.USAGE_FILE, {})
+
+
+def greset():
+    wipe_all()
+    conversations.forget()
+    guest.wake(FRIEND)
+    guest._last_call.clear()
+    LOG.clear()
+    OWNER_DMS.clear()
+    BRAIN.clear()
+    REPLY[0] = "guest reply"
+
+
+def deliver(text, uid=FRIEND, model=None):
+    guest._client = model or _Model()
+    msg = _GMsg(uid, text)
+    asyncio.run(bot.on_message(msg))
+    return msg
+
+
+GOAL = "help them find a half-remembered game"
+
+section("The guest brain honors what the person holds")
+greset()
+deliver("hey")
+check("no row, no job: the default - web search", BRAIN[-1]["tools"], ["web_search"])
+people.set_tools(FRIEND, [], new_record={"name": "doom", "by": "caz"})
+deliver("hey again")
+check("revoked a second ago: the very next turn has no search", BRAIN[-1]["tools"], [])
+people.set_tools(FRIEND, ["web_search"])
+job = jobs.create({"goal": GOAL, "with": str(FRIEND), "tools": [], "opened": jobs.stamp()})
+deliver("so about that game")
+check("in a chat-only job, a holder still gets no search on the job's turns",
+      BRAIN[-1]["tools"], [])
+check("...and the note says so", "Tools you may use for it: none" in BRAIN[-1]["note"], True)
+jobs.update(job["id"], tools=["web_search"])
+people.set_tools(FRIEND, [])
+deliver("any luck?")
+check("a job with web search, after revoke_tool: no search, and the note says none",
+      (BRAIN[-1]["tools"], "Tools you may use for it: none" in BRAIN[-1]["note"]),
+      ([], True))
+people.set_tools(FRIEND, ["web_search"])
+deliver("ok")
+check("granted back: search again, and the note says web search",
+      (BRAIN[-1]["tools"], "Tools you may use for it: web search" in BRAIN[-1]["note"]),
+      (["web_search"], True))
+greset()
+
+section("guest.respond itself - the list can only take away")
+
+
+class _Brain:
+    def __init__(self):
+        self.calls, self.messages = [], self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return _Blk(content=[_Blk(type="text", text="sure")], stop_reason="end_turn",
+                    usage=_Blk(input_tokens=1, output_tokens=1))
+
+
+def real_turn(**kw):
+    brain = _Brain()
+    guest._client = brain
+    _REAL_RESPOND(FRIEND, "hi", None, **kw)
+    return [t.get("name") for t in brain.calls[-1].get("tools") or []]
+
+
+saved_ws = guest.WEB_SEARCH
+guest.WEB_SEARCH = True
+check("tools=None: the lane default, web search", real_turn(), ["web_search"])
+check("tools=['web_search']: web search", real_turn(tools=["web_search"]), ["web_search"])
+check("tools=[]: no tool at all", real_turn(tools=[]), [])
+check("tools=['pc_task']: an unknown name adds nothing", real_turn(tools=["pc_task"]), [])
+guest.WEB_SEARCH = False
+check("guest.web_search off in config wins over a holder", real_turn(tools=["web_search"]), [])
+guest.WEB_SEARCH = saved_ws
+greset()
 
 
 # --------------------------------------------------------------------------

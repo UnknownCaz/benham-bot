@@ -3684,19 +3684,28 @@ def _job_who(query, need_chat_on=True):
     return uid, label
 
 
-def _job_tools(raw):
-    """The tools list, checked. Default: web search. Only web_search exists in
-    Stage B; anything else is refused by name."""
+def _job_tools(raw, who=None, label=None):
+    """The tools list, checked. A job's tools are a SUBSET of what the person
+    holds (people.tools_for, Stage 9 C) - a job can't hand someone a tool Caz
+    took away with revoke_tool. Default: everything they hold. Only web_search
+    exists; anything else is refused by name. A job with Caz holds every
+    grantable tool."""
+    held = (list(jobs.TOOLS) if who is None or who == jobs.CAZ
+            else people.tools_for(who))
     if raw is None:
-        return list(jobs.TOOLS)
+        return [t for t in jobs.TOOLS if t in held]
     out = []
     for t in raw:
         name = str(t).strip().lower().replace("-", "_").replace(" ", "_")
         if not name:
             continue
         if name not in jobs.TOOLS:
-            raise ActionError(f"{str(t).strip()!r} can't be given to a job yet - only "
-                              "web_search. Stage C grants other tools.")
+            raise ActionError(f"The guest brain can't run {str(t).strip()}; web_search "
+                              "is the only tool it has.")
+        if name not in held:
+            raise ActionError(f"{label or who} doesn't hold {_tool_words(name)} - "
+                              f"grant_tool gives it first, or open the job without it "
+                              "(tools=[]).")
         if name not in out:
             out.append(name)
     return out
@@ -3738,7 +3747,8 @@ def _job_label(job):
         "chat with the goal in its note - it keeps helping them until they're sorted, "
         "and nothing they say is recorded as an answer or passed on. With 'caz', "
         "nothing is sent: the job is this bot's own to run and come back to him on. "
-        "One open job per person. Tools: web_search only (the default). The preview "
+        "One open job per person. Tools: only what the person holds (web_search "
+        "unless revoke_tool took it; the default is all they hold). The preview "
         "shows who, the goal, the tools and the exact opener. Always previewed and "
         "confirmed; close_job ends it.",
         {"goal": {"type": "str", "required": True,
@@ -3746,7 +3756,8 @@ def _job_label(job):
          "with": {"type": "str", "required": True,
                   "desc": "A known person's name, @mention or id - or 'caz'"},
          "tools": {"type": "list",
-                   "desc": "Tools the job may use; only 'web_search' (the default)"},
+                   "desc": "Tools the job may use - a subset of what the person "
+                           "holds; only 'web_search' exists"},
          "opener": {"type": "str",
                     "desc": "The first DM, in this bot's voice. Default: a short line "
                             "quoting the goal. Not for 'caz'."}},
@@ -3756,7 +3767,7 @@ async def _open_job(ctx, p):
     if not goal:
         raise ActionError("open_job needs a goal - what Caz asked for, in his words.")
     who, label = _job_who(p["with"])
-    tools = _job_tools(p.get("tools"))
+    tools = _job_tools(p.get("tools"), who, label)
     opener = str(p.get("opener") or "").strip() or None
     person = who != jobs.CAZ
     if not person and opener:

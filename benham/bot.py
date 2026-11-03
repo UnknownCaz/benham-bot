@@ -1648,7 +1648,7 @@ def guest_note(bound, waiting):
     return None
 
 
-def job_note(job):
+def job_note(job, tools=None):
     """Benham's side of a JOB's chat, for the guest brain (INTENT 61/62, Stage 9 B).
 
     THE BREAK THIS ENDS. 2026-11-03 14:23 local: the opener to a friend went
@@ -1660,8 +1660,13 @@ def job_note(job):
     open, THIS is the note, and guest_note's bound/waiting notes never fire for
     their messages (handle_guest_dm). Text, like guest_note: a second system
     block after the cached persona, never remembered, no tool.
+
+    `tools` (Stage 9 C) is what the turn will really carry - the job's tools
+    narrowed by what the person holds now (people.tools_for), so a revoke_tool
+    mid-job is told to the brain, not just enforced on it. None = the job's own.
     """
-    tools = ("web search" if "web_search" in (job.get("tools") or [])
+    held = (job.get("tools") or []) if tools is None else tools
+    tools = ("web search" if "web_search" in held
              else "none - just talk it through")
     return ("From Benham's side, not from them: Caz asked you to help them with "
             f"this: {job['goal']}. You opened this chat about it. Tools you may use "
@@ -1827,8 +1832,13 @@ async def handle_guest_dm(message):
     # the decision-51 path, unchanged. Read again here, not reused from the top:
     # a close_job between the two moments must win.
     _job = jobs.open_for(message.author.id)
+    # What this person may use on this turn (Stage 9 C): what they hold now in
+    # people.json, read live - a revoke_tool a second ago is honored - and, inside
+    # a job, only what the job was opened with as well.
+    _tools = people.tools_for(message.author.id)
     if _job is not None:
-        note = job_note(_job)
+        _tools = [t for t in _tools if t in (_job.get("tools") or [])]
+        note = job_note(_job, _tools)
         log(f"guest chat: {message.author.id} is in job {_job['id']} - its note, "
             f"not the outreach note")
     else:
@@ -1837,7 +1847,8 @@ async def handle_guest_dm(message):
         files = []
         async with message.channel.typing():
             reply = await asyncio.to_thread(
-                guest.respond, message.author.id, text, log, content, note=note)
+                guest.respond, message.author.id, text, log, content, note=note,
+                tools=_tools)
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran

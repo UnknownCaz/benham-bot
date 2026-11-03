@@ -591,7 +591,7 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True
         return {}, None
     bot.capabilities.run = _run
 
-    def _respond(user_id, text, log=None, content=None, note=None):
+    def _respond(user_id, text, log=None, content=None, note=None, **kw):
         touched["guest_respond"] += 1
         touched["guest_content"] = content
         return "guest reply"

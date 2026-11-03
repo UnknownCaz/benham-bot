@@ -357,9 +357,9 @@ r, preview = go("open_job", {"goal": "help pick a mod", "with": f"<@{FRIEND}>",
 check("a config guest by @mention; their own opener, every line quoted",
       ("> yo - Caz said you're hunting mods?" in preview["detail"],
        "> what game?" in preview["detail"]), (True, True))
-check("tools refused by name, pointing at Stage C",
+check("tools refused by name (Stage C wording: the guest brain can't run it)",
       refusal("open_job", {"goal": "x", "with": str(FRIEND), "tools": ["web_search", "read_channel"]}),
-      "'read_channel' can't be given to a job yet - only web_search. Stage C grants other tools.")
+      "The guest brain can't run read_channel; web_search is the only tool it has.")
 r, preview = go("open_job", {"goal": "x", "with": str(FRIEND), "tools": []})
 check("an empty tool list says chat only", "Tools: none beyond chat" in preview["detail"], True)
 r, preview = go("open_job", {"goal": "x", "with": str(FRIEND), "tools": "web-search"})
@@ -519,7 +519,7 @@ async def _owner(text, kind=None):
 bot.ask_owner_dm = _owner
 
 
-def _respond(user_id, text, log=None, content=None, note=None):
+def _respond(user_id, text, log=None, content=None, note=None, **kw):
     BRAIN.append((user_id, text, note))
     return "guest reply"
 guest.respond = _respond
