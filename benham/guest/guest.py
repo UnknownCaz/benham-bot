@@ -712,7 +712,12 @@ def _main(argv):
         g = stores.rpc.guest_status()
         print("=== guest chat ===")
         print(f"enabled:   {g['enabled']} (mode={g['mode']!r})")
-        print(f"allowlist: {g['allowlist'] or '(empty)'}")
+        print(f"allowlist: {g['allowlist'] or '(empty)'}  (control.json guest.ids)")
+        known = g.get("known_people")
+        if known is not None:
+            print(f"known:     {', '.join(known) if known else '(none)'}  "
+                  "(state/people.json, live - `benham.py person list` shows everyone "
+                  "who can chat, `person add` makes someone known)")
         print(f"model:     {g['model']}  max_tokens={g['max_tokens']}")
         print(f"caps:      {g['daily_cap']}/guest/day, {g['global_cap']}/day global, "
               f"{g['cooldown']}s cooldown")
