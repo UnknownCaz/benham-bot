@@ -19,7 +19,17 @@ identity.py owns that, and unions the two.
 
     state/people.json   {"<user_id>": {"name": ..., "display_name": ...,
                                        "since": "<ISO, Detroit clock + offset>",
-                                       "by": "caz" | "cli", "note": ...}}
+                                       "by": "caz" | "cli", "note": ...,
+                                       "tools": ["web_search"]}}   # optional
+
+THE TOOLS A PERSON HOLDS (Stage 9 C, goal 4 of the plan). Caz: "same for the
+tooling for that person" - a grant is per person, per tool, each on its own card
+(grant_tool / revoke_tool). A row with no `tools` key holds the DEFAULT, chat +
+web search, which is what every guest has always had; a row whose `tools` is []
+had web search taken away. A config-only guest has no row, so the default too,
+until a grant or a revoke writes one. GRANTABLE is exactly what the guest brain
+can honor today, web search - the lane's floor is no client tools (guest.py's
+docstring), so anything else is refused by name rather than stored and ignored.
 
 Per face, like the four guest stores: who may talk to an identity is a property
 of that identity (identity.guest_enabled's reasoning). A face resolves through
@@ -38,6 +48,9 @@ from benham import paths
 from benham.core import jsonio
 
 FILE_NAME = "people.json"
+FIELDS = ("name", "display_name", "since", "by", "note")
+DEFAULT_TOOLS = ("web_search",)   # what a known person holds with no `tools` key
+GRANTABLE = ("web_search",)       # what the guest brain can honor (no client tools)
 
 _lock = threading.Lock()
 
@@ -60,10 +73,18 @@ def _clean(raw):
             continue
         if uid <= 0 or not isinstance(v, dict):
             continue
-        rec = {key: v.get(key) for key in ("name", "display_name", "since", "by", "note")}
-        rec["name"] = str(rec["name"] or uid)
-        out[uid] = rec
+        out[uid] = _record(v, uid)
     return out
+
+
+def _record(v, uid):
+    """The stored shape of one person: the five fields, plus `tools` only when it
+    was written (absent = the default set, see the module docstring)."""
+    rec = {key: v.get(key) for key in FIELDS}
+    rec["name"] = str(rec["name"] or uid)
+    if isinstance(v.get("tools"), list):
+        rec["tools"] = [str(t) for t in v["tools"] if t]
+    return rec
 
 
 def load(face=None):
@@ -101,8 +122,7 @@ def add(user_id, record, face=None):
     """Store one person. Returns the record as written. Overwrites an existing
     entry for the same id - the caller (add_person) refuses that case first."""
     uid = int(user_id)
-    rec = {key: record.get(key) for key in ("name", "display_name", "since", "by", "note")}
-    rec["name"] = str(rec["name"] or uid)
+    rec = _record(record, uid)
     with _lock:
         p = path(face)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -121,4 +141,35 @@ def remove(user_id, face=None):
         rec = current.pop(uid, None)
         if rec is not None:
             jsonio.write_json(p, {str(k): v for k, v in sorted(current.items())})
+    return rec
+
+
+def tools_for(user_id, face=None):
+    """The tools this person holds right now, read from disk now: their row's
+    `tools` if it has one, else the default (chat + web search). Only GRANTABLE
+    names count - a hand-edited row can never widen the lane past what the guest
+    brain honors."""
+    rec = get(user_id, face)
+    held = rec.get("tools") if rec is not None and "tools" in rec else DEFAULT_TOOLS
+    return [t for t in GRANTABLE if t in held]
+
+
+def set_tools(user_id, tools, new_record=None, face=None):
+    """Write one person's tool set. A person with no row gets `new_record` as
+    their row first (a config-listed guest on their first grant or revoke); with
+    no row and no new_record nothing is written and None comes back. Returns the
+    record as written."""
+    uid = int(user_id)
+    with _lock:
+        p = path(face)
+        current = _clean(jsonio.read_json(p, default={}))
+        rec = current.get(uid)
+        if rec is None:
+            if new_record is None:
+                return None
+            rec = _record(new_record, uid)
+        rec["tools"] = [t for t in GRANTABLE if t in tools]
+        current[uid] = rec
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        jsonio.write_json(p, {str(k): v for k, v in sorted(current.items())})
     return rec

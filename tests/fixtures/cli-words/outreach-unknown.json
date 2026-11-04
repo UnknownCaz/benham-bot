@@ -7,5 +7,5 @@
   "face": true,
   "exit": 2,
   "stdout": "",
-  "stderr": "Don't know who 'nobody' is. Reachable: doom, draco\nAdd them under outreach.people in control.json, and ask Tyler first - the skill's rule is allowlist-only with ask-to-add.\n"
+  "stderr": "Don't know who 'nobody' is. Reachable: doom, draco\nMake them known with `python benham.py person add <name or id>` (a card on the bot, no restart), and ask Caz first - the skill's rule is allowlist-only with ask-to-add.\n"
 }

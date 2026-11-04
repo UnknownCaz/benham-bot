@@ -88,9 +88,11 @@ def resolve_target(arg):
     if uid is None:
         print(f"Don't know who {arg!r} is. Reachable: "
               + (", ".join(sorted(allowed)) or "(nobody)"), file=sys.stderr)
-        print("Add them under outreach.people in control.json, and ask Tyler "
-              "first - the skill's rule is allowlist-only with ask-to-add.",
-              file=sys.stderr)
+        # Since Stage 9 A the door is `person add` (people.json, live, a card on
+        # the bot) - not a hand edit of control.json and a restart.
+        print("Make them known with `python benham.py person add <name or id>` (a "
+              "card on the bot, no restart), and ask Caz first - the skill's rule "
+              "is allowlist-only with ask-to-add.", file=sys.stderr)
         raise SystemExit(2)
 
     # Owner check FIRST, and on the resolved id rather than on the argument, so it

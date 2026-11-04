@@ -165,7 +165,7 @@ def identity_snapshot():
 
 def guest_status():
     """Everything `benham.py guest status` prints, as data."""
-    from benham.core import identity, jsonio
+    from benham.core import identity, jsonio, people
     from benham.guest import guest
     u = guest._usage()
     mem = jsonio.read_json(guest.MEMORY_FILE, default={})
@@ -173,6 +173,9 @@ def guest_status():
         "enabled": identity.guest_enabled(),
         "mode": identity.guest_config().get("mode", "chat"),
         "allowlist": sorted(identity.people_map(identity.guest_config().get("ids")).values()),
+        # Stage 9: people.json is the live half of who may chat (identity.is_guest
+        # unions the two); `benham.py person list` shows everyone with their source.
+        "known_people": sorted(rec["name"] for rec in people.load().values()),
         "model": guest.MODEL, "max_tokens": guest.MAX_TOKENS,
         "daily_cap": guest.DAILY_CAP, "global_cap": guest.GLOBAL_CAP,
         "cooldown": guest.COOLDOWN,

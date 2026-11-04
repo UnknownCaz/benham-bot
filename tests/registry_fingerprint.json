@@ -44,6 +44,25 @@
     "taints": false,
     "tier": 1
   },
+  "advance_job": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [
+      "local_cli",
+      "owner_dm",
+      "owner_guild",
+      "owner_voice",
+      "system"
+    ],
+    "outward": true,
+    "posts": false,
+    "taints": false,
+    "tier": 1
+  },
   "answer_conversation": {
     "always_confirm": false,
     "blocked_when_tainted": false,
@@ -530,6 +549,19 @@
     "posts": false,
     "taints": true,
     "tier": 0
+  },
+  "grant_tool": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
   },
   "guest_off": {
     "always_confirm": true,
@@ -1070,6 +1102,19 @@
     "guest": false,
     "needs_confirm": true,
     "needs_guild": true,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
+  "revoke_tool": {
+    "always_confirm": true,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": true,
+    "needs_guild": false,
     "origins": [],
     "outward": false,
     "posts": false,

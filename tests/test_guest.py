@@ -102,7 +102,7 @@ check("every registered capability denies a guest", reachable, [])
 # because this file's enable_guests() grants nothing in guest.capabilities -
 # the config half of the grant is missing, which is its own denial
 # (test_guest_grants.py takes that machinery apart properly).
-check("...and that is all 100 of them", len(capabilities.REGISTRY), 100)
+check("...and that is all 103 of them", len(capabilities.REGISTRY), 103)
 
 # Both denials are asserted separately: either alone would secure this, and the
 # point of having two is that a future edit to one is survivable. Since Stage 2
@@ -591,7 +591,7 @@ def deliver(uid, content, attachments=(), embeds=(), reference=None, parked=True
         return {}, None
     bot.capabilities.run = _run
 
-    def _respond(user_id, text, log=None, content=None, note=None):
+    def _respond(user_id, text, log=None, content=None, note=None, **kw):
         touched["guest_respond"] += 1
         touched["guest_content"] = content
         return "guest reply"

@@ -525,7 +525,7 @@ def _create(_log, user_id, **kw):
     return resp, calls
 
 
-def respond(user_id, text, log=None, content=None, note=None):
+def respond(user_id, text, log=None, content=None, note=None, tools=None, info=None):
     """One guest turn: their message in, Benham's reply out.
 
     Requires that check() already returned ALLOW, which is also where the message was
@@ -575,6 +575,19 @@ def respond(user_id, text, log=None, content=None, note=None):
     the answer (bot.guest_note). It goes in a SECOND system block, after the
     cached persona, so the cache survives it, and it is never remembered: the
     next turn gets a fresh note or none. Still no tool - it is text.
+
+    `tools` is what this person may use on this turn, as names (Stage 9 C:
+    people.tools_for, narrowed to an open job's tools by bot.py). None means the
+    lane's default - web search when guest.web_search is on - so every caller
+    from before keeps its behaviour. A list without "web_search" means NO search
+    on this turn: revoke_tool took it away, or the job is chat only. The list can
+    only take away; it can never add a tool this file does not already know how
+    to pass, and the only one it knows is server-side.
+
+    `info`, if a dict, is filled with what the turn did that the reply text does
+    not carry: info["queries"], the turn's web-search queries (each once). bot.py
+    counts them into an open job (jobs.add_searches) for the heads-up to Caz.
+    Additive and write-only: nothing here reads it.
     """
     def _log(msg):
         if log:
@@ -590,7 +603,7 @@ def respond(user_id, text, log=None, content=None, note=None):
     # message that was accepted even if this call then fails, or a guest whose turns
     # error out is free to retry with no rate limit at all.
     kw = {}
-    if WEB_SEARCH:
+    if WEB_SEARCH and (tools is None or "web_search" in tools):
         # Anthropic's SERVER-SIDE web search - the only tool a guest gets, and the
         # only kind that keeps this file's security property: it runs on Anthropic's
         # servers, touches nothing on this machine or network, and there is no
@@ -646,6 +659,8 @@ def respond(user_id, text, log=None, content=None, note=None):
     # this lane's own doing, not a second searched turn of theirs, and the
     # retry usually repeats the first call's queries word for word.
     queries = list(dict.fromkeys(q for r in calls for q in shared_tools.search_queries(r)))
+    if isinstance(info, dict):
+        info["queries"] = list(queries)
     if queries:
         _log_searches(user_id, queries)
         charge_search(user_id)   # a searched turn counts double - Tyler's rule
@@ -697,7 +712,12 @@ def _main(argv):
         g = stores.rpc.guest_status()
         print("=== guest chat ===")
         print(f"enabled:   {g['enabled']} (mode={g['mode']!r})")
-        print(f"allowlist: {g['allowlist'] or '(empty)'}")
+        print(f"allowlist: {g['allowlist'] or '(empty)'}  (control.json guest.ids)")
+        known = g.get("known_people")
+        if known is not None:
+            print(f"known:     {', '.join(known) if known else '(none)'}  "
+                  "(state/people.json, live - `benham.py person list` shows everyone "
+                  "who can chat, `person add` makes someone known)")
         print(f"model:     {g['model']}  max_tokens={g['max_tokens']}")
         print(f"caps:      {g['daily_cap']}/guest/day, {g['global_cap']}/day global, "
               f"{g['cooldown']}s cooldown")

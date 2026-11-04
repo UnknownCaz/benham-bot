@@ -385,9 +385,18 @@ check("exactly the expected capabilities are origin-restricted",
 #                          floor, and dormancy after two go unanswered. It is also
 #                          the only one of the three a human origin CANNOT reach.
 #
+#   advance_job          - added 2026-11-03, INTENT 61 Stage 9 C (jobs). The
+#                          advance_conversation shape for a job: bot.tick_jobs
+#                          runs it with no human behind it. A job id in; the nudge
+#                          goes only to the person the job is WITH (a known person
+#                          Caz opened it with, on a card) and at most once per job,
+#                          the heads-up only to the owner; the words come off the
+#                          job record. The clock is the job's quiet span (a day),
+#                          derived from its stamps.
+#
 # A further name appearing here without a deliberate decision is what this asserts on.
 EXPECTED_SYSTEM = {"set_presence", "advance_conversation", "tell_conversation",
-                   "notify_owner", "deliver_unprompted"}
+                   "notify_owner", "deliver_unprompted", "advance_job"}
 system_ok = {n for n, row in matrix.items() if row[Origin.SYSTEM]}
 check("exactly the expected capabilities are SYSTEM-reachable",
       system_ok, EXPECTED_SYSTEM)

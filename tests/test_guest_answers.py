@@ -180,7 +180,7 @@ def _install():
         OWNER.append((text, kind))
     bot.ask_owner_dm = _owner
 
-    def _respond(user_id, text, log=None, content=None, note=None):
+    def _respond(user_id, text, log=None, content=None, note=None, **kw):
         BRAIN.append((user_id, text, note))
         return "guest reply"
     guest.respond = _respond

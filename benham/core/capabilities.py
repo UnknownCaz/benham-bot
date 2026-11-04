@@ -37,6 +37,7 @@ import discord
 from benham.core import eventtime
 from benham.core import fitimage
 from benham.core import identity
+from benham.core import jobclose
 from benham.core import jobs
 from benham.core import lookimage
 from benham.core import looksound
@@ -3381,6 +3382,7 @@ async def _list_people(ctx, p):
                "lists": ((c or {}).get("lists") or []) + (["people.json"] if s else [])}
         if s:
             row.update({"since": s.get("since"), "by": s.get("by"), "note": s.get("note")})
+        row["tools"] = people.tools_for(uid)       # Stage 9 C: what they hold now
         rows.append(row)
     rows.sort(key=lambda r: (str(r["name"]).lower(), r["user_id"]))
     out = {"count": len(rows),
@@ -3630,7 +3632,7 @@ async def _remove_person(ctx, p):
 # taints on all three: the goal and outcome are typed text, the opener goes to a
 # person, and a job's names are Discord strings.
 
-def _job_who(query):
+def _job_who(query, need_chat_on=True):
     """`with` -> (jobs.CAZ, "Caz") or (user_id, label). Known people only.
 
     Resolved against what list_people shows - people.json first, then
@@ -3677,25 +3679,34 @@ def _job_who(query):
         raise ActionError(f"{label} is only on outreach.people, so they can't DM this "
                           "bot back and a job's replies would land nowhere. add_person "
                           "makes them a guest.")
-    if not identity.guest_enabled():
+    if need_chat_on and not identity.guest_enabled():
         raise ActionError("Guest chat is OFF on this face, so nobody could answer a "
                           "job's opener. Turn guest chat on first.")
     return uid, label
 
 
-def _job_tools(raw):
-    """The tools list, checked. Default: web search. Only web_search exists in
-    Stage B; anything else is refused by name."""
+def _job_tools(raw, who=None, label=None):
+    """The tools list, checked. A job's tools are a SUBSET of what the person
+    holds (people.tools_for, Stage 9 C) - a job can't hand someone a tool Caz
+    took away with revoke_tool. Default: everything they hold. Only web_search
+    exists; anything else is refused by name. A job with Caz holds every
+    grantable tool."""
+    held = (list(jobs.TOOLS) if who is None or who == jobs.CAZ
+            else people.tools_for(who))
     if raw is None:
-        return list(jobs.TOOLS)
+        return [t for t in jobs.TOOLS if t in held]
     out = []
     for t in raw:
         name = str(t).strip().lower().replace("-", "_").replace(" ", "_")
         if not name:
             continue
         if name not in jobs.TOOLS:
-            raise ActionError(f"{str(t).strip()!r} can't be given to a job yet - only "
-                              "web_search. Stage C grants other tools.")
+            raise ActionError(f"The guest brain can't run {str(t).strip()}; web_search "
+                              "is the only tool it has.")
+        if name not in held:
+            raise ActionError(f"{label or who} doesn't hold {_tool_words(name)} - "
+                              f"grant_tool gives it first, or open the job without it "
+                              "(tools=[]).")
         if name not in out:
             out.append(name)
     return out
@@ -3737,7 +3748,9 @@ def _job_label(job):
         "chat with the goal in its note - it keeps helping them until they're sorted, "
         "and nothing they say is recorded as an answer or passed on. With 'caz', "
         "nothing is sent: the job is this bot's own to run and come back to him on. "
-        "One open job per person. Tools: web_search only (the default). The preview "
+        "A person may have several open jobs; the same goal twice is refused. "
+        "Tools: only what the person holds (web_search "
+        "unless revoke_tool took it; the default is all they hold). The preview "
         "shows who, the goal, the tools and the exact opener. Always previewed and "
         "confirmed; close_job ends it.",
         {"goal": {"type": "str", "required": True,
@@ -3745,31 +3758,48 @@ def _job_label(job):
          "with": {"type": "str", "required": True,
                   "desc": "A known person's name, @mention or id - or 'caz'"},
          "tools": {"type": "list",
-                   "desc": "Tools the job may use; only 'web_search' (the default)"},
+                   "desc": "Tools the job may use - a subset of what the person "
+                           "holds; only 'web_search' exists"},
          "opener": {"type": "str",
                     "desc": "The first DM, in this bot's voice. Default: a short line "
-                            "quoting the goal. Not for 'caz'."}},
+                            "quoting the goal. Not for 'caz'."},
+         "nudge": {"type": "str",
+                   "desc": "The one check-in sent if they go quiet for a day. "
+                           "Default: a short 'did it get sorted?' line. Not for 'caz'."}},
         outward=True, always_confirm=True, taints=True)
 async def _open_job(ctx, p):
     goal = str(p["goal"]).strip()
     if not goal:
         raise ActionError("open_job needs a goal - what Caz asked for, in his words.")
     who, label = _job_who(p["with"])
-    tools = _job_tools(p.get("tools"))
+    tools = _job_tools(p.get("tools"), who, label)
     opener = str(p.get("opener") or "").strip() or None
+    nudge = str(p.get("nudge") or "").strip() or None
     person = who != jobs.CAZ
     if not person and opener:
         raise ActionError("A job with Caz sends nothing, so it has no opener.")
+    if not person and nudge:
+        raise ActionError("A job with Caz is never nudged, so it has no check-in line.")
+    # Several open jobs per person (Caz's call, 2026-11-03 chat). The one thing
+    # refused is the SAME goal twice, still open with the same person - that is a
+    # double tap, not a second job.
+    others = [j for j in jobs.load().values()
+              if j["with"] == str(who) and jobs.is_open(j)]
+    twin = next((j for j in others if jobs.same_goal(j["goal"], goal)), None)
+    if twin is not None:
+        raise ActionError(f"{label} already has that job open, {twin['id']}: "
+                          f"\"{twin['goal'][:120]}\". close_job it first, or word the "
+                          "new one differently.")
     if person:
-        had = jobs.open_for(who)
-        if had is not None:
-            raise ActionError(f"{label} already has an open job, {had['id']}: "
-                              f"\"{had['goal'][:120]}\". close_job it first.")
         opener = opener or _default_opener(label, goal)
     if ctx.dry_run:
         lines = [f"Goal (Caz's words): {goal}"]
         if person:
             lines.append(f"With: {label}")
+            if others:
+                lines.append(f"Also open with them: "
+                             + "; ".join(f"{j['id']} \"{j['goal'][:80]}\"" for j in others)
+                             + " - their chat will carry every open goal.")
         else:
             lines.append("With: Caz - no DM goes out; the job is "
                          f"{_ME}'s own to run and come back to you on.")
@@ -3780,7 +3810,16 @@ async def _open_job(ctx, p):
             lines.append("While it's open, their messages reach the guest chat with "
                          "this goal in its note - not through outreach; nothing is "
                          "recorded as an answer or passed on.")
-        lines.append("Open until close_job.")
+        if person:
+            hours = jobs.quiet_seconds() / 3600
+            span = "a day" if hours == 24 else f"{hours:g} h"
+            lines.append(f"If they go quiet for {span}, one check-in:")
+            lines.append(f"> {jobclose.nudge(label, {'nudge': nudge})}")
+            lines.append(f"Another {span} of quiet closes it (\"went quiet\"); so does "
+                         "them saying they're sorted, or close_job. You get a heads-up "
+                         "in your DM on every close.")
+        else:
+            lines.append("Open until close_job; you get a heads-up when it closes.")
         shown = goal if len(goal) <= 80 else goal[:77] + "..."
         return {"summary": (f"Open a job with **{label}**: {shown}" if person
                             else f"Open a job for **Caz**: {shown}"),
@@ -3789,7 +3828,7 @@ async def _open_job(ctx, p):
     by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
     job = jobs.create({"goal": goal, "with": str(who), "tools": tools, "state": "open",
                        "opened": now, "opened_by": by, "last_activity": now,
-                       "opener": opener,
+                       "opener": opener, "nudge": nudge,
                        "log": [{"at": now, "event": "opened", "by": by}]})
     out = {"status": "job_opened", "job_id": job["id"], "with": job["with"],
            "with_label": label, "goal": goal, "tools": tools, "opener_sent": False}
@@ -3833,7 +3872,8 @@ async def _list_jobs(ctx, p):
         row = {k: j.get(k) for k in ("id", "goal", "with", "tools", "state", "opened",
                                       "opened_by", "last_activity", "turns")}
         row["with_label"] = _job_label(j)
-        for k in ("closed", "closed_by", "outcome", "opener_message_id"):
+        for k in ("closed", "closed_by", "outcome", "opener_message_id",
+                  "searches", "nudged", "ended", "headsup"):   # + Stage 9 C
             if j.get(k) is not None:
                 row[k] = j[k]
         rows.append(row)
@@ -3847,8 +3887,9 @@ async def _list_jobs(ctx, p):
 
 @action("close_job", identity.MANAGE,
         "Close an open job, with its outcome in a few words. Nothing is sent to "
-        "anyone; from their next message the person it was with gets the ordinary "
-        "guest chat again. Always previewed and confirmed.",
+        "the person; from their next message they get the ordinary guest chat "
+        "again (or their other open jobs). Caz gets the heads-up in his DM within "
+        "a minute, as for every close. Always previewed and confirmed.",
         {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"},
          "outcome": {"type": "str", "required": True,
                      "desc": "How it ended, a few words"}},
@@ -3870,18 +3911,221 @@ async def _close_job(ctx, p):
                  f"Opened {job.get('opened') or '?'} by {job.get('opened_by') or '?'}; "
                  f"{job.get('turns') or 0} message(s) from them since; last activity "
                  f"{job.get('last_activity') or '?'}.",
-                 "Nothing is sent to anyone."]
+                 "Nothing is sent to them. Caz gets the heads-up in his DM within a "
+                 "minute (what it was, what was done and found, the tools it used)."]
         return {"summary": f"Close job **{job['id']}** with **{label}**",
                 "detail": "\n".join(lines)}
     by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
-    now = jobs.stamp()
-    done = jobs.update(job["id"], state="closed", closed=now, closed_by=by,
-                       outcome=outcome, log={"event": "closed", "by": by,
-                                             "outcome": outcome})
-    ctx.log(f"close_job: {job['id']} closed by {by}: {outcome[:120]!r}")
+    done = jobs.close(job["id"], "hand", outcome, by)
+    if done is None:
+        raise ActionError(f"Job {job['id']} closed some other way just now - "
+                          "list_jobs shows how.")
+    ctx.log(f"close_job: {job['id']} closed by {by}: {outcome[:120]!r} - heads-up owed")
     return {"status": "job_closed", "job_id": job["id"], "with": job["with"],
             "with_label": label, "goal": job["goal"], "outcome": outcome,
-            "closed": done.get("closed") if done else now, "closed_by": by}
+            "closed": done["closed"], "closed_by": by, "headsup": "owed"}
+
+
+@action("advance_job", identity.SPEAK,
+        "Move one job to the beat it owes now: after a quiet day the ONE check-in to "
+        "the person it is with; after another quiet day the close ('went quiet'); and "
+        "the heads-up DM to Caz that every closed job owes him. If nothing is due, "
+        "this does nothing and says so. Takes only a job id; the recipient and the "
+        "words come from the stored job.",
+        {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"}},
+        # SYSTEM, the advance_conversation shape: bot.tick_jobs runs this with no
+        # human behind it, so it can choose nothing. The nudge only ever goes to the
+        # person the job is WITH (a known person Caz opened it with, on a card), and
+        # at most once per job; the heads-up only ever goes to the owner (sorted
+        # OWNER_IDS, as notify_owner); the words come from the job record
+        # (jobclose.nudge / jobclose.headsup).
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
+        outward=True)
+async def _advance_job(ctx, p):
+    job = jobs.get(p["job_id"])
+    if job is None:
+        raise ActionError(f"No job {str(p['job_id']).strip()!r} - list_jobs shows them.")
+    beat = jobs.beat(job)
+    if beat is None:
+        return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+    if beat == "nudge":
+        return await _job_nudge(ctx, job)
+    if beat == "close":
+        done = jobs.close(job["id"], "quiet", "went quiet", "quiet")
+        if done is None:
+            return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+        ctx.log(f"advance_job: {job['id']} went quiet - closed, heads-up owed")
+        job = done
+    return await _job_tell(ctx, job)
+
+
+async def _job_nudge(ctx, job):
+    """The one check-in after a quiet day, to the person the job is WITH - the
+    recipient comes from the record, the words from the job (or jobclose.nudge).
+    A DM Discord refuses closes the job (nobody to wait on), and Caz hears it in
+    the heads-up; Discord being down raises, so the next tick retries."""
+    uid = int(job["with"])
+    label = _job_label(job)
+    text = jobclose.nudge(label, job)
+    try:
+        user = await ctx.user(uid)
+        ch = user.dm_channel or await user.create_dm()
+        sent = await ch.send(text)
+    except (ActionError, discord.Forbidden, policy.OutwardBlocked) as e:
+        reason = getattr(getattr(e, "decision", None), "reason", None) or str(e)
+        done = jobs.close(job["id"], "quiet", f"went quiet; the check-in could not be "
+                          f"sent ({reason})", "quiet")
+        ctx.log(f"advance_job: {job['id']} nudge to {uid} failed ({reason}) - closed")
+        if done is None:
+            return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+        return await _job_tell(ctx, done)
+    jobs.mark_nudged(job["id"], sent.id, text)
+    ctx.log(f"advance_job: {job['id']} quiet - nudged {uid} ({sent.id})")
+    return {"status": "nudged", "job_id": job["id"], "user_id": uid,
+            "message_id": sent.id, "text": text}
+
+
+async def _job_tell(ctx, job):
+    """The heads-up to Caz for a closed job, then mark it sent. The recipient is
+    the owner, always; nothing here can name another."""
+    from benham.guest import jobdone
+    label = _job_label(job)
+    found = await asyncio.to_thread(jobdone.summarize, job, ctx.log)
+    text = jobclose.headsup(job, label, found)
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    user = await ctx.user(owner_id)
+    ch = user.dm_channel or await user.create_dm()
+    sent = await ch.send(text[:1990])
+    jobs.update(job["id"], headsup="sent", headsup_message_id=sent.id,
+                log={"event": "told_caz", "message_id": sent.id})
+    ctx.log(f"advance_job: {job['id']} heads-up sent to the owner ({sent.id})")
+    # Goal 8: one keep/remove card per tool the job USED beyond chat that the
+    # person still holds. bot.py draws them in the owner's DM (buttons cannot
+    # live in a capability); this only names them, from the record.
+    cards = []
+    if job.get("with") != jobs.CAZ:
+        held = people.tools_for(job["with"])
+        cards = [{"tool": t, "user_id": int(job["with"]), "label": label}
+                 for t in jobclose.tools_used(job) if t in held]
+    return {"status": "told", "job_id": job["id"], "message_id": sent.id,
+            "text": text, "cards": cards}
+
+
+# --- Borrowed tools (INTENT decision 61, Stage 9 C; goal 4 of the plan) ----------
+#
+# A person holds a tool set in people.json (people.tools_for). The default, with no
+# grant ever made, is chat + web search - what every guest has always had. Each
+# change is its own card, per person, per tool: Caz's "same for the tooling for that
+# person". In this stage the only grantable tool is web_search, because it is the
+# only one the guest brain can honor: the lane passes NO client tools (guest.py's
+# docstring), and web search is server-side. Granting a guest any further tool -
+# a client tool run through capabilities.run with the guest origin, the shape the
+# archived archive/guest-tools/guest_agent.py had - is a separate later stage, not
+# built here, because it would break that floor.
+
+def _tool_name(raw):
+    name = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if name not in people.GRANTABLE:
+        shown = str(raw or "").strip() or "that"
+        raise ActionError(f"The guest brain can't run {shown}; web_search is the only "
+                          "tool it has.")
+    return name
+
+
+def _tool_holder(query):
+    """(user_id, label, new_row) for grant/revoke. A known person who can DM
+    this bot; `new_row` is the people.json row to write for a config-only guest
+    (None when they already have a row)."""
+    who, label = _job_who(query, need_chat_on=False)
+    if who == jobs.CAZ:
+        raise ActionError("Caz doesn't borrow tools - grant_tool is for the people "
+                          f"{_ME} talks to.")
+    if people.get(who) is not None:
+        return who, label, None
+    names = (_config_people().get(who) or {}).get("names") or []
+    return who, label, {"name": names[0] if names else str(who), "since": jobs.stamp(),
+                        "by": "caz", "note": "row written by a tool card"}
+
+
+def _tool_words(tool):
+    return "web search" if tool == "web_search" else tool
+
+
+def _jobs_holding(uid, tool):
+    return [j["id"] for j in jobs.load().values()
+            if j["with"] == str(uid) and jobs.is_open(j) and tool in j["tools"]]
+
+
+@action("grant_tool", identity.MANAGE,
+        "Give one known person one tool for their chats with this bot. Today the "
+        "only tool is web_search - every known person holds it unless it was taken "
+        "away with revoke_tool; anything else is refused by name, because the guest "
+        "chat runs no client tools. Takes effect from their next message, no "
+        "restart. Always previewed and confirmed.",
+        {"who": {"type": "str", "required": True,
+                 "desc": "A known person's name, @mention or id (list_people)"},
+         "tool": {"type": "str", "required": True, "desc": "web_search"}},
+        always_confirm=True, taints=True)
+async def _grant_tool(ctx, p):
+    tool = _tool_name(p["tool"])
+    uid, label, new_row = _tool_holder(p["who"])
+    held = people.tools_for(uid)
+    if tool in held:
+        raise ActionError(f"{label} already holds {_tool_words(tool)}.")
+    if ctx.dry_run:
+        lines = [f"They'd hold: {_tool_words(tool)} (chat is always on).",
+                 f"From their next message the guest chat can search the web for them. "
+                 "Every query is logged; a searched message counts double against "
+                 "their daily cap.",
+                 "No restart. revoke_tool takes it back."]
+        if new_row is not None:
+            lines.append("They have no people.json row yet (control.json lists them), "
+                         "so this writes one holding their tools.")
+        if not identity.guest_config().get("web_search", True):
+            lines.append("Note: guest.web_search is off in control.json, so no guest "
+                         "searches until that is on.")
+        return {"summary": f"Give **{label}** {_tool_words(tool)}",
+                "detail": "\n".join(lines)}
+    rec = people.set_tools(uid, held + [tool], new_record=new_row)
+    ctx.log(f"grant_tool: {uid} now holds {rec['tools']}")
+    return {"status": "tool_granted", "user_id": uid, "label": label, "tool": tool,
+            "tools": rec["tools"], "row_written": new_row is not None}
+
+
+@action("revoke_tool", identity.MANAGE,
+        "Take one tool away from one known person. Today the only tool is web_search; "
+        "without it their chats with this bot are talk only. Their open jobs lose it "
+        "too. Takes effect from their next message, no restart; grant_tool gives it "
+        "back. Always previewed and confirmed.",
+        {"who": {"type": "str", "required": True,
+                 "desc": "A known person's name, @mention or id (list_people)"},
+         "tool": {"type": "str", "required": True, "desc": "web_search"}},
+        always_confirm=True, taints=True)
+async def _revoke_tool(ctx, p):
+    tool = _tool_name(p["tool"])
+    uid, label, new_row = _tool_holder(p["who"])
+    held = people.tools_for(uid)
+    if tool not in held:
+        raise ActionError(f"{label} doesn't hold {_tool_words(tool)}.")
+    holding = _jobs_holding(uid, tool)
+    if ctx.dry_run:
+        left = [t for t in held if t != tool]
+        lines = [f"They'd hold: {', '.join(_tool_words(t) for t in left) or 'chat only'}.",
+                 f"From their next message the guest chat answers them without "
+                 f"{_tool_words(tool)}.",
+                 "No restart. grant_tool gives it back."]
+        if holding:
+            lines.append(f"Their open job(s) {', '.join(holding)} lose it too.")
+        if new_row is not None:
+            lines.append("They have no people.json row yet (control.json lists them), "
+                         "so this writes one holding their tools.")
+        return {"summary": f"Take {_tool_words(tool)} away from **{label}**",
+                "detail": "\n".join(lines)}
+    rec = people.set_tools(uid, [t for t in held if t != tool], new_record=new_row)
+    ctx.log(f"revoke_tool: {uid} now holds {rec['tools'] or 'chat only'}")
+    return {"status": "tool_revoked", "user_id": uid, "label": label, "tool": tool,
+            "tools": rec["tools"], "row_written": new_row is not None,
+            "open_jobs_affected": holding}
 
 
 @action("set_bot_nickname", identity.MANAGE, "Change this bot's own nickname in a server.",

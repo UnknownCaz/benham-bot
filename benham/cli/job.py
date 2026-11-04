@@ -60,10 +60,15 @@ def _list(state, timeout=60):
         line = f"        opened {j.get('opened') or '?'} by {j.get('opened_by') or '?'}"
         if j.get("last_activity"):
             line += f"; last activity {j['last_activity']} ({j.get('turns') or 0} from them)"
+        if j.get("searches"):
+            line += f"; {j['searches']} search(es)"
         print(line)
+        if j.get("nudged"):
+            print(f"        checked in once {j['nudged']}")
         if j.get("closed"):
             print(f"        closed {j['closed']} by {j.get('closed_by') or '?'}: "
-                  f"{j.get('outcome') or '-'}")
+                  f"{j.get('outcome') or '-'}"
+                  + (f"  [heads-up {j['headsup']}]" if j.get("headsup") else ""))
     return EXIT_OK
 
 

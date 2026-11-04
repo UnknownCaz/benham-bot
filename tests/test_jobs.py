@@ -293,9 +293,9 @@ check("with_label for caz", r["jobs"][0]["with_label"], "Caz")
 section("close_job - card, then closed, nothing sent")
 r, preview = go("close_job", {"job_id": "j1", "outcome": "rehearsal done"})
 check("the card names the job and who", preview["summary"], "Close job **j1** with **Caz**")
-check("...with the outcome and that nothing is sent",
+check("...with the outcome and that nothing is sent to them (Stage C: Caz gets a heads-up)",
       ("Outcome: rehearsal done" in preview["detail"],
-       "Nothing is sent to anyone." in preview["detail"]), (True, True))
+       "Nothing is sent to them. Caz gets the heads-up" in preview["detail"]), (True, True))
 check("the card closed nothing", jobs.get("j1")["state"], "open")
 r, _ = go("close_job", {"job_id": "1", "outcome": "rehearsal done"}, force=True)
 check("confirmed: closed (by '1' as well as 'j1')", (r["status"], jobs.get("j1")["state"]),
@@ -346,9 +346,11 @@ check("THE OUTREACH STORE WAS NOT TOUCHED - no conversation for them",
       conversations.all_conversations(counterparty=KNOWN), [])
 check("...nor for anyone", conversations.all_conversations(), [])
 check("open_for finds it - the guest note will see it", jobs.open_for(KNOWN)["id"], j["id"])
-check("a second open job with the same person is refused, naming the first",
-      f"already has an open job, {j['id']}" in (refusal(
-          "open_job", {"goal": "another", "with": str(KNOWN)}, force=True) or ""), True)
+check("the SAME goal again with the same person is refused, naming the first "
+      "(Stage C: several open jobs per person, but not the same one twice)",
+      f"already has that job open, {j['id']}" in (refusal(
+          "open_job", {"goal": "Find a  half-remembered GAME", "with": str(KNOWN)},
+          force=True) or ""), True)
 
 section("open_job with a person - a written opener, an @mention, tools")
 DMS.clear()
@@ -357,9 +359,9 @@ r, preview = go("open_job", {"goal": "help pick a mod", "with": f"<@{FRIEND}>",
 check("a config guest by @mention; their own opener, every line quoted",
       ("> yo - Caz said you're hunting mods?" in preview["detail"],
        "> what game?" in preview["detail"]), (True, True))
-check("tools refused by name, pointing at Stage C",
+check("tools refused by name (Stage C wording: the guest brain can't run it)",
       refusal("open_job", {"goal": "x", "with": str(FRIEND), "tools": ["web_search", "read_channel"]}),
-      "'read_channel' can't be given to a job yet - only web_search. Stage C grants other tools.")
+      "The guest brain can't run read_channel; web_search is the only tool it has.")
 r, preview = go("open_job", {"goal": "x", "with": str(FRIEND), "tools": []})
 check("an empty tool list says chat only", "Tools: none beyond chat" in preview["detail"], True)
 r, preview = go("open_job", {"goal": "x", "with": str(FRIEND), "tools": "web-search"})
@@ -519,7 +521,7 @@ async def _owner(text, kind=None):
 bot.ask_owner_dm = _owner
 
 
-def _respond(user_id, text, log=None, content=None, note=None):
+def _respond(user_id, text, log=None, content=None, note=None, **kw):
     BRAIN.append((user_id, text, note))
     return "guest reply"
 guest.respond = _respond

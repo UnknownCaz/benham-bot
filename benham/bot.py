@@ -51,6 +51,8 @@ from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.guest import answers
+from benham.guest import jobdone
+from benham.core import jobclose
 from benham.core import health
 from benham.core import ideas
 from benham.core import initiative
@@ -660,6 +662,11 @@ async def on_ready():
         poll_outbox.start()
     if not tick_conversations.is_running():
         tick_conversations.start()
+    if not tick_jobs.is_running():
+        tick_jobs.start()
+    _qh = jobs.quiet_seconds() / 3600
+    log(f"Jobs: tick ON (60 s) - {_qh:g} h quiet, one check-in; {_qh:g} h more, closed; "
+        f"{sum(1 for j in jobs.load().values() if jobs.is_open(j))} open now")
     # Only when the funnel is on: with no tracker configured every pass would
     # read an empty filing list forever, and a loop that can never do anything
     # is log noise standing in for a feature.
@@ -880,6 +887,32 @@ class InviteView(ApprovalView):
     @discord.ui.button(label="Ignore", style=discord.ButtonStyle.secondary)
     async def deny(self, interaction, button):
         await self._click(interaction, False)
+
+
+class KeepToolView(ApprovalView):
+    """"Keep" / "Remove" on the card under a job's heads-up, one per borrowed
+    tool (INTENT 61, Stage 9 C, goal 8: "then I get prompted to have the tool
+    removed, or kept"). Same click handler, so the same owner check guards it.
+
+    The honest shape, rather than Approve/Deny: there is no pending action to
+    approve - keeping changes nothing. So the buttons say what they do. Remove
+    runs revoke_tool through capabilities.run as Caz from his DM, the tap being
+    his confirmation of a card that already names the person and the tool (the
+    fire_confirmed path); Keep runs nothing. No answer is a keep: silence never
+    takes a tool away, and the card says how to revoke later."""
+
+    NOTES = ("✅ kept", "🗑️ removed")
+
+    @discord.ui.button(label="Keep", style=discord.ButtonStyle.success)
+    async def approve(self, interaction, button):
+        await self._click(interaction, True)
+
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
+    async def deny(self, interaction, button):
+        await self._click(interaction, False)
+
+    async def on_timeout(self):
+        await self.deaden("no answer - kept as it is")
 
 
 # Live button views, so the typed-reply paths can retire them when they win the
@@ -1648,7 +1681,7 @@ def guest_note(bound, waiting):
     return None
 
 
-def job_note(job):
+def job_note(job, tools=None):
     """Benham's side of a JOB's chat, for the guest brain (INTENT 61/62, Stage 9 B).
 
     THE BREAK THIS ENDS. 2026-11-03 14:23 local: the opener to a friend went
@@ -1660,12 +1693,33 @@ def job_note(job):
     open, THIS is the note, and guest_note's bound/waiting notes never fire for
     their messages (handle_guest_dm). Text, like guest_note: a second system
     block after the cached persona, never remembered, no tool.
+
+    `tools` (Stage 9 C) is what the turn will really carry - the job's tools
+    narrowed by what the person holds now (people.tools_for), so a revoke_tool
+    mid-job is told to the brain, not just enforced on it. None = the job's own.
+
+    SEVERAL JOBS (Stage C, Caz's call 2026-11-03 in chat: "allow several open jobs
+    per person"). `job` may be a LIST of this person's open jobs, oldest first;
+    the note then lists every goal, one line each, in opened order, with the same
+    closing sentence. One job (a dict, or a list of one) keeps the single-job
+    wording word for word. The turn's tools are one set for the whole turn - what
+    they hold, narrowed to the union of the open jobs' tools - so the note names
+    that one set.
     """
-    tools = ("web search" if "web_search" in (job.get("tools") or [])
+    jobs_ = list(job) if isinstance(job, (list, tuple)) else [job]
+    if tools is None:
+        tools = sorted({t for j in jobs_ for t in (j.get("tools") or [])})
+    words = ("web search" if "web_search" in tools
              else "none - just talk it through")
+    if len(jobs_) == 1:
+        return ("From Benham's side, not from them: Caz asked you to help them with "
+                f"this: {jobs_[0]['goal']}. You opened this chat about it. Tools you "
+                f"may use for it: {words}. Keep helping until they say they're "
+                "sorted; don't pass anything to Caz, don't say you recorded anything.")
+    goals = "\n".join(f"{i}. {j['goal']}" for i, j in enumerate(jobs_, 1))
     return ("From Benham's side, not from them: Caz asked you to help them with "
-            f"this: {job['goal']}. You opened this chat about it. Tools you may use "
-            f"for it: {tools}. Keep helping until they say they're sorted; don't "
+            f"these:\n{goals}\nYou opened this chat about them. Tools you may use "
+            f"for them: {words}. Keep helping until they say they're sorted; don't "
             "pass anything to Caz, don't say you recorded anything.")
 
 
@@ -1692,8 +1746,10 @@ async def handle_guest_dm(message):
     # An open JOB with this person (INTENT 61/62, Stage 9 B), read live: every
     # message from them while it is open is activity (Stage C's quiet timer reads
     # last_activity), and the job's note replaces the outreach notes below.
-    _job = jobs.open_for(message.author.id)
-    if _job is not None:
+    # Since Stage C a person may hold several open jobs (Caz's call 2026-11-03):
+    # a message touches EVERY one of them, so while they are talking all their
+    # jobs' clocks move together and quiet is per person in practice.
+    for _job in jobs.open_all_for(message.author.id):
         try:
             jobs.touch(_job["id"])
         except OSError as e:   # a stamp must never cost them their reply
@@ -1826,18 +1882,34 @@ async def handle_guest_dm(message):
     # fire for a message from someone with an open job. With no open job this is
     # the decision-51 path, unchanged. Read again here, not reused from the top:
     # a close_job between the two moments must win.
-    _job = jobs.open_for(message.author.id)
-    if _job is not None:
-        note = job_note(_job)
-        log(f"guest chat: {message.author.id} is in job {_job['id']} - its note, "
-            f"not the outreach note")
+    _open = jobs.open_all_for(message.author.id)
+    # What this person may use on this turn (Stage 9 C): what they hold now in
+    # people.json, read live - a revoke_tool a second ago is honored - and, inside
+    # jobs, only what the open jobs were opened with as well.
+    _tools = people.tools_for(message.author.id)
+    if _open:
+        _job_tools = {t for j in _open for t in (j.get("tools") or [])}
+        _tools = [t for t in _tools if t in _job_tools]
+        note = job_note(_open, _tools)
+        log(f"guest chat: {message.author.id} is in job "
+            f"{', '.join(j['id'] for j in _open)} - its note, not the outreach note")
     else:
         note = guest_note(bound, questions_in_front_of(message.author.id))
+    _info = {}
     try:
         files = []
         async with message.channel.typing():
             reply = await asyncio.to_thread(
-                guest.respond, message.author.id, text, log, content, note=note)
+                guest.respond, message.author.id, text, log, content, note=note,
+                tools=_tools, info=_info)
+        # The turn's searches count into every job it served (Stage 9 C) - the
+        # heads-up to Caz says how many searches a job took. Never costs the reply.
+        if _open and _info.get("queries"):
+            for j in _open:
+                try:
+                    jobs.add_searches(j["id"], _info["queries"])
+                except OSError as e:
+                    log(f"job {j['id']}: searches not counted ({e})")
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran
@@ -1870,6 +1942,50 @@ async def handle_guest_dm(message):
         await reply_in(message.channel,
                        f"That one failed on my end - {type(e).__name__}. It is logged, "
                        f"and it has not cost you a message.{blame}")
+        return
+
+    # Done detection (Stage 9 C, goal 6): AFTER the reply is out, so it never
+    # delays it. Outside the try above on purpose - a failure here must not refund
+    # a turn that happened or tell them it failed.
+    if _open:
+        try:
+            await close_done_jobs(message, typed or text, reply)
+        except Exception:  # noqa: BLE001 - a judge problem leaves the jobs open
+            log(f"job done check failed for {message.author.id}:\n"
+                f"{traceback.format_exc()}")
+
+
+async def close_done_jobs(message, said, reply):
+    """Did their message say one or more of their open jobs are done? (INTENT 61,
+    Stage 9 C, goal 6: "Benham should be able to determine the completion state of
+    an ask".)
+
+    The jobs are READ AGAIN here, not reused from before the brain call: a
+    close_job or a quiet close in between wins, and the judge is only ever handed
+    jobs that are still open. guest/jobdone.judge says which ids are done - a clear
+    signal only - and code closes exactly those (jobs.close "them", the outcome
+    from their words). Then: if the brain's own reply did not already wrap up,
+    Benham's one friendly close line (jobclose.CLOSE_LINE, nothing about the
+    report - Caz's call 2); and one heads-up per closed job to Caz, now, through
+    the same advance_job beat the tick uses (so it is never sent twice)."""
+    uid = message.author.id
+    open_now = jobs.open_all_for(uid)
+    if not open_now:
+        return []
+    verdict = await asyncio.to_thread(jobdone.judge, uid, said, reply, open_now, log)
+    closed = []
+    for jid in verdict["done"]:
+        done = jobs.close(jid, "them", verdict["outcome"].get(jid) or "", "them")
+        if done is not None:
+            closed.append(done)
+            log(f"job {jid}: they said it's done - closed ({done['outcome'][:80]!r})")
+    if not closed:
+        return []
+    if not verdict["reply_closes"]:
+        await reply_in(message.channel, jobclose.CLOSE_LINE)
+    for job in closed:
+        await advance_job_beat(job["id"])
+    return closed
 
 
 @client.event
@@ -2462,6 +2578,90 @@ async def tick_conversations():
             except Exception:  # noqa: BLE001
                 log(f"conversation {conv['id']} could not even be banked:\n"
                     + traceback.format_exc())
+
+
+# One beat at a time across tick_jobs and the done path in handle_guest_dm, so the
+# same owed heads-up can never be sent twice by the two racing (advance_job
+# re-reads the job inside the lock and finds it already told).
+_job_beat_lock = asyncio.Lock()
+
+
+async def advance_job_beat(job_id):
+    """Run advance_job for one job as SYSTEM - it can only DM the job's own person
+    (the nudge) or Caz (the heads-up) - and return its result, or None if it
+    failed (logged). Every job beat goes through here."""
+    async with _job_beat_lock:
+        try:
+            res, _ = await capabilities.run(
+                client, log, "advance_job", {"job_id": job_id},
+                force=True, call_ctx=policy.CallContext.system())
+        except Exception as e:  # noqa: BLE001 - one bad job, not all of them
+            if _discord_unreachable(e):
+                log(f"job {job_id}: Discord unreachable ({type(e).__name__}: {e}) - "
+                    "still due, the next tick retries it")
+            else:
+                log(f"job {job_id}: beat failed ({type(e).__name__}: {e}) - the next "
+                    "tick retries it")
+            return None
+    log(f"job {job_id}: {res.get('status')}")
+    for card in (res or {}).get("cards") or []:
+        try:
+            await send_tool_card(job_id, card)
+        except Exception as e:  # noqa: BLE001 - a lost card leaves the tool as it is
+            log(f"job {job_id}: keep/remove card for {card.get('tool')} not sent "
+                f"({type(e).__name__}: {e}) - nothing changed")
+    return res
+
+
+TOOL_CARD_SECONDS = 24 * 3600   # a card can wait (decision 62); a restart kills it
+
+
+async def send_tool_card(job_id, card):
+    """One keep/remove card under a heads-up, in Caz's DM. `card` comes from
+    advance_job's result: {"tool", "user_id", "label"} for a tool the job used
+    that the person still holds."""
+    channel = await owner_dm_channel()
+    uid, tool, label = int(card["user_id"]), card["tool"], card["label"]
+    words = "web search" if tool == "web_search" else tool
+    text = (f"Keep {words} for **{label}**, or remove it?\n"
+            f"-# Remove takes it away from their next message; Keep leaves it. No "
+            f"answer = kept. Any time: `benham.py do revoke_tool who={uid} tool={tool}`")
+    owner_id = sorted(identity.OWNER_IDS)[0]
+
+    async def decide(keep, _uid=uid, _tool=tool, _channel=channel):
+        if keep:
+            log(f"job {job_id}: {_tool} KEPT for {_uid} by button")
+            return
+        try:
+            res, _ = await capabilities.run(
+                client, log, "revoke_tool", {"who": str(_uid), "tool": _tool},
+                actor_id=owner_id, force=True,
+                call_ctx=policy.CallContext.owner_dm(owner_id, channel_id=_channel.id))
+            log(f"job {job_id}: {_tool} REMOVED from {_uid} by button: {res}")
+        except capabilities.ActionError as e:
+            await reply_in(_channel, f"Couldn't remove it: {e}")
+
+    view = KeepToolView(decide, timeout=TOOL_CARD_SECONDS)
+    _views[("tool", job_id, tool)] = view
+    await send_with_view(channel, text, view)
+
+
+@tasks.loop(seconds=60)
+async def tick_jobs():
+    """Deliver the job beats that have come due (INTENT 61, Stage 9 C).
+
+    The tick_conversations shape: jobs.due() reads the stored stamps and says
+    which beat each job owes, and this only delivers, through advance_job as
+    SYSTEM. Nothing is held in memory, so a restart loses no deadline and no
+    owed heads-up - the next tick after boot picks them up.
+    """
+    try:
+        pending = jobs.due()
+    except Exception:  # noqa: BLE001 - a bad store must not kill the loop
+        log("job tick failed to read the store:\n" + traceback.format_exc())
+        return
+    for job, _beat in pending:
+        await advance_job_beat(job["id"])
 
 
 @tasks.loop(minutes=20)
