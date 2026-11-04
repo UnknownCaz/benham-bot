@@ -3872,7 +3872,8 @@ async def _list_jobs(ctx, p):
         row = {k: j.get(k) for k in ("id", "goal", "with", "tools", "state", "opened",
                                       "opened_by", "last_activity", "turns")}
         row["with_label"] = _job_label(j)
-        for k in ("closed", "closed_by", "outcome", "opener_message_id"):
+        for k in ("closed", "closed_by", "outcome", "opener_message_id",
+                  "searches", "nudged", "ended", "headsup"):   # + Stage 9 C
             if j.get(k) is not None:
                 row[k] = j[k]
         rows.append(row)

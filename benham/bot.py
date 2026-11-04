@@ -664,6 +664,9 @@ async def on_ready():
         tick_conversations.start()
     if not tick_jobs.is_running():
         tick_jobs.start()
+    _qh = jobs.quiet_seconds() / 3600
+    log(f"Jobs: tick ON (60 s) - {_qh:g} h quiet, one check-in; {_qh:g} h more, closed; "
+        f"{sum(1 for j in jobs.load().values() if jobs.is_open(j))} open now")
     # Only when the funnel is on: with no tracker configured every pass would
     # read an empty filing list forever, and a loop that can never do anything
     # is log noise standing in for a feature.

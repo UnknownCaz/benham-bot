@@ -944,6 +944,19 @@ check("...one heads-up per closed job", sorted(t.split("**")[1] for t in to_owne
       sorted([b["id"], c["id"]]))
 greset()
 
+section("list_jobs shows the Stage C fields when they exist")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = quiet_job(1, state="nudged", nudged=ago(0.5))
+jobs.add_searches(job["id"], ["q1", "q2"])
+jobs.close(job["id"], "them", "found it", "them")
+r, _ = go("list_jobs")
+row = r["jobs"][0]
+check("searches, nudged, ended, headsup on the row",
+      (row["searches"], bool(row["nudged"]), row["ended"], row["headsup"]),
+      (2, True, "them", "owed"))
+greset()
+
 section("guest.respond itself - the list can only take away")
 
 
