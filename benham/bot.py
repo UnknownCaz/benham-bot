@@ -884,6 +884,32 @@ class InviteView(ApprovalView):
         await self._click(interaction, False)
 
 
+class KeepToolView(ApprovalView):
+    """"Keep" / "Remove" on the card under a job's heads-up, one per borrowed
+    tool (INTENT 61, Stage 9 C, goal 8: "then I get prompted to have the tool
+    removed, or kept"). Same click handler, so the same owner check guards it.
+
+    The honest shape, rather than Approve/Deny: there is no pending action to
+    approve - keeping changes nothing. So the buttons say what they do. Remove
+    runs revoke_tool through capabilities.run as Caz from his DM, the tap being
+    his confirmation of a card that already names the person and the tool (the
+    fire_confirmed path); Keep runs nothing. No answer is a keep: silence never
+    takes a tool away, and the card says how to revoke later."""
+
+    NOTES = ("✅ kept", "🗑️ removed")
+
+    @discord.ui.button(label="Keep", style=discord.ButtonStyle.success)
+    async def approve(self, interaction, button):
+        await self._click(interaction, True)
+
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
+    async def deny(self, interaction, button):
+        await self._click(interaction, False)
+
+    async def on_timeout(self):
+        await self.deaden("no answer - kept as it is")
+
+
 # Live button views, so the typed-reply paths can retire them when they win the
 # race. Keys: ("pc", rid), ("confirm", token) and ("invite", channel_id).
 _views = {}
@@ -2529,7 +2555,46 @@ async def advance_job_beat(job_id):
                     "tick retries it")
             return None
     log(f"job {job_id}: {res.get('status')}")
+    for card in (res or {}).get("cards") or []:
+        try:
+            await send_tool_card(job_id, card)
+        except Exception as e:  # noqa: BLE001 - a lost card leaves the tool as it is
+            log(f"job {job_id}: keep/remove card for {card.get('tool')} not sent "
+                f"({type(e).__name__}: {e}) - nothing changed")
     return res
+
+
+TOOL_CARD_SECONDS = 24 * 3600   # a card can wait (decision 62); a restart kills it
+
+
+async def send_tool_card(job_id, card):
+    """One keep/remove card under a heads-up, in Caz's DM. `card` comes from
+    advance_job's result: {"tool", "user_id", "label"} for a tool the job used
+    that the person still holds."""
+    channel = await owner_dm_channel()
+    uid, tool, label = int(card["user_id"]), card["tool"], card["label"]
+    words = "web search" if tool == "web_search" else tool
+    text = (f"Keep {words} for **{label}**, or remove it?\n"
+            f"-# Remove takes it away from their next message; Keep leaves it. No "
+            f"answer = kept. Any time: `benham.py do revoke_tool who={uid} tool={tool}`")
+    owner_id = sorted(identity.OWNER_IDS)[0]
+
+    async def decide(keep, _uid=uid, _tool=tool, _channel=channel):
+        if keep:
+            log(f"job {job_id}: {_tool} KEPT for {_uid} by button")
+            return
+        try:
+            res, _ = await capabilities.run(
+                client, log, "revoke_tool", {"who": str(_uid), "tool": _tool},
+                actor_id=owner_id, force=True,
+                call_ctx=policy.CallContext.owner_dm(owner_id, channel_id=_channel.id))
+            log(f"job {job_id}: {_tool} REMOVED from {_uid} by button: {res}")
+        except capabilities.ActionError as e:
+            await reply_in(_channel, f"Couldn't remove it: {e}")
+
+    view = KeepToolView(decide, timeout=TOOL_CARD_SECONDS)
+    _views[("tool", job_id, tool)] = view
+    await send_with_view(channel, text, view)
 
 
 @tasks.loop(seconds=60)

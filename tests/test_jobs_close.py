@@ -72,6 +72,7 @@ class _Sent:
 class _DM:
     def __init__(self, owner):
         self.owner = owner
+        self.id = 7000 + owner.id % 1000
 
     async def send(self, content=None, files=None, view=None, **kw):
         DMS.append((self.owner.id, content))
@@ -568,12 +569,91 @@ want = ("Heads-up - I wrapped up **{id}** with **Big Like (@biglike, id {k})**.\
         "> Third line\n"
         "Tools it used: web search.").format(id=job["id"], k=KNOWN, g=GOAL)
 check("the heads-up, word for word: three lines at most, bullets stripped",
-      to_owner(), [want])
+      to_owner()[0], want)
 prompt = summ.calls[0]["messages"][0]["content"]
 check("the summary call is the cheap model, and sees the goal, the queries and the chat",
       (summ.calls[0]["model"], GOAL in prompt, "robot platformer ps2" in prompt,
        "it had a robot, ps2" in prompt), ("claude-haiku-4-5", True, True, True))
 check("...with no tool", "tools" in summ.calls[0], False)
+
+section("Under the heads-up: one keep/remove card per tool the job used")
+want_card = (f"Keep web search for **Big Like (@biglike, id {KNOWN})**, or remove it?\n"
+             "-# Remove takes it away from their next message; Keep leaves it. No answer "
+             f"= kept. Any time: `benham.py do revoke_tool who={KNOWN} tool=web_search`")
+check("a second DM to Caz, the card, word for word", to_owner()[1:], [want_card])
+check("...carrying the Keep / Remove buttons",
+      [(type(v).__name__, [c.label for c in v.children]) for _, _, v in VIEWS],
+      [("KeepToolView", ["Keep", "Remove"])])
+CARD = VIEWS[-1][2]
+
+
+class _Resp:
+    def __init__(self):
+        self.edited, self.sent = [], []
+
+    async def edit_message(self, content=None, view=None):
+        self.edited.append(content)
+
+    async def send_message(self, content=None, ephemeral=False):
+        self.sent.append(content)
+
+    async def defer(self):
+        pass
+
+
+class _Inter:
+    def __init__(self, uid, content="card"):
+        self.user = _GUser(uid, "clicker")
+        self.response = _Resp()
+        self.message = _Blk(content=content)
+
+
+async def click(view, uid, keep):
+    inter = _Inter(uid)
+    await view._click(inter, keep)
+    return inter
+
+i = asyncio.run(click(CARD, FRIEND, False))
+check("a click by anyone but Caz does nothing and is refused privately",
+      (people.tools_for(KNOWN), bool(i.response.sent), CARD.decided), (["web_search"], True,
+                                                                       False))
+i = asyncio.run(click(CARD, OWNER, False))
+check("Caz taps Remove: revoke_tool runs - web search gone from their next message",
+      people.tools_for(KNOWN), [])
+check("...the card says removed and goes dead", (i.response.edited, CARD.decided),
+      (["card\n\n_🗑️ removed_"], True))
+asyncio.run(click(CARD, OWNER, True))
+check("a second tap on a dead card changes nothing", people.tools_for(KNOWN), [])
+
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp()})
+jobs.add_searches(job["id"], ["q"])
+jobs.close(job["id"], "hand", "done", "cli")
+guest._client = _Model("Found: X")
+tick()
+asyncio.run(click(VIEWS[-1][2], OWNER, True))
+check("Caz taps Keep: nothing changes", people.tools_for(KNOWN), ["web_search"])
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp()})
+jobs.close(job["id"], "hand", "done", "cli")
+tick()
+check("a job that never searched: the heads-up, and no card", (len(to_owner()), VIEWS),
+      (1, []))
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp()})
+jobs.add_searches(job["id"], ["q"])
+people.set_tools(KNOWN, [])
+jobs.close(job["id"], "hand", "done", "cli")
+guest._client = _Model("Found: X")
+tick()
+check("a tool already revoked by the close: no card for it", (len(to_owner()), VIEWS),
+      (1, []))
 
 
 class _Boom:

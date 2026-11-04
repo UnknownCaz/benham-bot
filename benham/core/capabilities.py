@@ -3945,8 +3945,16 @@ async def _job_tell(ctx, job):
     jobs.update(job["id"], headsup="sent", headsup_message_id=sent.id,
                 log={"event": "told_caz", "message_id": sent.id})
     ctx.log(f"advance_job: {job['id']} heads-up sent to the owner ({sent.id})")
+    # Goal 8: one keep/remove card per tool the job USED beyond chat that the
+    # person still holds. bot.py draws them in the owner's DM (buttons cannot
+    # live in a capability); this only names them, from the record.
+    cards = []
+    if job.get("with") != jobs.CAZ:
+        held = people.tools_for(job["with"])
+        cards = [{"tool": t, "user_id": int(job["with"]), "label": label}
+                 for t in jobclose.tools_used(job) if t in held]
     return {"status": "told", "job_id": job["id"], "message_id": sent.id,
-            "text": text}
+            "text": text, "cards": cards}
 
 
 # --- Borrowed tools (INTENT decision 61, Stage 9 C; goal 4 of the plan) ----------
