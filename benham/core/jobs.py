@@ -50,9 +50,11 @@ bot process.
 
 import os
 import threading
+from datetime import datetime, timezone
 
 from benham import paths
 from benham.core import eventtime
+from benham.core import identity
 from benham.core import jsonio
 
 FILE_NAME = "jobs.json"
@@ -221,28 +223,105 @@ def close(job_id, ended, outcome, by, face=None):
     return job
 
 
-def due(face=None):
-    """[(job, beat)] for every job with a beat owed now, oldest first. The
-    decisions live HERE and bot.tick_jobs only delivers (the tick_conversations
-    shape). Nothing is in memory: every deadline is derived from stamps on disk,
-    so a restart changes nothing.
+QUIET_HOURS_DEFAULT = 24.0
 
-    beat "tell": a closed job whose heads-up to Caz is owed."""
+
+def quiet_seconds(face=None):
+    """How long a job may sit quiet before its next beat: `guest.job_quiet_hours`
+    in control.json (default 24 - Caz's call 1, "1 day nudge, 1 day close"), read
+    the way the other guest knobs are read (identity.guest_config), so a
+    rehearsal can shorten it. A value that is not a positive number is the
+    default, never zero - a zero would nudge on the first tick."""
+    try:
+        hours = float(identity.guest_config(face).get("job_quiet_hours",
+                                                      QUIET_HOURS_DEFAULT))
+    except (TypeError, ValueError):
+        hours = QUIET_HOURS_DEFAULT
+    if not hours > 0:
+        hours = QUIET_HOURS_DEFAULT
+    return hours * 3600.0
+
+
+def _when(text):
+    try:
+        d = datetime.fromisoformat(str(text))
+    except (TypeError, ValueError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def due(now=None, face=None):
+    """[(job, beat)] for every job with a beat owed at `now`, oldest first. The
+    decisions live HERE and bot.tick_jobs only delivers (the tick_conversations
+    shape). Nothing is in memory: every deadline is derived from stamps on disk
+    (last_activity, nudged), so a restart changes nothing.
+
+    beat "tell":  a closed job whose heads-up to Caz is owed.
+    beat "nudge": an OPEN job with a person, quiet for quiet_seconds() since
+                  their last message (or since it opened) - Benham asks once.
+    beat "close": a NUDGED job still quiet for quiet_seconds() since the later of
+                  the nudge and their last message - it closes, "went quiet".
+
+    ONE nudge per job, ever: a reply after the nudge keeps the job `nudged` and
+    restarts the close clock, and if it then goes quiet again it closes without a
+    second ask (Caz's "asks once"). A job `with: caz` is Benham's own: no nudge
+    and no auto-close, only close_job closes it.
+
+    Several open jobs with one person: each has its own clock, but a message
+    from them touches every one of them (bot.handle_guest_dm), so while they talk
+    the clocks move together and quiet is per person in practice. A job opened
+    after the person went quiet starts its own clock from its opening; it does
+    not revive an older job's."""
+    now = now or eventtime.now()
+    quiet = quiet_seconds(face)
     out = []
     for job in load(face).values():
-        b = beat(job)
+        b = beat(job, now, quiet)
         if b is not None:
             out.append((job, b))
     return out
 
 
-def beat(job):
-    """The beat one job owes now, or None. See due()."""
+def beat(job, now=None, quiet=None):
+    """The beat one job owes at `now`, or None. See due()."""
     if not job:
         return None
-    if job.get("state") == "closed" and job.get("headsup") == "owed":
-        return "tell"
+    if job.get("state") == "closed":
+        return "tell" if job.get("headsup") == "owed" else None
+    if job.get("with") == CAZ:
+        return None
+    now = now or eventtime.now()
+    quiet = quiet_seconds() if quiet is None else quiet
+    last = _when(job.get("last_activity")) or _when(job.get("opened"))
+    if last is None:
+        return None              # no stamp to measure from: never guessed
+    if job.get("state") == "open":
+        return "nudge" if (now - last).total_seconds() >= quiet else None
+    if job.get("state") == "nudged":
+        since = max(last, _when(job.get("nudged")) or last)
+        return "close" if (now - since).total_seconds() >= quiet else None
     return None
+
+
+def mark_nudged(job_id, message_id, text, face=None):
+    """The one nudge went out: state nudged, its stamp (the close clock starts
+    from it), and the message in the log. Returns the job, or None if it is no
+    longer open."""
+    n = _num(job_id)
+    if n is None:
+        return None
+    with _lock:
+        p = path(face)
+        current = _clean(jsonio.read_json(p, default={}))
+        job = current.get(f"j{n}")
+        if job is None or job.get("state") != "open":
+            return None
+        now = stamp()
+        job.update({"state": "nudged", "nudged": now})
+        job["log"].append({"at": now, "event": "nudged", "message_id": message_id,
+                           "text": text})
+        _write(current, p)
+    return job
 
 
 def add_searches(job_id, queries, face=None):

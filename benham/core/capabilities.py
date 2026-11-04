@@ -37,6 +37,7 @@ import discord
 from benham.core import eventtime
 from benham.core import fitimage
 from benham.core import identity
+from benham.core import jobclose
 from benham.core import jobs
 from benham.core import lookimage
 from benham.core import looksound
@@ -3761,7 +3762,10 @@ def _job_label(job):
                            "holds; only 'web_search' exists"},
          "opener": {"type": "str",
                     "desc": "The first DM, in this bot's voice. Default: a short line "
-                            "quoting the goal. Not for 'caz'."}},
+                            "quoting the goal. Not for 'caz'."},
+         "nudge": {"type": "str",
+                   "desc": "The one check-in sent if they go quiet for a day. "
+                           "Default: a short 'did it get sorted?' line. Not for 'caz'."}},
         outward=True, always_confirm=True, taints=True)
 async def _open_job(ctx, p):
     goal = str(p["goal"]).strip()
@@ -3770,9 +3774,12 @@ async def _open_job(ctx, p):
     who, label = _job_who(p["with"])
     tools = _job_tools(p.get("tools"), who, label)
     opener = str(p.get("opener") or "").strip() or None
+    nudge = str(p.get("nudge") or "").strip() or None
     person = who != jobs.CAZ
     if not person and opener:
         raise ActionError("A job with Caz sends nothing, so it has no opener.")
+    if not person and nudge:
+        raise ActionError("A job with Caz is never nudged, so it has no check-in line.")
     # Several open jobs per person (Caz's call, 2026-11-03 chat). The one thing
     # refused is the SAME goal twice, still open with the same person - that is a
     # double tap, not a second job.
@@ -3803,7 +3810,16 @@ async def _open_job(ctx, p):
             lines.append("While it's open, their messages reach the guest chat with "
                          "this goal in its note - not through outreach; nothing is "
                          "recorded as an answer or passed on.")
-        lines.append("Open until close_job.")
+        if person:
+            hours = jobs.quiet_seconds() / 3600
+            span = "a day" if hours == 24 else f"{hours:g} h"
+            lines.append(f"If they go quiet for {span}, one check-in:")
+            lines.append(f"> {jobclose.nudge(label, {'nudge': nudge})}")
+            lines.append(f"Another {span} of quiet closes it (\"went quiet\"); so does "
+                         "them saying they're sorted, or close_job. You get a heads-up "
+                         "in your DM on every close.")
+        else:
+            lines.append("Open until close_job; you get a heads-up when it closes.")
         shown = goal if len(goal) <= 80 else goal[:77] + "..."
         return {"summary": (f"Open a job with **{label}**: {shown}" if person
                             else f"Open a job for **Caz**: {shown}"),
@@ -3812,7 +3828,7 @@ async def _open_job(ctx, p):
     by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
     job = jobs.create({"goal": goal, "with": str(who), "tools": tools, "state": "open",
                        "opened": now, "opened_by": by, "last_activity": now,
-                       "opener": opener,
+                       "opener": opener, "nudge": nudge,
                        "log": [{"at": now, "event": "opened", "by": by}]})
     out = {"status": "job_opened", "job_id": job["id"], "with": job["with"],
            "with_label": label, "goal": goal, "tools": tools, "opener_sent": False}
@@ -3910,14 +3926,18 @@ async def _close_job(ctx, p):
 
 
 @action("advance_job", identity.SPEAK,
-        "Move one job to the beat it owes now: the heads-up DM to Caz that a closed "
-        "job owes him. If nothing is owed, this does nothing and says so. Takes only "
-        "a job id; the recipient and the words come from the stored job.",
+        "Move one job to the beat it owes now: after a quiet day the ONE check-in to "
+        "the person it is with; after another quiet day the close ('went quiet'); and "
+        "the heads-up DM to Caz that every closed job owes him. If nothing is due, "
+        "this does nothing and says so. Takes only a job id; the recipient and the "
+        "words come from the stored job.",
         {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"}},
         # SYSTEM, the advance_conversation shape: bot.tick_jobs runs this with no
-        # human behind it, so it can choose nothing. The heads-up only ever goes to
-        # the owner (sorted OWNER_IDS, as notify_owner); the words are built from
-        # the job record by jobclose.headsup.
+        # human behind it, so it can choose nothing. The nudge only ever goes to the
+        # person the job is WITH (a known person Caz opened it with, on a card), and
+        # at most once per job; the heads-up only ever goes to the owner (sorted
+        # OWNER_IDS, as notify_owner); the words come from the job record
+        # (jobclose.nudge / jobclose.headsup).
         origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
         outward=True)
 async def _advance_job(ctx, p):
@@ -3927,13 +3947,46 @@ async def _advance_job(ctx, p):
     beat = jobs.beat(job)
     if beat is None:
         return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+    if beat == "nudge":
+        return await _job_nudge(ctx, job)
+    if beat == "close":
+        done = jobs.close(job["id"], "quiet", "went quiet", "quiet")
+        if done is None:
+            return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+        ctx.log(f"advance_job: {job['id']} went quiet - closed, heads-up owed")
+        job = done
     return await _job_tell(ctx, job)
+
+
+async def _job_nudge(ctx, job):
+    """The one check-in after a quiet day, to the person the job is WITH - the
+    recipient comes from the record, the words from the job (or jobclose.nudge).
+    A DM Discord refuses closes the job (nobody to wait on), and Caz hears it in
+    the heads-up; Discord being down raises, so the next tick retries."""
+    uid = int(job["with"])
+    label = _job_label(job)
+    text = jobclose.nudge(label, job)
+    try:
+        user = await ctx.user(uid)
+        ch = user.dm_channel or await user.create_dm()
+        sent = await ch.send(text)
+    except (ActionError, discord.Forbidden, policy.OutwardBlocked) as e:
+        reason = getattr(getattr(e, "decision", None), "reason", None) or str(e)
+        done = jobs.close(job["id"], "quiet", f"went quiet; the check-in could not be "
+                          f"sent ({reason})", "quiet")
+        ctx.log(f"advance_job: {job['id']} nudge to {uid} failed ({reason}) - closed")
+        if done is None:
+            return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+        return await _job_tell(ctx, done)
+    jobs.mark_nudged(job["id"], sent.id, text)
+    ctx.log(f"advance_job: {job['id']} quiet - nudged {uid} ({sent.id})")
+    return {"status": "nudged", "job_id": job["id"], "user_id": uid,
+            "message_id": sent.id, "text": text}
 
 
 async def _job_tell(ctx, job):
     """The heads-up to Caz for a closed job, then mark it sent. The recipient is
     the owner, always; nothing here can name another."""
-    from benham.core import jobclose
     from benham.guest import jobdone
     label = _job_label(job)
     found = await asyncio.to_thread(jobdone.summarize, job, ctx.log)

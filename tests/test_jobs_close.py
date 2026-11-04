@@ -75,6 +75,10 @@ class _DM:
         self.id = 7000 + owner.id % 1000
 
     async def send(self, content=None, files=None, view=None, **kw):
+        if self.owner.id in REFUSE:
+            import discord
+            raise discord.Forbidden(_Blk(status=403, reason="Forbidden"),
+                                    "Cannot send messages to this user")
         DMS.append((self.owner.id, content))
         if view is not None:
             VIEWS.append((self.owner.id, content, view))
@@ -103,6 +107,12 @@ class _Client:
 
 
 DMS, VIEWS = [], []
+class _Blk:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+REFUSE = set()
 CLIENT = _Client([_U(KNOWN, "biglike"), _U(FRIEND, "doomlike"), _U(FRIEND_2, "other"),
                   _U(OWNER, "caz")])
 
@@ -489,6 +499,7 @@ check("no open job: nothing is counted anywhere",
 greset()
 
 bot.client = CLIENT     # advance_job_beat runs capabilities.run on the bot's client
+CLIENT.user = _U(BOT_ID, "Benham")   # on_message reads client.user
 
 
 def tick():
@@ -674,6 +685,125 @@ tick()
 check("a summary that fails still sends the heads-up, saying so",
       "(I couldn't summarize it - RuntimeError" in (to_owner() or [""])[0], True)
 check("...and a job with Caz says 'with you'", "with you." in (to_owner() or [""])[0], True)
+greset()
+
+from datetime import timedelta  # noqa: E402
+
+from benham.core import eventtime  # noqa: E402
+
+
+def ago(hours):
+    return (eventtime.now() - timedelta(hours=hours)).astimezone(
+        eventtime.DETROIT).isoformat(timespec="seconds")
+
+
+def quiet_job(hours, **extra):
+    rec = {"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+           "opened": ago(hours + 1), "opened_by": "caz", "last_activity": ago(hours)}
+    rec.update(extra)
+    return jobs.create(rec)
+
+
+section("Quiet timers - one day, Benham asks once; another day, it closes")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+check("the default quiet span is one day", jobs.quiet_seconds(), 24 * 3600.0)
+job = quiet_job(23)
+check("quiet 23 h: nothing due", jobs.due(), [])
+tick()
+check("...and the tick sends nothing", DMS, [])
+jobs.update(job["id"], last_activity=ago(25))
+check("quiet 25 h: the nudge is due", [b for _, b in jobs.due()], ["nudge"])
+tick()
+want_nudge = "Hey Big Like - checking back in on this one. Did it get sorted, or want me to keep going?"
+check("the tick sends ONE check-in, to them, word for word", DMS, [(KNOWN, want_nudge)])
+j = jobs.get(job["id"])
+check("the job is nudged, stamped, the nudge logged",
+      (j["state"], bool(j["nudged"]), j["log"][-1]["event"], j["log"][-1]["text"]),
+      ("nudged", True, "nudged", want_nudge))
+check("nudged still counts as open - their chat keeps the job's note",
+      jobs.open_for(KNOWN)["id"], job["id"])
+tick()
+check("the next tick: nothing (the close clock runs from the nudge)", len(DMS), 1)
+jobs.update(job["id"], nudged=ago(23))
+check("23 h after the nudge: nothing due", jobs.due(), [])
+jobs.update(job["id"], nudged=ago(25))
+check("25 h after the nudge, still quiet: the close is due", [b for _, b in jobs.due()],
+      ["close"])
+guest._client = _Model("never called")
+tick()
+j = jobs.get(job["id"])
+check("closed 'went quiet' by the timer, heads-up sent",
+      (j["state"], j["ended"], j["outcome"], j["closed_by"], j["headsup"]),
+      ("closed", "quiet", "went quiet", "quiet", "sent"))
+want = ("Heads-up - I wrapped up **{id}** with **Big Like (@biglike, id {k})**.\n"
+        "You asked: \"{g}\"\n"
+        "How it ended: it went quiet - I checked in once and heard nothing back for "
+        "another day.\n"
+        "What I did: 0 messages from them, no searches.\n"
+        "What I found: nothing searched.\n"
+        "Tools it used: none beyond chat.").format(id=job["id"], k=KNOWN, g=GOAL)
+check("the heads-up to Caz, word for word", to_owner(), [want])
+check("nothing more to them - the guest hears nothing about the report",
+      [c for u, c in DMS if u == KNOWN], [want_nudge])
+
+section("A reply after the nudge restarts the clock - and there is never a second ask")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = quiet_job(30, state="nudged", nudged=ago(26))
+deliver("sorry was away, still looking", uid=KNOWN)
+check("their message moved last_activity: nothing due", jobs.due(), [])
+jobs.update(job["id"], last_activity=ago(25))
+check("quiet again for a day after replying: CLOSE, not a second nudge",
+      [b for _, b in jobs.due()], ["close"])
+greset()
+
+section("Jobs with Caz are never nudged or auto-closed; the knob shortens the day")
+greset()
+jobs.create({"goal": "mine", "with": "caz", "opened": ago(100), "last_activity": ago(100)})
+check("a caz job 100 h quiet: nothing due", jobs.due(), [])
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = quiet_job(0.6)
+saved_guest = identity.GUEST
+identity.GUEST = {**saved_guest, "job_quiet_hours": 0.5}
+check("guest.job_quiet_hours 0.5: half an hour", jobs.quiet_seconds(), 1800.0)
+check("...so 36 min of quiet is due", [b for _, b in jobs.due()], ["nudge"])
+for bad in (0, -3, "soon", None):
+    identity.GUEST = {**saved_guest, "job_quiet_hours": bad}
+    check(f"job_quiet_hours {bad!r} is the default, never zero", jobs.quiet_seconds(),
+          24 * 3600.0)
+identity.GUEST = saved_guest
+check("a job with no stamp at all is never guessed due",
+      jobs.beat({"id": "j9", "goal": "x", "with": str(KNOWN), "state": "open"}), None)
+greset()
+
+section("open_job carries an optional check-in line; a refused check-in closes the job")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+r, preview = go("open_job", {"goal": GOAL, "with": str(KNOWN)})
+check("the card shows the check-in it would send",
+      ("If they go quiet for a day, one check-in:" in preview["detail"],
+       f"> {want_nudge}" in preview["detail"]), (True, True))
+r, preview = go("open_job", {"goal": GOAL, "with": str(KNOWN), "nudge": "yo, any luck?"})
+check("a written one shows instead", "> yo, any luck?" in preview["detail"], True)
+check("a check-in line for a caz job is refused", "never nudged" in (refusal(
+    "open_job", {"goal": "x", "with": "caz", "nudge": "hi"}) or ""), True)
+r, _ = go("open_job", {"goal": GOAL, "with": str(KNOWN), "nudge": "yo, any luck?"},
+          force=True)
+jobs.update(r["job_id"], last_activity=ago(25))
+DMS.clear()
+tick()
+check("the job's own line is what goes out", DMS, [(KNOWN, "yo, any luck?")])
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = quiet_job(25)
+REFUSE.add(KNOWN)
+tick()
+REFUSE.clear()
+j = jobs.get(job["id"])
+check("Discord refuses the check-in: the job closes, and Caz hears why",
+      (j["state"], j["ended"], "could not be sent" in j["outcome"], len(to_owner())),
+      ("closed", "quiet", True, 1))
 greset()
 
 section("guest.respond itself - the list can only take away")
