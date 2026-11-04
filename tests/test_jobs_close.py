@@ -19,6 +19,13 @@ So, in this file:
   * a person may hold several open jobs (Caz's call, 2026-11-03 chat): one
     message touches every one, the note lists every open goal, and only the
     same goal twice is refused;
+  * a job counts its searches; every close owes Caz a heads-up, delivered once
+    by the real tick_jobs through advance_job, with a cheap summary of what was
+    found and one Keep / Remove card per tool the job used;
+  * quiet timers: a day of quiet, ONE check-in; another day, closed "went
+    quiet"; a caz job never; the day is guest.job_quiet_hours;
+  * done detection through the real bot.on_message: the judge names WHICH open
+    job(s) a message closes, a clear signal only, failing toward open.
 
 Fully offline: no Discord, no API.
 

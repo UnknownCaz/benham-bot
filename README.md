@@ -473,14 +473,38 @@ a copy in `state/look_backups/`); `list_people` shows both sources. From the she
 still a boot-time setting, as above.
 
 **Jobs (INTENT decisions 61 and 62, 2026-11-03).** A job is a goal in Caz's words, who it is
-with (a known person, or `caz`), the tools it may use (`web_search` only, for now) and a state,
-in `state/jobs.json`, read live like `people.json`. `open_job` is always confirmed; the card shows
-who, the goal, the tools and the exact opener. For a person the opener goes out as a plain DM -
-never through `outreach` or the conversations store - and while the job is open their messages
-reach the guest brain with the goal as its note (`bot.job_note`) instead of the outreach
-bound/waiting notes, so it keeps helping rather than recording an answer. For `caz` nothing is
-sent. `list_jobs` and `close_job` (outcome required, nothing sent) complete the set; from the
-shell, `python benham.py job list | open "<goal>" --with <who> | close <job_id> --outcome "..."`.
+with (a known person, or `caz`), the tools it may use (a subset of what that person holds) and a
+state, in `state/jobs.json`, read live like `people.json`. `open_job` is always confirmed; the card
+shows who, the goal, the tools, the exact opener and the one check-in it would send. For a person
+the opener goes out as a plain DM - never through `outreach` or the conversations store - and
+while the job is open their messages reach the guest brain with the goal as its note
+(`bot.job_note`) instead of the outreach bound/waiting notes, so it keeps helping rather than
+recording an answer. A person may hold several open jobs (Caz's call, 2026-11-03): each message
+touches all of them and the note lists every open goal; only the same goal twice is refused. For
+`caz` nothing is sent. From the shell, `python benham.py job list | open "<goal>" --with <who> |
+close <job_id> --outcome "..."`.
+
+**How a job closes, and what Caz hears (Stage 9 C).** Three ways, all through `jobs.close`:
+the person says they're sorted - after each reply a cheap judge call (`guest/jobdone.judge`,
+`guest.judge_model`, no tool) names which of their open jobs, if any, their message clearly
+closed, and Benham adds one friendly closing line if its reply did not already wrap up; they go
+quiet - after `guest.job_quiet_hours` (default 24) of quiet Benham checks in ONCE, and after
+another span of quiet the job closes "went quiet"; or `close_job` by hand. A job with `caz` is
+never nudged or auto-closed. Every close owes Caz a friendly heads-up in his DM - his goal, who,
+how it ended, messages and searches, a three-line summary of what was found, the tools used -
+and the guest hears nothing about it. `bot.tick_jobs` (every 60 s) delivers the check-ins, the
+quiet closes and owed heads-ups through `advance_job`, the one SYSTEM-reachable job verb, which
+can only DM the job's own person or Caz; every deadline comes from stamps on disk, so a restart
+loses nothing.
+
+**Borrowed tools, per person, per tool.** Every known person holds chat + web search unless
+`revoke_tool` took it away; `grant_tool` gives it back. Both are always-confirmed cards naming the
+person and the tool, and take effect on their next message. `web_search` is the only grantable
+tool, because the guest brain runs no client tools - anything else is refused by name. Under a
+heads-up, each tool the job used gets a card with **Keep** / **Remove** buttons: Remove runs
+`revoke_tool`, Keep (or no answer) changes nothing. Granting a guest anything beyond web search
+would be a client tool through `capabilities.run` with the guest origin - a separate, later stage,
+not built.
 
 **The guest model and its budget.** `guest.model` in `control.json` picks the model; with no
 line there it is `claude-opus-5-5` (Caz's call, 2026-11-03: Opus for every guest chat).
