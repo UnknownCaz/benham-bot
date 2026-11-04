@@ -3747,7 +3747,8 @@ def _job_label(job):
         "chat with the goal in its note - it keeps helping them until they're sorted, "
         "and nothing they say is recorded as an answer or passed on. With 'caz', "
         "nothing is sent: the job is this bot's own to run and come back to him on. "
-        "One open job per person. Tools: only what the person holds (web_search "
+        "A person may have several open jobs; the same goal twice is refused. "
+        "Tools: only what the person holds (web_search "
         "unless revoke_tool took it; the default is all they hold). The preview "
         "shows who, the goal, the tools and the exact opener. Always previewed and "
         "confirmed; close_job ends it.",
@@ -3772,16 +3773,26 @@ async def _open_job(ctx, p):
     person = who != jobs.CAZ
     if not person and opener:
         raise ActionError("A job with Caz sends nothing, so it has no opener.")
+    # Several open jobs per person (Caz's call, 2026-11-03 chat). The one thing
+    # refused is the SAME goal twice, still open with the same person - that is a
+    # double tap, not a second job.
+    others = [j for j in jobs.load().values()
+              if j["with"] == str(who) and jobs.is_open(j)]
+    twin = next((j for j in others if jobs.same_goal(j["goal"], goal)), None)
+    if twin is not None:
+        raise ActionError(f"{label} already has that job open, {twin['id']}: "
+                          f"\"{twin['goal'][:120]}\". close_job it first, or word the "
+                          "new one differently.")
     if person:
-        had = jobs.open_for(who)
-        if had is not None:
-            raise ActionError(f"{label} already has an open job, {had['id']}: "
-                              f"\"{had['goal'][:120]}\". close_job it first.")
         opener = opener or _default_opener(label, goal)
     if ctx.dry_run:
         lines = [f"Goal (Caz's words): {goal}"]
         if person:
             lines.append(f"With: {label}")
+            if others:
+                lines.append(f"Also open with them: "
+                             + "; ".join(f"{j['id']} \"{j['goal'][:80]}\"" for j in others)
+                             + " - their chat will carry every open goal.")
         else:
             lines.append("With: Caz - no DM goes out; the job is "
                          f"{_ME}'s own to run and come back to you on.")

@@ -16,8 +16,14 @@ conversation: open_job sends a plain DM, and while the job is open bot.py hands 
 guest brain the GOAL (job_note), not the bound/waiting note.
 
 READ ON EVERY USE, like people.py: no cache, no import-time snapshot. bot.py asks
-open_for() on every guest DM, so a job opened one second ago shapes the very next
-reply, and a closed one stops shaping it.
+open_all_for() on every guest DM, so a job opened one second ago shapes the very
+next reply, and a closed one stops shaping it.
+
+SEVERAL AT ONCE (Stage C, Caz's call 2026-11-03 in chat: "Call 1: allow several
+open jobs per person"). Stage B allowed one open job per person; that is lifted. A
+message from the person touches EVERY open job of theirs, the brain's note lists
+every open goal, and done detection says which one(s) it closed. Only the same
+goal twice, still open with the same person, is refused (same_goal).
 
     state/jobs.json   {"j<n>": {"id": "j<n>", "goal": "<Caz's words>",
                                 "with": "<user_id>" | "caz", "tools": ["web_search"],
@@ -114,15 +120,28 @@ def is_open(job):
     return bool(job) and job.get("state") in OPEN_STATES
 
 
-def open_for(user_id, face=None):
-    """The newest OPEN job with this person, or None. bot.py's question on every
-    guest DM. `caz` jobs are never a guest's, whatever is asked."""
+def open_all_for(user_id, face=None):
+    """Every OPEN job with this person, oldest first ([] if none). bot.py's
+    question on every guest DM since Stage C: a person may hold several open
+    jobs at once (Caz's call, 2026-11-03 chat: "Call 1: allow several open jobs
+    per person"). `caz` jobs are never a guest's, whatever is asked."""
     try:
         who = str(int(user_id))
     except (TypeError, ValueError):
-        return None
-    hits = [j for j in load(face).values() if j["with"] == who and is_open(j)]
+        return []
+    return [j for j in load(face).values() if j["with"] == who and is_open(j)]
+
+
+def open_for(user_id, face=None):
+    """The newest OPEN job with this person, or None (open_all_for's last)."""
+    hits = open_all_for(user_id, face)
     return hits[-1] if hits else None
+
+
+def same_goal(a, b):
+    """Two goals that say the same thing, ignoring case and spacing - the one
+    duplicate open_job refuses."""
+    return " ".join(str(a).split()).casefold() == " ".join(str(b).split()).casefold()
 
 
 def _write(current, p):

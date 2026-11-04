@@ -16,6 +16,9 @@ So, in this file:
     revoke one second ago is honored), narrowed to an open job's tools, and the
     job's note says what the turn really carries; open_job's tools are a subset
     of what the person holds;
+  * a person may hold several open jobs (Caz's call, 2026-11-03 chat): one
+    message touches every one, the note lists every open goal, and only the
+    same goal twice is refused;
 
 Fully offline: no Discord, no API.
 
@@ -408,6 +411,48 @@ deliver("ok")
 check("granted back: search again, and the note says web search",
       (BRAIN[-1]["tools"], "Tools you may use for it: web search" in BRAIN[-1]["note"]),
       (["web_search"], True))
+greset()
+
+section("Several open jobs per person (Caz's call, 2026-11-03 chat)")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+r1, _ = go("open_job", {"goal": GOAL, "with": str(KNOWN)}, force=True, owner_dm=True)
+r, preview = go("open_job", {"goal": "pick a mod for it", "with": str(KNOWN)})
+check("a second job's card names the one already open",
+      f"Also open with them: {r1['job_id']} \"{GOAL}\"" in preview["detail"], True)
+r2, _ = go("open_job", {"goal": "pick a mod for it", "with": str(KNOWN)}, force=True,
+           owner_dm=True)
+check("confirmed: two open jobs with one person, two openers sent",
+      ([j["id"] for j in jobs.open_all_for(KNOWN)], [d[0] for d in DMS]),
+      ([r1["job_id"], r2["job_id"]], [KNOWN, KNOWN]))
+check("the same goal a third time is refused, naming the job",
+      f"already has that job open, {r2['job_id']}" in (refusal(
+          "open_job", {"goal": "Pick a mod  for it", "with": str(KNOWN)}) or ""), True)
+r, _ = go("list_jobs", {"state": "open"})
+check("list_jobs shows both, newest first, same person",
+      [(x["id"], x["with"]) for x in r["jobs"]],
+      [(r2["job_id"], str(KNOWN)), (r1["job_id"], str(KNOWN))])
+check("open count 2", r["open"], 2)
+deliver("ok so here's what i remember", uid=KNOWN)
+both = [jobs.get(r1["job_id"]), jobs.get(r2["job_id"])]
+check("one message touches EVERY open job of theirs",
+      [j["turns"] for j in both], [1, 1])
+check("...and their last_activity moves together", both[0]["last_activity"],
+      both[1]["last_activity"])
+want = ("From Benham's side, not from them: Caz asked you to help them with these:\n"
+        f"1. {GOAL}\n2. pick a mod for it\nYou opened this chat about them. Tools you may "
+        "use for them: web search. Keep helping until they say they're sorted; don't "
+        "pass anything to Caz, don't say you recorded anything.")
+check("the note lists every open goal, one line each, opened order", BRAIN[-1]["note"], want)
+check("the log names both jobs", any(f"is in job {r1['job_id']}, {r2['job_id']}" in line
+                                     for line in LOG), True)
+jobs.update(r1["job_id"], state="closed")
+deliver("still here", uid=KNOWN)
+check("one closed: back to the single-job wording for the other",
+      BRAIN[-1]["note"].startswith("From Benham's side, not from them: Caz asked you to "
+                                   "help them with this: pick a mod for it."), True)
+check("...and only the open one is touched",
+      (jobs.get(r1["job_id"])["turns"], jobs.get(r2["job_id"])["turns"]), (1, 2))
 greset()
 
 section("guest.respond itself - the list can only take away")

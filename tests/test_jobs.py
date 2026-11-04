@@ -346,9 +346,11 @@ check("THE OUTREACH STORE WAS NOT TOUCHED - no conversation for them",
       conversations.all_conversations(counterparty=KNOWN), [])
 check("...nor for anyone", conversations.all_conversations(), [])
 check("open_for finds it - the guest note will see it", jobs.open_for(KNOWN)["id"], j["id"])
-check("a second open job with the same person is refused, naming the first",
-      f"already has an open job, {j['id']}" in (refusal(
-          "open_job", {"goal": "another", "with": str(KNOWN)}, force=True) or ""), True)
+check("the SAME goal again with the same person is refused, naming the first "
+      "(Stage C: several open jobs per person, but not the same one twice)",
+      f"already has that job open, {j['id']}" in (refusal(
+          "open_job", {"goal": "Find a  half-remembered GAME", "with": str(KNOWN)},
+          force=True) or ""), True)
 
 section("open_job with a person - a written opener, an @mention, tools")
 DMS.clear()

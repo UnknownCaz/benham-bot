@@ -1664,13 +1664,29 @@ def job_note(job, tools=None):
     `tools` (Stage 9 C) is what the turn will really carry - the job's tools
     narrowed by what the person holds now (people.tools_for), so a revoke_tool
     mid-job is told to the brain, not just enforced on it. None = the job's own.
+
+    SEVERAL JOBS (Stage C, Caz's call 2026-11-03 in chat: "allow several open jobs
+    per person"). `job` may be a LIST of this person's open jobs, oldest first;
+    the note then lists every goal, one line each, in opened order, with the same
+    closing sentence. One job (a dict, or a list of one) keeps the single-job
+    wording word for word. The turn's tools are one set for the whole turn - what
+    they hold, narrowed to the union of the open jobs' tools - so the note names
+    that one set.
     """
-    held = (job.get("tools") or []) if tools is None else tools
-    tools = ("web search" if "web_search" in held
+    jobs_ = list(job) if isinstance(job, (list, tuple)) else [job]
+    if tools is None:
+        tools = sorted({t for j in jobs_ for t in (j.get("tools") or [])})
+    words = ("web search" if "web_search" in tools
              else "none - just talk it through")
+    if len(jobs_) == 1:
+        return ("From Benham's side, not from them: Caz asked you to help them with "
+                f"this: {jobs_[0]['goal']}. You opened this chat about it. Tools you "
+                f"may use for it: {words}. Keep helping until they say they're "
+                "sorted; don't pass anything to Caz, don't say you recorded anything.")
+    goals = "\n".join(f"{i}. {j['goal']}" for i, j in enumerate(jobs_, 1))
     return ("From Benham's side, not from them: Caz asked you to help them with "
-            f"this: {job['goal']}. You opened this chat about it. Tools you may use "
-            f"for it: {tools}. Keep helping until they say they're sorted; don't "
+            f"these:\n{goals}\nYou opened this chat about them. Tools you may use "
+            f"for them: {words}. Keep helping until they say they're sorted; don't "
             "pass anything to Caz, don't say you recorded anything.")
 
 
@@ -1697,8 +1713,10 @@ async def handle_guest_dm(message):
     # An open JOB with this person (INTENT 61/62, Stage 9 B), read live: every
     # message from them while it is open is activity (Stage C's quiet timer reads
     # last_activity), and the job's note replaces the outreach notes below.
-    _job = jobs.open_for(message.author.id)
-    if _job is not None:
+    # Since Stage C a person may hold several open jobs (Caz's call 2026-11-03):
+    # a message touches EVERY one of them, so while they are talking all their
+    # jobs' clocks move together and quiet is per person in practice.
+    for _job in jobs.open_all_for(message.author.id):
         try:
             jobs.touch(_job["id"])
         except OSError as e:   # a stamp must never cost them their reply
@@ -1831,16 +1849,17 @@ async def handle_guest_dm(message):
     # fire for a message from someone with an open job. With no open job this is
     # the decision-51 path, unchanged. Read again here, not reused from the top:
     # a close_job between the two moments must win.
-    _job = jobs.open_for(message.author.id)
+    _open = jobs.open_all_for(message.author.id)
     # What this person may use on this turn (Stage 9 C): what they hold now in
     # people.json, read live - a revoke_tool a second ago is honored - and, inside
-    # a job, only what the job was opened with as well.
+    # jobs, only what the open jobs were opened with as well.
     _tools = people.tools_for(message.author.id)
-    if _job is not None:
-        _tools = [t for t in _tools if t in (_job.get("tools") or [])]
-        note = job_note(_job, _tools)
-        log(f"guest chat: {message.author.id} is in job {_job['id']} - its note, "
-            f"not the outreach note")
+    if _open:
+        _job_tools = {t for j in _open for t in (j.get("tools") or [])}
+        _tools = [t for t in _tools if t in _job_tools]
+        note = job_note(_open, _tools)
+        log(f"guest chat: {message.author.id} is in job "
+            f"{', '.join(j['id'] for j in _open)} - its note, not the outreach note")
     else:
         note = guest_note(bound, questions_in_front_of(message.author.id))
     try:
