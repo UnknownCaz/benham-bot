@@ -133,6 +133,8 @@ close after another (`guest.job_quiet_hours` 24), the heads-up to Caz's DM on ev
 `grant_tool` / `revoke_tool` per person per tool on cards, and web search is the only grantable tool - a client tool for a
 guest is a later stage, not this one. Several open jobs per person, Caz's call. The guest gets only the close line.
 Proven live in Testing only: the cards and state. Proven offline only: the heads-up text, the cards under it, the judge.
-**Owed:** the brain rehearsal (one `guest.respond` call with a fake id and a job note, read for a cut-off), then the
+**Brain rehearsal DONE 2026-11-03 20:01 local (the session, on the Mac):**
+one `guest.respond` call with an invented id and the job note, Opus 5.5, one web search, 1116 chars back, out=1397 tokens under the 2000 cap, no cut-off, no CUT_NOTICE; the reply guessed Mega Man X7 with three alternatives and ended by asking for more detail - helping, not relaying. Fake id forgotten after.
+**Owed:** the first-turn rehearsal in Testing through the real path (the opener needs a real Discord account, so a fake id cannot receive it - the brain half is the rehearsal above), then the
 required test above, then one friend Caz names on his yes. j2 (`with: caz`, "stage C rehearsal") is left open on the
 Mac: confirming its close sends Caz the first real heads-up, a good first human test once he says yes.

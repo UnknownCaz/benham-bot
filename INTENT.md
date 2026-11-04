@@ -1167,7 +1167,7 @@ tests, decision 26 deploys) before the next starts:
   skeleton) is a separate later stage, not built, because the guest lane's floor is no client tools. Live round trip in
   Testing only 19:49-19:50 local (open_job with=caz -> j2; an invented id added, tools revoked and granted on cards, `pc_task`
   refused in words, removed again); j2 left open on purpose, since confirming its close DMs Caz the first real heads-up.
-  The heads-up text and cards are proven offline only (`tests/test_jobs_close.py`). Session's note on his call 3: the judge
+  The heads-up text and cards are proven offline only (`tests/test_jobs_close.py`). **Brain rehearsal DONE 2026-11-03 20:01 local (the session, on the Mac):** one `guest.respond` call with an invented id and the job note, Opus 5.5, one web search, 1116 chars back, out=1397 tokens under the 2000 cap, no cut-off, no CUT_NOTICE; the reply guessed Mega Man X7 with three alternatives and ended by asking for more detail - helping, not relaying. Fake id forgotten after. Session's note on his call 3: the judge
   and the summary run on Haiku, not Opus; his "Opus 5.5 for everything" was read as the guest brain; flagged to him.
 - **Required test, not optional:** the first turn rehearsed in Testing with a fake guest id through the real
   path before any friend sees it; then one real run with a friend Caz names, watched live, on his yes.
