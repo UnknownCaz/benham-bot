@@ -293,9 +293,9 @@ check("with_label for caz", r["jobs"][0]["with_label"], "Caz")
 section("close_job - card, then closed, nothing sent")
 r, preview = go("close_job", {"job_id": "j1", "outcome": "rehearsal done"})
 check("the card names the job and who", preview["summary"], "Close job **j1** with **Caz**")
-check("...with the outcome and that nothing is sent",
+check("...with the outcome and that nothing is sent to them (Stage C: Caz gets a heads-up)",
       ("Outcome: rehearsal done" in preview["detail"],
-       "Nothing is sent to anyone." in preview["detail"]), (True, True))
+       "Nothing is sent to them. Caz gets the heads-up" in preview["detail"]), (True, True))
 check("the card closed nothing", jobs.get("j1")["state"], "open")
 r, _ = go("close_job", {"job_id": "1", "outcome": "rehearsal done"}, force=True)
 check("confirmed: closed (by '1' as well as 'j1')", (r["status"], jobs.get("j1")["state"]),

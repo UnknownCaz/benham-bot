@@ -487,6 +487,115 @@ check("no open job: nothing is counted anywhere",
       (jobs.get(a["id"])["searches"], jobs.get(b["id"])["searches"]), (3, 1))
 greset()
 
+bot.client = CLIENT     # advance_job_beat runs capabilities.run on the bot's client
+
+
+def tick():
+    """One pass of the real tick_jobs loop body."""
+    asyncio.run(bot.tick_jobs.coro())
+
+
+def to_owner():
+    return [c for uid, c in DMS if uid == OWNER]
+
+
+section("The heads-up to Caz - owed on close, delivered by the tick, once")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+old = jobs.create({"goal": "stage B rehearsal", "with": "caz", "state": "closed",
+                   "closed": jobs.stamp(), "outcome": "rehearsal done"})
+tick()
+check("a job closed before Stage C (no headsup flag) is never told about", DMS, [])
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": "2026-11-03T18:00:00-05:00", "opened_by": "caz",
+                   "last_activity": jobs.stamp()})
+r, preview = go("close_job", {"job_id": job["id"], "outcome": "found it on my own"})
+check("close_job's card says Caz gets the heads-up",
+      "Caz gets the heads-up in his DM within a minute" in preview["detail"], True)
+r, _ = go("close_job", {"job_id": job["id"], "outcome": "found it on my own"}, force=True,
+          owner_dm=True)
+j = jobs.get(job["id"])
+check("confirmed: closed by hand, heads-up OWED, nothing sent yet",
+      (r["status"], j["state"], j["ended"], j["headsup"], DMS),
+      ("job_closed", "closed", "hand", "owed", []))
+check("jobs.due() names the tell beat", [(x["id"], b) for x, b in jobs.due()],
+      [(job["id"], "tell")])
+guest._client = _Model("never called")
+tick()
+want = ("Heads-up - I wrapped up **{id}** with **Big Like (@biglike, id {k})**.\n"
+        "You asked: \"{g}\"\n"
+        "How it ended: closed by hand (caz) - found it on my own.\n"
+        "What I did: 0 messages from them, no searches.\n"
+        "What I found: nothing searched.\n"
+        "Tools it used: none beyond chat.").format(id=job["id"], k=KNOWN, g=GOAL)
+check("the tick sends exactly one DM, to Caz, word for word", to_owner(), [want])
+check("...and none to the person", [u for u, _ in DMS if u != OWNER], [])
+check("no summary call when no search ran", guest._client.calls, [])
+j = jobs.get(job["id"])
+check("marked sent, with its message id, logged",
+      (j["headsup"], bool(j["headsup_message_id"]), j["log"][-1]["event"]),
+      ("sent", True, "told_caz"))
+tick()
+check("the next tick sends nothing - told once", len(to_owner()), 1)
+r, _ = go("advance_job", {"job_id": job["id"]}, system=True)
+check("advance_job by hand on a told job: waiting, nothing sent",
+      (r["status"], len(to_owner())), ("waiting", 1))
+check("advance_job is SYSTEM-reachable (the timer) and owner-reachable, never a guest's",
+      (policy.authorize(capabilities.REGISTRY["advance_job"], CallContext.system()).allowed,
+       policy.authorize(capabilities.REGISTRY["advance_job"],
+                        CallContext.guest_dm(FRIEND)).allowed), (True, False))
+
+section("A searched job's heads-up carries a cheap summary of what was found")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp(), "opened_by": "caz", "last_activity": jobs.stamp()})
+guest._remember(guest._key(KNOWN), "it had a robot, ps2", "Could be Ratchet & Clank?")
+jobs.update(job["id"], turns=3)
+jobs.add_searches(job["id"], ["robot platformer ps2", "ps2 robot game 2003"])
+jobs.close(job["id"], "hand", "done", "cli")
+summ = _Model("- Ratchet & Clank (2002, PS2) was the match\n2. Also floated: Jak and Daxter"
+              "\nThird line\nFourth line dropped")
+guest._client = summ
+tick()
+want = ("Heads-up - I wrapped up **{id}** with **Big Like (@biglike, id {k})**.\n"
+        "You asked: \"{g}\"\n"
+        "How it ended: closed by hand (cli) - done.\n"
+        "What I did: 3 messages from them, 2 web searches.\n"
+        "What I found:\n"
+        "> Ratchet & Clank (2002, PS2) was the match\n"
+        "> Also floated: Jak and Daxter\n"
+        "> Third line\n"
+        "Tools it used: web search.").format(id=job["id"], k=KNOWN, g=GOAL)
+check("the heads-up, word for word: three lines at most, bullets stripped",
+      to_owner(), [want])
+prompt = summ.calls[0]["messages"][0]["content"]
+check("the summary call is the cheap model, and sees the goal, the queries and the chat",
+      (summ.calls[0]["model"], GOAL in prompt, "robot platformer ps2" in prompt,
+       "it had a robot, ps2" in prompt), ("claude-haiku-4-5", True, True, True))
+check("...with no tool", "tools" in summ.calls[0], False)
+
+
+class _Boom:
+    def __init__(self):
+        self.messages = self
+
+    def create(self, **kw):
+        raise RuntimeError("api down")
+
+
+greset()
+job = jobs.create({"goal": "x", "with": "caz", "tools": ["web_search"],
+                   "opened": jobs.stamp()})
+jobs.add_searches(job["id"], ["q"])
+jobs.close(job["id"], "hand", "done", "caz")
+guest._client = _Boom()
+tick()
+check("a summary that fails still sends the heads-up, saying so",
+      "(I couldn't summarize it - RuntimeError" in (to_owner() or [""])[0], True)
+check("...and a job with Caz says 'with you'", "with you." in (to_owner() or [""])[0], True)
+greset()
+
 section("guest.respond itself - the list can only take away")
 
 

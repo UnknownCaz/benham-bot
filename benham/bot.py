@@ -660,6 +660,8 @@ async def on_ready():
         poll_outbox.start()
     if not tick_conversations.is_running():
         tick_conversations.start()
+    if not tick_jobs.is_running():
+        tick_jobs.start()
     # Only when the funnel is on: with no tracker configured every pass would
     # read an empty filing list forever, and a loop that can never do anything
     # is log noise standing in for a feature.
@@ -2501,6 +2503,51 @@ async def tick_conversations():
             except Exception:  # noqa: BLE001
                 log(f"conversation {conv['id']} could not even be banked:\n"
                     + traceback.format_exc())
+
+
+# One beat at a time across tick_jobs and the done path in handle_guest_dm, so the
+# same owed heads-up can never be sent twice by the two racing (advance_job
+# re-reads the job inside the lock and finds it already told).
+_job_beat_lock = asyncio.Lock()
+
+
+async def advance_job_beat(job_id):
+    """Run advance_job for one job as SYSTEM - it can only DM the job's own person
+    (the nudge) or Caz (the heads-up) - and return its result, or None if it
+    failed (logged). Every job beat goes through here."""
+    async with _job_beat_lock:
+        try:
+            res, _ = await capabilities.run(
+                client, log, "advance_job", {"job_id": job_id},
+                force=True, call_ctx=policy.CallContext.system())
+        except Exception as e:  # noqa: BLE001 - one bad job, not all of them
+            if _discord_unreachable(e):
+                log(f"job {job_id}: Discord unreachable ({type(e).__name__}: {e}) - "
+                    "still due, the next tick retries it")
+            else:
+                log(f"job {job_id}: beat failed ({type(e).__name__}: {e}) - the next "
+                    "tick retries it")
+            return None
+    log(f"job {job_id}: {res.get('status')}")
+    return res
+
+
+@tasks.loop(seconds=60)
+async def tick_jobs():
+    """Deliver the job beats that have come due (INTENT 61, Stage 9 C).
+
+    The tick_conversations shape: jobs.due() reads the stored stamps and says
+    which beat each job owes, and this only delivers, through advance_job as
+    SYSTEM. Nothing is held in memory, so a restart loses no deadline and no
+    owed heads-up - the next tick after boot picks them up.
+    """
+    try:
+        pending = jobs.due()
+    except Exception:  # noqa: BLE001 - a bad store must not kill the loop
+        log("job tick failed to read the store:\n" + traceback.format_exc())
+        return
+    for job, _beat in pending:
+        await advance_job_beat(job["id"])
 
 
 @tasks.loop(minutes=20)

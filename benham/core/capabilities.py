@@ -3870,8 +3870,9 @@ async def _list_jobs(ctx, p):
 
 @action("close_job", identity.MANAGE,
         "Close an open job, with its outcome in a few words. Nothing is sent to "
-        "anyone; from their next message the person it was with gets the ordinary "
-        "guest chat again. Always previewed and confirmed.",
+        "the person; from their next message they get the ordinary guest chat "
+        "again (or their other open jobs). Caz gets the heads-up in his DM within "
+        "a minute, as for every close. Always previewed and confirmed.",
         {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"},
          "outcome": {"type": "str", "required": True,
                      "desc": "How it ended, a few words"}},
@@ -3893,18 +3894,59 @@ async def _close_job(ctx, p):
                  f"Opened {job.get('opened') or '?'} by {job.get('opened_by') or '?'}; "
                  f"{job.get('turns') or 0} message(s) from them since; last activity "
                  f"{job.get('last_activity') or '?'}.",
-                 "Nothing is sent to anyone."]
+                 "Nothing is sent to them. Caz gets the heads-up in his DM within a "
+                 "minute (what it was, what was done and found, the tools it used)."]
         return {"summary": f"Close job **{job['id']}** with **{label}**",
                 "detail": "\n".join(lines)}
     by = "caz" if identity.is_owner(ctx.actor_id) else "cli"
-    now = jobs.stamp()
-    done = jobs.update(job["id"], state="closed", closed=now, closed_by=by,
-                       outcome=outcome, log={"event": "closed", "by": by,
-                                             "outcome": outcome})
-    ctx.log(f"close_job: {job['id']} closed by {by}: {outcome[:120]!r}")
+    done = jobs.close(job["id"], "hand", outcome, by)
+    if done is None:
+        raise ActionError(f"Job {job['id']} closed some other way just now - "
+                          "list_jobs shows how.")
+    ctx.log(f"close_job: {job['id']} closed by {by}: {outcome[:120]!r} - heads-up owed")
     return {"status": "job_closed", "job_id": job["id"], "with": job["with"],
             "with_label": label, "goal": job["goal"], "outcome": outcome,
-            "closed": done.get("closed") if done else now, "closed_by": by}
+            "closed": done["closed"], "closed_by": by, "headsup": "owed"}
+
+
+@action("advance_job", identity.SPEAK,
+        "Move one job to the beat it owes now: the heads-up DM to Caz that a closed "
+        "job owes him. If nothing is owed, this does nothing and says so. Takes only "
+        "a job id; the recipient and the words come from the stored job.",
+        {"job_id": {"type": "str", "required": True, "desc": "The job's id, e.g. j3"}},
+        # SYSTEM, the advance_conversation shape: bot.tick_jobs runs this with no
+        # human behind it, so it can choose nothing. The heads-up only ever goes to
+        # the owner (sorted OWNER_IDS, as notify_owner); the words are built from
+        # the job record by jobclose.headsup.
+        origins=policy.DEFAULT_ORIGINS | {policy.Origin.SYSTEM},
+        outward=True)
+async def _advance_job(ctx, p):
+    job = jobs.get(p["job_id"])
+    if job is None:
+        raise ActionError(f"No job {str(p['job_id']).strip()!r} - list_jobs shows them.")
+    beat = jobs.beat(job)
+    if beat is None:
+        return {"status": "waiting", "job_id": job["id"], "state": job["state"]}
+    return await _job_tell(ctx, job)
+
+
+async def _job_tell(ctx, job):
+    """The heads-up to Caz for a closed job, then mark it sent. The recipient is
+    the owner, always; nothing here can name another."""
+    from benham.core import jobclose
+    from benham.guest import jobdone
+    label = _job_label(job)
+    found = await asyncio.to_thread(jobdone.summarize, job, ctx.log)
+    text = jobclose.headsup(job, label, found)
+    owner_id = sorted(identity.OWNER_IDS)[0]
+    user = await ctx.user(owner_id)
+    ch = user.dm_channel or await user.create_dm()
+    sent = await ch.send(text[:1990])
+    jobs.update(job["id"], headsup="sent", headsup_message_id=sent.id,
+                log={"event": "told_caz", "message_id": sent.id})
+    ctx.log(f"advance_job: {job['id']} heads-up sent to the owner ({sent.id})")
+    return {"status": "told", "job_id": job["id"], "message_id": sent.id,
+            "text": text}
 
 
 # --- Borrowed tools (INTENT decision 61, Stage 9 C; goal 4 of the plan) ----------

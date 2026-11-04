@@ -33,7 +33,10 @@ goal twice, still open with the same person, is refused (same_goal).
                                 "last_activity": "<ISO>", "turns": <int>,
                                 "opener": "<the text sent>" | None,
                                 "log": [{"at": ..., "event": ..., ...}],
-                                ...close fields}}
+                                "searches": <int>,            # Stage C
+                                ...close fields: closed, closed_by, outcome,
+                                "ended": "them" | "quiet" | "hand",
+                                "headsup": "owed" | "sent"}}  # Stage C
 
 `nudged` is Stage C's (quiet one day, asked once); it counts as open here so the
 store needs no change when Stage C starts writing it. Jobs are never deleted -
@@ -182,6 +185,64 @@ def update(job_id, face=None, log=None, **fields):
             job["log"].append({"at": stamp(), **log})
         _write(current, p)
     return job
+
+
+ENDED = ("them", "quiet", "hand")   # they said done / the quiet timer / close_job
+
+
+def close(job_id, ended, outcome, by, face=None):
+    """Close an open job and mark the heads-up to Caz OWED (Stage 9 C, goal 7).
+
+    Every close that should reach Caz goes through here - the person said they're
+    done (`ended` "them"), the quiet timer ran out ("quiet"), or close_job by hand
+    ("hand") - so the heads-up can never be skipped by one path forgetting it. The
+    heads-up itself is DELIVERED by bot.tick_jobs through advance_job, read off
+    this flag: a restart between the close and the send loses nothing, it just
+    goes on the next beat. Jobs closed before Stage C carry no flag and are never
+    told about (the Stage B j1 rehearsal stays quiet).
+
+    Returns the job as written, or None if it is missing or already closed (two
+    closes racing: the first wins, the second does nothing)."""
+    n = _num(job_id)
+    if n is None or ended not in ENDED:
+        return None
+    with _lock:
+        p = path(face)
+        current = _clean(jsonio.read_json(p, default={}))
+        job = current.get(f"j{n}")
+        if job is None or not is_open(job):
+            return None
+        now = stamp()
+        job.update({"state": "closed", "closed": now, "closed_by": by,
+                    "outcome": outcome, "ended": ended, "headsup": "owed"})
+        job["log"].append({"at": now, "event": "closed", "by": by, "ended": ended,
+                           "outcome": outcome})
+        _write(current, p)
+    return job
+
+
+def due(face=None):
+    """[(job, beat)] for every job with a beat owed now, oldest first. The
+    decisions live HERE and bot.tick_jobs only delivers (the tick_conversations
+    shape). Nothing is in memory: every deadline is derived from stamps on disk,
+    so a restart changes nothing.
+
+    beat "tell": a closed job whose heads-up to Caz is owed."""
+    out = []
+    for job in load(face).values():
+        b = beat(job)
+        if b is not None:
+            out.append((job, b))
+    return out
+
+
+def beat(job):
+    """The beat one job owes now, or None. See due()."""
+    if not job:
+        return None
+    if job.get("state") == "closed" and job.get("headsup") == "owed":
+        return "tell"
+    return None
 
 
 def add_searches(job_id, queries, face=None):
