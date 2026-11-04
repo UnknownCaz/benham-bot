@@ -806,6 +806,137 @@ check("Discord refuses the check-in: the job closes, and Caz hears why",
       ("closed", "quiet", True, 1))
 greset()
 
+from benham.core import jobclose  # noqa: E402
+from benham.guest import jobdone  # noqa: E402
+
+
+def judge_model(verdict, summary="Found: Ratchet & Clank"):
+    """One fake client for both cheap calls: the judge (by its system prompt) gets
+    `verdict` (a str, or a callable of the prompt), the summary gets `summary`."""
+    def reply(kw):
+        if kw.get("system") == jobdone.JUDGE_SYSTEM:
+            return verdict(kw["messages"][0]["content"]) if callable(verdict) else verdict
+        return summary
+    return _Model(reply)
+
+
+def judge_calls(model):
+    return [c for c in model.calls if c.get("system") == jobdone.JUDGE_SYSTEM]
+
+
+section("Done detection - they say they're sorted, the job closes, Caz hears")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp(), "opened_by": "caz", "last_activity": jobs.stamp()})
+jid = job["id"]
+REPLY[0] = "Nice, that's the one then!"
+QUERIES[:] = ["robot platformer ps2"]
+m = judge_model('{"done": ["%s"], "outcome": {"%s": "found it, Ratchet & Clank"}, '
+                '"reply_closes": false}' % (jid, jid))
+msg = deliver("YES that's it, ratchet and clank. found it, thanks!!", uid=KNOWN, model=m)
+check("the brain's reply goes first, then Benham's one friendly close line",
+      msg.channel.sent, ["Nice, that's the one then!", jobclose.CLOSE_LINE])
+j = jobs.get(jid)
+check("the job is closed by them, outcome from their words, heads-up sent",
+      (j["state"], j["ended"], j["closed_by"], j["outcome"], j["headsup"]),
+      ("closed", "them", "them", "found it, Ratchet & Clank", "sent"))
+want = ("Heads-up - I wrapped up **{id}** with **Big Like (@biglike, id {k})**.\n"
+        "You asked: \"{g}\"\n"
+        "How it ended: they said they're sorted - \"found it, Ratchet & Clank\".\n"
+        "What I did: 1 message from them, 1 web search.\n"
+        "What I found:\n"
+        "> Found: Ratchet & Clank\n"
+        "Tools it used: web search.").format(id=jid, k=KNOWN, g=GOAL)
+check("Caz's heads-up, at once, word for word", to_owner()[:1], [want])
+check("...with the keep/remove card under it", len(VIEWS), 1)
+check("the guest got nothing about the report", [c for u, c in DMS if u == KNOWN], [])
+check("one judgment, logged on one line", [l for l in LOG if l.startswith("job judge")],
+      [f"job judge [{KNOWN}]: done {jid} (of {jid})"])
+jc = judge_calls(m)[0]
+p = jc["messages"][0]["content"]
+check("the judge: the cheap model, no tool, sees the goal by id, their words and the reply",
+      (jc["model"], "tools" in jc, f"[{jid}] {GOAL}" in p, "found it, thanks!!" in p,
+       "Nice, that's the one then!" in p), ("claude-haiku-4-5", False, True, True, True))
+tick()
+check("the tick does not tell twice", len(to_owner()), 2)
+
+section("Not done - a thanks in passing, a question, a judge in doubt")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+job = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                   "opened": jobs.stamp()})
+m = judge_model('{"done": [], "outcome": {}, "reply_closes": false}')
+msg = deliver("thanks! but no, it was more like a 2d one", uid=KNOWN, model=m)
+check("judged not done: open, only the brain's reply, nothing to Caz",
+      (jobs.get(job["id"])["state"], msg.channel.sent, to_owner()),
+      ("open", ["guest reply"], []))
+check("...logged as not done", any(l == f"job judge [{KNOWN}]: not done (of {job['id']})"
+                                   for l in LOG), True)
+for raw in ("not json", '{"done": "j1"}', '{"done": ["j99"]}', ""):
+    deliver("hmm", uid=KNOWN, model=judge_model(raw))
+    check(f"judge reply {raw!r}: stays open", jobs.get(job["id"])["state"], "open")
+
+
+class _JudgeBoom(_Model):
+    def create(self, **kw):
+        if kw.get("system") == jobdone.JUDGE_SYSTEM:
+            raise RuntimeError("api down")
+        return super().create(**kw)
+
+
+msg = deliver("found it!", uid=KNOWN, model=_JudgeBoom())
+check("a judge that fails leaves the job open and the reply untouched",
+      (jobs.get(job["id"])["state"], msg.channel.sent), ("open", ["guest reply"]))
+other = jobs.create({"goal": "theirs", "with": str(FRIEND), "tools": []})
+deliver("done!", uid=KNOWN, model=judge_model('{"done": ["%s"]}' % other["id"]))
+check("an id the judge was not handed (someone else's job) is never closed",
+      (jobs.get(other["id"])["state"], jobs.get(job["id"])["state"]), ("open", "open"))
+check("no job for this person: no judge call at all", judge_calls(
+    (lambda mm: (deliver("bye", uid=FRIEND_2, model=mm), mm)[1])(judge_model("x"))), [])
+m = judge_model('{"done": ["%s"], "outcome": {}, "reply_closes": true}' % job["id"])
+REPLY[0] = "Glad that's sorted - enjoy!"
+msg = deliver("got it, thanks, that's all", uid=KNOWN, model=m)
+check("the brain's reply already closes: no second close line", msg.channel.sent,
+      ["Glad that's sorted - enjoy!"])
+check("...no outcome given: their own words stand in", jobs.get(job["id"])["outcome"],
+      "got it, thanks, that's all")
+greset()
+
+section("Several jobs - the judge names WHICH one closes; one heads-up per closed job")
+greset()
+people.add(KNOWN, {"name": "biglike", "display_name": "Big Like", "by": "caz"})
+a = jobs.create({"goal": GOAL, "with": str(KNOWN), "tools": ["web_search"],
+                 "opened": jobs.stamp()})
+b = jobs.create({"goal": "pick a mod for it", "with": str(KNOWN), "tools": ["web_search"],
+                 "opened": jobs.stamp()})
+m = judge_model('{"done": ["%s"], "outcome": {"%s": "found the game"}, '
+                '"reply_closes": false}' % (a["id"], a["id"]))
+msg = deliver("found the game! still need a mod though", uid=KNOWN, model=m)
+p = judge_calls(m)[0]["messages"][0]["content"]
+check("the judge is handed both open goals with their ids",
+      (f"[{a['id']}] {GOAL}" in p, f"[{b['id']}] pick a mod for it" in p), (True, True))
+check("one closes, the other stays open",
+      (jobs.get(a["id"])["state"], jobs.get(b["id"])["state"]), ("closed", "open"))
+check("one heads-up, for the closed one", [t.split("\n")[0] for t in to_owner()],
+      [f"Heads-up - I wrapped up **{a['id']}** with **Big Like (@biglike, id {KNOWN})**."])
+check("the open one's chat goes on: the next note is the single-job wording",
+      (deliver("ok so which mod", uid=KNOWN, model=judge_model('{"done": []}')),
+       BRAIN[-1]["note"].startswith("From Benham's side, not from them: Caz asked you to "
+                                    "help them with this: pick a mod for it."))[1], True)
+c = jobs.create({"goal": "third thing", "with": str(KNOWN), "tools": [],
+                 "opened": jobs.stamp()})
+DMS.clear()
+m = judge_model(lambda prompt: '{"done": ["%s", "%s"], "reply_closes": false}'
+                % (b["id"], c["id"]))
+deliver("that's everything, thanks so much", uid=KNOWN, model=m)
+check("'that's everything' closes all of them", [jobs.get(x["id"])["state"] for x in (b, c)],
+      ["closed", "closed"])
+check("...one heads-up per closed job", sorted(t.split("**")[1] for t in to_owner()
+                                               if t.startswith("Heads-up")),
+      sorted([b["id"], c["id"]]))
+greset()
+
 section("guest.respond itself - the list can only take away")
 
 

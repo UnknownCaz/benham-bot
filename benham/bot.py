@@ -51,6 +51,8 @@ from benham.core import conversations
 from benham.core import exaroton_ops as exa
 from benham.guest import guest
 from benham.guest import answers
+from benham.guest import jobdone
+from benham.core import jobclose
 from benham.core import health
 from benham.core import ideas
 from benham.core import initiative
@@ -1937,6 +1939,50 @@ async def handle_guest_dm(message):
         await reply_in(message.channel,
                        f"That one failed on my end - {type(e).__name__}. It is logged, "
                        f"and it has not cost you a message.{blame}")
+        return
+
+    # Done detection (Stage 9 C, goal 6): AFTER the reply is out, so it never
+    # delays it. Outside the try above on purpose - a failure here must not refund
+    # a turn that happened or tell them it failed.
+    if _open:
+        try:
+            await close_done_jobs(message, typed or text, reply)
+        except Exception:  # noqa: BLE001 - a judge problem leaves the jobs open
+            log(f"job done check failed for {message.author.id}:\n"
+                f"{traceback.format_exc()}")
+
+
+async def close_done_jobs(message, said, reply):
+    """Did their message say one or more of their open jobs are done? (INTENT 61,
+    Stage 9 C, goal 6: "Benham should be able to determine the completion state of
+    an ask".)
+
+    The jobs are READ AGAIN here, not reused from before the brain call: a
+    close_job or a quiet close in between wins, and the judge is only ever handed
+    jobs that are still open. guest/jobdone.judge says which ids are done - a clear
+    signal only - and code closes exactly those (jobs.close "them", the outcome
+    from their words). Then: if the brain's own reply did not already wrap up,
+    Benham's one friendly close line (jobclose.CLOSE_LINE, nothing about the
+    report - Caz's call 2); and one heads-up per closed job to Caz, now, through
+    the same advance_job beat the tick uses (so it is never sent twice)."""
+    uid = message.author.id
+    open_now = jobs.open_all_for(uid)
+    if not open_now:
+        return []
+    verdict = await asyncio.to_thread(jobdone.judge, uid, said, reply, open_now, log)
+    closed = []
+    for jid in verdict["done"]:
+        done = jobs.close(jid, "them", verdict["outcome"].get(jid) or "", "them")
+        if done is not None:
+            closed.append(done)
+            log(f"job {jid}: they said it's done - closed ({done['outcome'][:80]!r})")
+    if not closed:
+        return []
+    if not verdict["reply_closes"]:
+        await reply_in(message.channel, jobclose.CLOSE_LINE)
+    for job in closed:
+        await advance_job_beat(job["id"])
+    return closed
 
 
 @client.event
