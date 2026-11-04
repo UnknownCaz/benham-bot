@@ -1,7 +1,7 @@
 # Known people, purposes and borrowed tools - Plan
 
 **Status: SET IN STONE 2026-11-03 16:10 local, Caz's word "Set in stone" in chat after the four calls below were
-decided on forms. INTENT decision 61, Stage 9. Build in progress.** Written 2026-11-03 15:58 local by the
+decided on forms. INTENT decision 61, Stage 9. All three stages landed 2026-11-03; the required test is owed.** Written 2026-11-03 15:58 local by the
 session that ran Biggie's game search (b78c87fb), from Caz's words in that chat.
 
 ## Purpose, in Caz's words (2026-11-03, 15:0x-15:4x local)
@@ -122,4 +122,17 @@ Merge `01b0470` = origin/master = Mac pin; 99 verbs; suite 67/67 PC and Mac. `op
 Opus by default and live. The `with=caz` round trip ran live on the Mac (j1 opened and closed on cards); the person
 opener is proven offline only. Next: Stage C, then the required test.
 
-**Caz's call on the hand's open items (chat, 2026-11-03 18:5x local):** on the three kept defaults shown to him (one open job per person; template opener; refuse a person's job while guest chat is off) his one pick, uncut: *"Call 1: allow several open jobs per person"*. Lifted in Stage C: a person may hold several open jobs; the brain note lists every open goal; done detection says which job closed; one heads-up per job. The other two defaults stand.
+**Caz's call on the hand's open items (chat, 2026-11-03 18:5x local):** on the three kept defaults shown to him (one open job per person; template opener; refuse a person's job while guest chat is off) his one pick, uncut: *"Call 1: allow several open jobs per person"*. LIFTED AND BUILT in Stage C (`4fa9f90`): a person may hold several open jobs; the brain note lists every open goal; done detection says which job closed; one heads-up per job. The other two defaults stand.
+
+## Stage C landed (2026-11-03 19:48 local)
+
+Merge `7e2f59f` = origin/master = Mac pin; 102 verbs; suite 68/68 PC and Mac; pid 20837. Goals 6, 7 and 8 are built:
+done detection (a Haiku judge names which open job a message closed), one check-in after a quiet day and a "went quiet"
+close after another (`guest.job_quiet_hours` 24), the heads-up to Caz's DM on every close (owed in state, delivered by the
+60 s tick through `advance_job`, so a restart cannot lose it) with a Keep / Remove card per tool used (no answer = keep);
+`grant_tool` / `revoke_tool` per person per tool on cards, and web search is the only grantable tool - a client tool for a
+guest is a later stage, not this one. Several open jobs per person, Caz's call. The guest gets only the close line.
+Proven live in Testing only: the cards and state. Proven offline only: the heads-up text, the cards under it, the judge.
+**Owed:** the brain rehearsal (one `guest.respond` call with a fake id and a job note, read for a cut-off), then the
+required test above, then one friend Caz names on his yes. j2 (`with: caz`, "stage C rehearsal") is left open on the
+Mac: confirming its close sends Caz the first real heads-up, a good first human test once he says yes.

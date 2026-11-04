@@ -1146,13 +1146,29 @@ tests, decision 26 deploys) before the next starts:
   (read 28, speak 11, manage 47, destructive 13), suite 67/67 PC and Mac; live `guest.model` flipped to
   `claude-opus-5-5` on both configs 18:35 local (backups `control.json.bak-2026-11-03-1835-opus`), restart ->
   pid 17310, banner `Guest chat: ON (claude-opus-5-5 ...)`. The person opener is proven offline only; the
-  required test below is still owed. Hand's calls, kept by the session: one open job per person (the note
-  carries one goal; Caz may hold several); `with` must resolve to someone who can DM back; `open_job` for a
+  required test below is still owed. Hand's calls, kept by the session: ~~one open job per person~~ (lifted in C on Caz's call, below);
+  `with` must resolve to someone who can DM back; `open_job` for a
   person is refused while guest chat is off; the default opener is a template so the card shows exact text.
 - **C. Closing and borrowed tools** - done detection (the counterparty says done or satisfied, judged the way
   `guest/answers.py` judges), quiet 1 day then one nudge, 1 more day then close; the heads-up DM to Caz (the job,
   what Benham did, what it found, tools used); `grant_tool` / `revoke_tool` per person per tool as cards, default
-  grant chat + web search only; the keep/remove card under the heads-up. *Why:* goals 6, 7, 8 and his calls 1-2.
+  grant chat + web search only; the keep/remove card under the heads-up. *Why:* goals 6, 7, 8 and his calls 1-2. **LANDED 2026-11-03 19:48 local:** merge `7e2f59f`, 102 verbs (read 28, speak 12,
+  manage 49, destructive 13), suite 68/68 PC and Mac, restart -> pid 20837, banner `Jobs: tick ON (60 s) - 24 h quiet, one
+  check-in; 24 h more, closed`, zero boot tracebacks. What landed: `grant_tool` / `revoke_tool` per person per tool on cards,
+  `people.json` carries each person's tool set, the guest brain honors only what the person holds, narrowed to the open jobs'
+  tools; **several open jobs per person** (Caz's call, chat 2026-11-03 18:5x local, uncut: *"Call 1: allow several open jobs
+  per person"*) - the note lists every open goal, one message touches all of them, only the same goal twice is refused; done
+  detection by a cheap judge (`guest/jobdone.py`, `guest.judge_model` default `claude-haiku-4-5`) that names which job(s) a
+  message closed; `guest.job_quiet_hours` (24): one check-in, one more quiet day, then a "went quiet" close; every close
+  marks a heads-up OWED in state and the 60 s `tick_jobs` delivers it through the new SYSTEM-reachable `advance_job` to Caz's
+  DM (goal, who, how it ended, messages, searches, a 3-line summary, tools used), with a Keep / Remove card per tool the job
+  used; no answer in 24 h = keep; the guest gets only the close line. **Web search is the only grantable tool.** Any further
+  guest tool (a client tool through `capabilities.run` with the guest origin, the `archive/guest-tools/guest_agent.py`
+  skeleton) is a separate later stage, not built, because the guest lane's floor is no client tools. Live round trip in
+  Testing only 19:49-19:50 local (open_job with=caz -> j2; an invented id added, tools revoked and granted on cards, `pc_task`
+  refused in words, removed again); j2 left open on purpose, since confirming its close DMs Caz the first real heads-up.
+  The heads-up text and cards are proven offline only (`tests/test_jobs_close.py`). Session's note on his call 3: the judge
+  and the summary run on Haiku, not Opus; his "Opus 5.5 for everything" was read as the guest brain; flagged to him.
 - **Required test, not optional:** the first turn rehearsed in Testing with a fake guest id through the real
   path before any friend sees it; then one real run with a friend Caz names, watched live, on his yes.
 
