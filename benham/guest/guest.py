@@ -525,7 +525,7 @@ def _create(_log, user_id, **kw):
     return resp, calls
 
 
-def respond(user_id, text, log=None, content=None, note=None, tools=None):
+def respond(user_id, text, log=None, content=None, note=None, tools=None, info=None):
     """One guest turn: their message in, Benham's reply out.
 
     Requires that check() already returned ALLOW, which is also where the message was
@@ -583,6 +583,11 @@ def respond(user_id, text, log=None, content=None, note=None, tools=None):
     on this turn: revoke_tool took it away, or the job is chat only. The list can
     only take away; it can never add a tool this file does not already know how
     to pass, and the only one it knows is server-side.
+
+    `info`, if a dict, is filled with what the turn did that the reply text does
+    not carry: info["queries"], the turn's web-search queries (each once). bot.py
+    counts them into an open job (jobs.add_searches) for the heads-up to Caz.
+    Additive and write-only: nothing here reads it.
     """
     def _log(msg):
         if log:
@@ -654,6 +659,8 @@ def respond(user_id, text, log=None, content=None, note=None, tools=None):
     # this lane's own doing, not a second searched turn of theirs, and the
     # retry usually repeats the first call's queries word for word.
     queries = list(dict.fromkeys(q for r in calls for q in shared_tools.search_queries(r)))
+    if isinstance(info, dict):
+        info["queries"] = list(queries)
     if queries:
         _log_searches(user_id, queries)
         charge_search(user_id)   # a searched turn counts double - Tyler's rule

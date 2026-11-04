@@ -1862,12 +1862,21 @@ async def handle_guest_dm(message):
             f"{', '.join(j['id'] for j in _open)} - its note, not the outreach note")
     else:
         note = guest_note(bound, questions_in_front_of(message.author.id))
+    _info = {}
     try:
         files = []
         async with message.channel.typing():
             reply = await asyncio.to_thread(
                 guest.respond, message.author.id, text, log, content, note=note,
-                tools=_tools)
+                tools=_tools, info=_info)
+        # The turn's searches count into every job it served (Stage 9 C) - the
+        # heads-up to Caz says how many searches a job took. Never costs the reply.
+        if _open and _info.get("queries"):
+            for j in _open:
+                try:
+                    jobs.add_searches(j["id"], _info["queries"])
+                except OSError as e:
+                    log(f"job {j['id']}: searches not counted ({e})")
         # Log what Benham SAID, not only what it did. Every other guest line -
         # the inbound message, the tool calls, the charges - was already here,
         # and the reply was the one half missing: debugging Stage 4 twice ran

@@ -350,8 +350,14 @@ async def _owner(text, kind=None):
 bot.ask_owner_dm = _owner
 
 
-def _respond(user_id, text, log=None, content=None, note=None, tools=None, **kw):
+QUERIES = []
+
+
+def _respond(user_id, text, log=None, content=None, note=None, tools=None, info=None,
+             **kw):
     BRAIN.append({"user": user_id, "text": text, "note": note, "tools": tools})
+    if isinstance(info, dict):
+        info["queries"] = list(QUERIES)
     return REPLY[0]
 _REAL_RESPOND = guest.respond
 guest.respond = _respond
@@ -375,6 +381,7 @@ def greset():
     LOG.clear()
     OWNER_DMS.clear()
     BRAIN.clear()
+    QUERIES.clear()
     REPLY[0] = "guest reply"
 
 
@@ -455,6 +462,31 @@ check("...and only the open one is touched",
       (jobs.get(r1["job_id"])["turns"], jobs.get(r2["job_id"])["turns"]), (1, 2))
 greset()
 
+section("A job counts the searches run for it")
+greset()
+a = jobs.create({"goal": GOAL, "with": str(FRIEND), "tools": ["web_search"]})
+deliver("hi")
+check("a turn with no search counts nothing", jobs.get(a["id"]).get("searches"), None)
+QUERIES[:] = ["robot platformer ps2", "ps2 robot game 2003"]
+deliver("it had a robot")
+j = jobs.get(a["id"])
+check("a searched turn adds its queries to the counter", j["searches"], 2)
+check("...and logs them", (j["log"][-1]["event"], j["log"][-1]["queries"]),
+      ("searched", ["robot platformer ps2", "ps2 robot game 2003"]))
+b = jobs.create({"goal": "pick a mod", "with": str(FRIEND), "tools": ["web_search"]})
+QUERIES[:] = ["mod"]
+deliver("and a mod too")
+check("with two open jobs a searched turn is credited to each (an honest overcount)",
+      (jobs.get(a["id"])["searches"], jobs.get(b["id"])["searches"]), (3, 1))
+QUERIES.clear()
+jobs.update(a["id"], state="closed")
+jobs.update(b["id"], state="closed")
+QUERIES[:] = ["x"]
+deliver("no jobs now")
+check("no open job: nothing is counted anywhere",
+      (jobs.get(a["id"])["searches"], jobs.get(b["id"])["searches"]), (3, 1))
+greset()
+
 section("guest.respond itself - the list can only take away")
 
 
@@ -484,6 +516,25 @@ check("tools=['pc_task']: an unknown name adds nothing", real_turn(tools=["pc_ta
 guest.WEB_SEARCH = False
 check("guest.web_search off in config wins over a holder", real_turn(tools=["web_search"]), [])
 guest.WEB_SEARCH = saved_ws
+
+
+class _SearchBrain(_Brain):
+    def create(self, **kw):
+        self.calls.append(kw)
+        return _Blk(content=[_Blk(type="server_tool_use", name="web_search",
+                                  input={"query": "robot game"}),
+                             _Blk(type="text", text="found it")],
+                    stop_reason="end_turn", usage=_Blk(input_tokens=1, output_tokens=1))
+
+
+guest._client = _SearchBrain()
+_info = {}
+_REAL_RESPOND(FRIEND, "hi", None, info=_info)
+check("respond fills info['queries'] with the turn's searches", _info, {"queries": ["robot game"]})
+guest._client = _Brain()
+_info = {"stale": 1}
+_REAL_RESPOND(FRIEND, "hi", None, info=_info)
+check("...and an empty list on a turn with none", _info.get("queries"), [])
 greset()
 
 

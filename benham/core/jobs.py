@@ -184,6 +184,28 @@ def update(job_id, face=None, log=None, **fields):
     return job
 
 
+def add_searches(job_id, queries, face=None):
+    """The guest brain searched on a turn of this job: count the turn's queries
+    into the job (`searches`) and log them (each cut to 200 chars). The counter is
+    what the heads-up to Caz reports; the logged queries are what it summarizes.
+    With several open jobs a searched turn served all of them, so bot.py credits
+    it to each - an honest overcount, never an undercount. Returns the job."""
+    qs = [str(q)[:200] for q in queries if str(q).strip()]
+    n = _num(job_id)
+    if n is None or not qs:
+        return None
+    with _lock:
+        p = path(face)
+        current = _clean(jsonio.read_json(p, default={}))
+        job = current.get(f"j{n}")
+        if job is None:
+            return None
+        job["searches"] = int(job.get("searches") or 0) + len(qs)
+        job["log"].append({"at": stamp(), "event": "searched", "queries": qs})
+        _write(current, p)
+    return job
+
+
 def touch(job_id, face=None):
     """A message from the person the job is with: last_activity now, one more
     turn. Stage C's quiet timer reads last_activity."""
