@@ -138,3 +138,5 @@ one `guest.respond` call with an invented id and the job note, Opus 5.5, one web
 **Owed:** the first-turn rehearsal in Testing through the real path (the opener needs a real Discord account, so a fake id cannot receive it - the brain half is the rehearsal above), then the
 required test above, then one friend Caz names on his yes. j2 (`with: caz`, "stage C rehearsal") is left open on the
 Mac: confirming its close sends Caz the first real heads-up, a good first human test once he says yes.
+**First real heads-up DELIVERED 2026-11-03 20:20 local, on Caz's 'Yes, close j2':**
+`job close j2` card -> token -> closed 20:20:15, `advance_job` sent the heads-up to his DM 20:20:23 (outward.jsonl `owner_dm` via advance_job), j2 `headsup: sent`; no Keep/Remove card because the job used no tool. His read of the DM is owed.
