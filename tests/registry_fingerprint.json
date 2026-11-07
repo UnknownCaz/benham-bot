@@ -446,6 +446,19 @@
     "taints": true,
     "tier": 2
   },
+  "edit_forum_post": {
+    "always_confirm": false,
+    "blocked_when_tainted": false,
+    "destructive": false,
+    "guest": false,
+    "needs_confirm": false,
+    "needs_guild": false,
+    "origins": [],
+    "outward": false,
+    "posts": false,
+    "taints": true,
+    "tier": 2
+  },
   "edit_message": {
     "always_confirm": false,
     "blocked_when_tainted": false,
