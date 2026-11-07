@@ -1095,6 +1095,24 @@ Four stages, one Opus hand each, in order, each landing clean before the next st
   parity gap the Stage D hand found (no read showed them; only the set verb's read-back did). Same
   rules as the stage: tier 0, taints, fingerprint row, Testing-only live test, merge `1499b4e` naming
   decision 60; live 2026-10-31 08:12 local, 93 verbs.
+- *Follow-up, his go 2026-11-06 23:16 local (to the server session, uncut: "Can you send out a couple Opus
+  agents to properly scope and build the fix? the first 2 should get their grounding the deepest before
+  starting the build."):* **forum posts take tags and a pin.** The gap the forum-draft session found on
+  2026-11-06: a forum post could not be tagged at creation or after, and `pin_message` pins a message in a
+  channel, not a post to the top of its forum. The ask before it is a relay, not his words: the forum-draft
+  session reports that at about 22:2x he told it to do the draft forum by hand but give Benham tags and
+  pinning before the real forum goes on Fuckass Friends. Built: `create_thread` gains `tags=` (a
+  comma-separated str, resolved against the forum's own tags - case-insensitive after NFKC, a tag id
+  accepted, an unknown or ambiguous name refused and never guessed, at most 5, a require-tag forum refused
+  without one); new verb `edit_forum_post` (thread_id; tags replaces the set, blank clears; pinned), which
+  reports tags and pinned before and after, unarchives an archived post in the same edit, and refuses a
+  second pin by naming the post already pinned. Same rules as the stage: MANAGE like `pin_message` and
+  `archive_thread`, not outward, not always confirmed (it adds no words and changes nobody's access);
+  taints only because its result echoes tag and post names other people wrote; fingerprint +1 row, no
+  policy rule moved, no face widened; offline tests `tests/test_forum_posts.py`; merge `cc302ca` naming
+  decision 60; live 2026-11-06 23:55 local (pid 47437, 4 s without a gateway), 103 verbs. The first live
+  use - tagging the draft forum's 10 posts and pinning "How voting works" in the Testing Server - waits
+  for his own yes; it has not been run. Plan: `docs/plans/PLAN-forum-tags-pins.md`.
 
 Rules every stage keeps, all already law:
 
