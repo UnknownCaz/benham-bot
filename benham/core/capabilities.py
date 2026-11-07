@@ -2468,6 +2468,43 @@ async def _unreact(ctx, p):
     return {"status": "unreacted", "message_id": m.id, "emoji": str(p["emoji"])}
 
 
+# Forum tags. A forum post carries at most 5 of its forum's tags (discord.py 2.7.1,
+# Thread.edit / add_tags docstrings); _MAX_FORUM_TAGS (20, below) is the per-FORUM
+# cap on the tags a forum can offer. Discord takes ForumTag objects with real ids,
+# so names are resolved against the forum's own available_tags - a hand-built
+# ForumTag(name=...) has id 0 and must never be sent.
+_MAX_POST_TAGS = 5
+
+
+def _norm_tag(s):
+    return unicodedata.normalize("NFKC", str(s)).casefold().strip()
+
+
+def _resolve_forum_tags(forum, raw):
+    """'a, b' -> [ForumTag] from this forum. A numeric id is accepted too (a tag name
+    may itself hold a comma). Unknown or ambiguous names are refused, never guessed;
+    duplicates collapse; more than five is refused before Discord is asked."""
+    names = [x.strip() for x in str(raw).split(",") if x.strip()]
+    available = list(getattr(forum, "available_tags", None) or [])
+    out, seen = [], set()
+    for n in names:
+        hit = forum.get_tag(int(n)) if n.isdigit() else None
+        hits = [hit] if hit else [t for t in available if _norm_tag(t.name) == _norm_tag(n)]
+        if not hits:
+            raise ActionError(f"{forum.name} has no tag {n!r}. Its tags: "
+                              + (", ".join(t.name for t in available) or "none"))
+        if len(hits) > 1:
+            raise ActionError(f"tag {n!r} is ambiguous in {forum.name}: "
+                              + ", ".join(f"{t.name} ({t.id})" for t in hits)
+                              + " - pass the tag's id instead")
+        if hits[0].id not in seen:
+            seen.add(hits[0].id)
+            out.append(hits[0])
+    if len(out) > _MAX_POST_TAGS:
+        raise ActionError(f"a forum post carries at most {_MAX_POST_TAGS} tags, got {len(out)}")
+    return out
+
+
 # posts=True since `content` landed. A forum thread cannot exist without a starter
 # message - Discord has no empty forum post - so creating one in a forum IS posting,
 # and it must answer to rule_posting_scope like send_message does. Marking it is the
@@ -2479,7 +2516,9 @@ async def _unreact(ctx, p):
          "name": {"type": "str", "required": True},
          "content": {"type": "str", "desc": "Starter message. Required in a forum."},
          "message_id": {"type": "int", "desc": "Anchor the thread to this message"},
-         "auto_archive_minutes": {"type": "int", "desc": "60 | 1440 | 4320 | 10080"}},
+         "auto_archive_minutes": {"type": "int", "desc": "60 | 1440 | 4320 | 10080"},
+         "tags": {"type": "str", "desc": "Forum only: comma-separated tag names from the "
+                                         "forum (or tag ids), max 5"}},
         posts=True)
 async def _create_thread(ctx, p):
     ch = await ctx.channel(p["channel_id"])
@@ -2490,6 +2529,13 @@ async def _create_thread(ctx, p):
     content = p.get("content")
     if is_forum and not content:
         raise ValueError("a forum thread needs content= - Discord has no empty forum post")
+    raw_tags = (p.get("tags") or "").strip()
+    if raw_tags and not is_forum:
+        raise ActionError("tags= is forum-only - only a forum post carries tags")
+    applied = _resolve_forum_tags(ch, raw_tags) if is_forum and raw_tags else []
+    if is_forum and not applied and getattr(ch.flags, "require_tag", False):
+        raise ActionError(f"{ch.name} requires a tag on every post - pass tags= with one of: "
+                          + (", ".join(t.name for t in ch.available_tags) or "none"))
     if p.get("message_id"):
         if content:
             raise ValueError("content= cannot be used with message_id= - a thread anchored "
@@ -2497,6 +2543,8 @@ async def _create_thread(ctx, p):
         m = await ctx.message(p["channel_id"], p["message_id"])
         t = await m.create_thread(**kw)
     elif is_forum:
+        if applied:
+            kw["applied_tags"] = applied
         t = await ch.create_thread(content=content, **kw)
     else:
         t = await ch.create_thread(**kw)
@@ -2510,8 +2558,11 @@ async def _create_thread(ctx, p):
         await thread.send(content)
     elif not content:
         posted = False
-    return {"status": "created", "thread_id": thread.id, "name": thread.name,
-            "starter_message": posted}
+    result = {"status": "created", "thread_id": thread.id, "name": thread.name,
+              "starter_message": posted}
+    if is_forum:
+        result["tags"] = [x.name for x in applied]
+    return result
 
 
 @action("archive_thread", identity.MANAGE, "Archive (or unarchive) a thread.",
@@ -2523,6 +2574,56 @@ async def _archive_thread(ctx, p):
     archived = True if archived is None else bool(archived)
     await t.edit(archived=archived)
     return {"status": "archived" if archived else "unarchived", "thread_id": t.id}
+
+
+# A forum POST is a thread, so its tags and its pin live on the thread, not on a
+# message: pin_message pins a message inside a channel, this pins the post to the top
+# of its forum (Thread.edit(pinned=...)). Flags by its neighbours: MANAGE like
+# pin_message and archive_thread - it adds no words and changes nobody's access, so
+# not outward and not always confirmed (INTENT decision 60 / Stage 8 follow-up).
+# taints=True like edit_channel: the result echoes tag names and the post's name,
+# which other people wrote.
+@action("edit_forum_post", identity.MANAGE,
+        "Set a forum post's tags and/or pin it to the top of its forum. tags replaces the "
+        "post's tags (comma-separated names from the forum; blank clears them).",
+        {"thread_id": {"type": "int", "required": True, "desc": "The forum post (its thread id)"},
+         "tags": {"type": "str", "desc": "Comma-separated tag names (or tag ids), max 5; "
+                                         "'' clears them"},
+         "pinned": {"type": "bool", "desc": "true pins the post, false unpins it"}},
+        taints=True)
+async def _edit_forum_post(ctx, p):
+    if "tags" not in p and "pinned" not in p:
+        raise ActionError("nothing to change - pass tags= and/or pinned=")
+    t = await ctx.channel(p["thread_id"])
+    forum = getattr(t, "parent", None) if isinstance(t, discord.Thread) else None
+    if isinstance(t, discord.Thread) and forum is None and getattr(t, "parent_id", None):
+        forum = await ctx.channel(t.parent_id)
+    if not isinstance(forum, discord.ForumChannel):
+        raise ActionError(f"{getattr(t, 'name', t)} is not a forum post - pin_message pins "
+                          "a message in a channel")
+    before = {"tags": [x.name for x in t.applied_tags], "pinned": bool(t.flags.pinned)}
+    kw = {}
+    if "tags" in p:
+        kw["applied_tags"] = _resolve_forum_tags(forum, p["tags"])
+    if "pinned" in p:
+        if p["pinned"]:
+            other = [x for x in (getattr(forum, "threads", None) or [])
+                     if x.id != t.id and x.flags.pinned]
+            if other:
+                raise ActionError(f"{forum.name} already has a pinned post ({other[0].name}, "
+                                  f"{other[0].id}) - unpin it first with pinned=false")
+        kw["pinned"] = bool(p["pinned"])
+    # Discord refuses any edit to an archived thread, and forum posts auto-archive.
+    unarchived = bool(getattr(t, "archived", False))
+    if unarchived:
+        kw["archived"] = False
+    new = await t.edit(reason=VIA, **kw)
+    new = new if new is not None else t
+    return {"status": "edited", "thread_id": t.id, "name": new.name, "forum": forum.name,
+            "before": before,
+            "after": {"tags": [x.name for x in new.applied_tags],
+                      "pinned": bool(new.flags.pinned)},
+            "unarchived": unarchived}
 
 
 @action("add_role", identity.MANAGE, "Give a member a role.",
