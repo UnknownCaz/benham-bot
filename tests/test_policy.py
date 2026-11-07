@@ -279,6 +279,10 @@ check("...and names the taint rule",
 check("dm_user asks once tainted", verdict("dm_user", tainted=True).verdict, D.CONFIRM)
 check("pin_message stays free even tainted (not outward)",
       verdict("pin_message", tainted=True).verdict, D.ALLOW)
+# edit_forum_post (INTENT 60, Stage 8 follow-up) pins a forum POST the way pin_message
+# pins a message: MANAGE, not outward, so a tainted turn does not gate it either.
+check("edit_forum_post stays free even tainted (not outward, like pin_message)",
+      verdict("edit_forum_post", tainted=True).verdict, D.ALLOW)
 check("read_channel stays free even tainted",
       verdict("read_channel", tainted=True).verdict, D.ALLOW)
 
